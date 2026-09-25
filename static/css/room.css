@@ -172,18 +172,36 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
     background: var(--room-surface); border: 1px solid var(--room-border);
     border-radius: var(--radius-sm); padding: .45rem .8rem; font-size: .85rem;
 }
-.screen-holder, .presentation-holder {
+.screen-holder {
     flex: 1; min-height: 0; background: var(--surface-3); border-radius: var(--radius);
     display: flex; flex-direction: column; overflow: hidden;
 }
 .screen-holder video { width: 100%; height: 100%; object-fit: contain; }
-.presentation-nav {
-    display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
-    padding: .5rem .8rem; background: var(--room-surface);
-    border-bottom: 1px solid var(--room-border); font-size: .85rem;
+
+/* ---------- presentation ---------- */
+.presentation-holder {
+    flex: 1; min-height: 0; background: var(--surface-3); border-radius: var(--radius);
+    display: flex; align-items: center; justify-content: center;
+    overflow: auto; padding: 8px;
 }
-.presentation-nav input { font: inherit; border: 1px solid var(--room-border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); padding: .15rem .4rem; }
-.presentation-frame { flex: 1; width: 100%; border: none; background: var(--surface); }
+.pres-stage { position: relative; line-height: 0; box-shadow: 0 2px 16px rgba(0, 0, 0, .28); }
+.pres-stage.hidden { display: none; }
+#pres-canvas { display: block; background: #fff; border-radius: 4px; }
+.pres-annot { position: absolute; inset: 0; }
+.pres-annot canvas { cursor: crosshair; touch-action: none; }
+.pres-fallback { text-align: center; color: var(--text); padding: 2rem; }
+.pres-fallback .btn { margin-top: .8rem; }
+.presentation-nav { display: flex; align-items: center; gap: .35rem; font-size: .82rem; }
+.presentation-nav button {
+    background: transparent; border: 1px solid var(--room-border); border-radius: var(--radius-sm);
+    color: var(--room-text); cursor: pointer; font-size: 1rem; padding: .12rem .55rem; min-width: 30px;
+}
+.presentation-nav button:disabled { opacity: .38; cursor: default; }
+.presentation-nav button:not(:disabled):hover { background: var(--surface-2); }
+#pres-page-label { white-space: nowrap; padding: 0 .2rem; }
+.pres-tools { display: flex; align-items: center; gap: .15rem; flex-wrap: wrap; }
+.pres-tools .wb-tool.denied, .pres-tools .wb-action.denied { opacity: .4; }
+.screen-header { gap: .6rem; flex-wrap: wrap; }
 
 /* ---------- whiteboard ---------- */
 .wb-toolbar {

@@ -182,6 +182,9 @@ class WhiteboardConsumer(AsyncJsonWebsocketConsumer):
         if op["type"] == "laser":
             if not isinstance(op.get("x"), (int, float)) or not isinstance(op.get("y"), (int, float)):
                 return False
+        # presentation annotations ride the same protocol tagged with file_id
+        if "file_id" in op and not isinstance(op.get("file_id"), int):
+            return False
         return True
 
     # -- DB helpers ---------------------------------------------------------------
@@ -228,8 +231,14 @@ class WhiteboardConsumer(AsyncJsonWebsocketConsumer):
         if op.get("type") == "clear":
             # Compaction: a clear invalidates everything before it on
             # THIS page only — other pages keep their content, and the
-            # page_add marker stays so the page itself survives.
-            board.events.filter(page=page).exclude(operation__type__in=["page_add", "page_setup"]).delete()
+            # page_add/page_setup markers stay so the page survives.
+            # File-annotation clears only touch ops of that file.
+            qs = board.events.filter(page=page)
+            if op.get("file_id"):
+                qs = qs.filter(operation__file_id=op["file_id"])
+            else:
+                qs = qs.filter(operation__file_id__isnull=True)
+            qs.exclude(operation__type__in=["page_add", "page_setup"]).delete()
         member = ClassroomMember.objects.filter(id=self.member.id).first()
         event = WhiteboardEvent.objects.create(
             whiteboard=board,

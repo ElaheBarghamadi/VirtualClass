@@ -449,3 +449,90 @@ class WhiteboardStyleOpsTests(TransactionTestCase):
         # the draw is compacted; the setup marker + the clear itself remain
         assert ("draw", 1) not in remaining, remaining
         assert ("page_setup", 1) in remaining, remaining
+
+
+class PresentationAnnotationTests(TransactionTestCase):
+    """File annotations ride the whiteboard protocol tagged with file_id."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="pa_owner", password="x")
+        self.viewer = User.objects.create_user(username="pa_viewer", password="x")
+        self.classroom = create_classroom(self.owner, title="Annot")
+        join_classroom(self.classroom, self.viewer)
+
+    def _ws(self, user):
+        return WebsocketCommunicator(
+            app_with_user(user, wb_routes), f"/ws/classroom/{self.classroom.room_code}/whiteboard/"
+        )
+
+    def test_file_ops_relayed_and_clear_is_scoped(self):
+        async def scenario():
+            ow = self._ws(self.owner)
+            connected, _ = await ow.connect()
+            assert connected
+            await ow.receive_json_from()
+            vw = self._ws(self.viewer)
+            connected, _ = await vw.connect()
+            assert connected
+            await vw.receive_json_from()
+
+            # a board stroke and a file annotation on the same page number
+            await ow.send_json_to({"action": "op", "op": {
+                "type": "draw", "tool": "pen", "points": [[1, 2], [3, 4]],
+                "color": "#000", "width": 2, "id": "board1", "page": 1,
+            }})
+            msg = await vw.receive_json_from()
+            assert msg["op"]["id"] == "board1" and "file_id" not in msg["op"]
+
+            await ow.send_json_to({"action": "op", "op": {
+                "type": "draw", "tool": "highlighter", "points": [[5, 6], [7, 8]],
+                "color": "#ff0", "width": 8, "id": "file1", "page": 1, "file_id": 42,
+            }})
+            msg = await vw.receive_json_from()
+            assert msg["op"]["id"] == "file1" and msg["op"]["file_id"] == 42
+
+            # clearing the FILE annotations must not touch the board stroke
+            await ow.send_json_to({"action": "op", "op": {
+                "type": "clear", "id": "fclr", "page": 1, "file_id": 42,
+            }})
+            await asyncio.sleep(0.3)
+
+            # clearing the BOARD must not re-remove file rows (already gone)
+            # but we assert board clear leaves nothing of the board either
+            await ow.send_json_to({"action": "op", "op": {
+                "type": "draw", "tool": "pen", "points": [[9, 9], [8, 8]],
+                "color": "#0f0", "width": 2, "id": "board2", "page": 1,
+            }})
+            await ow.send_json_to({"action": "op", "op": {
+                "type": "draw", "tool": "pen", "points": [[2, 2], [4, 4]],
+                "color": "#00f", "width": 2, "id": "file2", "page": 1, "file_id": 42,
+            }})
+            await ow.send_json_to({"action": "op", "op": {"type": "clear", "id": "bclr", "page": 1}})
+            await asyncio.sleep(0.4)
+            await ow.disconnect()
+            await vw.disconnect()
+
+        async_to_sync(scenario)()
+
+        draws = [(e.operation.get("id"), e.operation.get("file_id"))
+                 for e in WhiteboardEvent.objects.filter(operation__type="draw")]
+        # board1 compacted by board clear; file2 survives (different scope)
+        assert ("board1", None) not in draws, draws
+        assert ("file2", 42) in draws, draws
+
+    def test_invalid_file_id_rejected(self):
+        async def scenario():
+            ow = self._ws(self.owner)
+            connected, _ = await ow.connect()
+            assert connected
+            await ow.receive_json_from()
+            await ow.send_json_to({"action": "op", "op": {
+                "type": "draw", "tool": "pen", "points": [[1, 2], [3, 4]],
+                "color": "#000", "width": 2, "id": "bad", "page": 1, "file_id": "x",
+            }})
+            msg = await ow.receive_json_from()
+            assert msg["type"] == "error", msg
+            await ow.disconnect()
+
+        async_to_sync(scenario)()
+        assert not WhiteboardEvent.objects.filter(operation__id="bad").exists()

@@ -475,6 +475,8 @@ class WhiteboardImpl {
     /** Record an op, track page state, paint it when it is visible. */
     _applyOp(op, actorName = '') {
         if (!op || !op.type) return;
+        // file-tagged ops are presentation annotations — presentation.js owns them
+        if (op.file_id) return;
         const pg = Math.max(1, parseInt(op.page || 1, 10) || 1);
         op = { ...op, page: pg };
 

@@ -13,6 +13,7 @@
  */
 import { ChatClient } from './chat.js';
 import { Whiteboard } from './whiteboard.js';
+import { Presentation } from './presentation.js';
 import { Media } from './media.js';
 import { toast } from './toast.js';
 import { confirmDialog, infoDialog } from './modal.js';
@@ -326,6 +327,7 @@ function handleEvent(data) {
             if (data.identity === IDENTITY) {
                 PERMISSIONS[data.permission] = data.value;
                 Whiteboard.setPermission(PERMISSIONS.can_use_whiteboard);
+                Presentation.setPermission(PERMISSIONS.can_use_whiteboard);
                 refreshControlStates();
             }
             break;
@@ -907,35 +909,13 @@ function addFileItem(file) {
     list.prepend(li);
 }
 
-let presentationState = { fileId: null, page: 1 };
 function applyPresentation(data) {
-    presentationState = { fileId: data.file_id, page: data.page || 1 };
-    const holder = document.getElementById('presentation-holder');
-    const title = document.getElementById('presentation-title');
     if (!data.file_id) {
-        holder.innerHTML = '';
+        Presentation.hide();
         switchView('media');
         return;
     }
-    title.textContent = `ارائه: ${data.file_name || ''} — صفحهٔ ${presentationState.page}`;
-    const url = `/class/${ROOM_CODE}/files/${data.file_id}/download/`;
-    holder.innerHTML = `
-        <div class="presentation-nav">
-            <button type="button" class="btn btn-sm btn-ghost" id="pres-prev">صفحهٔ قبل</button>
-            <span>صفحهٔ <input type="number" id="pres-page" min="1" value="${presentationState.page}" style="width:4rem">
-            <button type="button" class="btn btn-sm btn-ghost" id="pres-go">برو</button></span>
-            <button type="button" class="btn btn-sm btn-ghost" id="pres-next">صفحهٔ بعد</button>
-            <a class="btn btn-sm btn-ghost" href="${url}" target="_blank" rel="noopener">باز کردن فایل</a>
-        </div>
-        <embed class="presentation-frame" src="${url}#page=${presentationState.page}" type="application/pdf">`;
-    if (PERMISSIONS.can_present) {
-        const go = (page) => api('/presentation/', { file_id: presentationState.fileId, page });
-        holder.querySelector('#pres-prev').addEventListener('click', () => go(Math.max(1, presentationState.page - 1)));
-        holder.querySelector('#pres-next').addEventListener('click', () => go(presentationState.page + 1));
-        holder.querySelector('#pres-go').addEventListener('click', () => go(Number(holder.querySelector('#pres-page').value) || 1));
-    } else {
-        holder.querySelector('.presentation-nav').querySelectorAll('button, input').forEach((el) => { el.disabled = true; });
-    }
+    Presentation.show({ file_id: data.file_id, file_name: data.file_name, page: data.page || 1 });
     switchView('presentation');
 }
 
@@ -1002,6 +982,13 @@ try {
 }
 try {
     Whiteboard.init({ roomCode: ROOM_CODE, identity: IDENTITY, canDraw: PERMISSIONS.can_use_whiteboard });
+    Presentation.init({
+        roomCode: ROOM_CODE,
+        identity: IDENTITY,
+        canAnnotate: PERMISSIONS.can_use_whiteboard,
+        canPresent: PERMISSIONS.can_present,
+        api,
+    });
 } catch (err) {
     console.warn('[whiteboard] init failed:', err);
     Whiteboard.unavailable = true;
