@@ -1,0 +1,12 @@
+# Core framework
+Django>=5.0,<5.1
+djangorestframework>=3.15,<4.0
+
+# WebSockets / real-time
+channels>=4.1,<5
+channels-redis>=4.2,<5
+redis>=5.0,<6
+daphne>=4.1,<5          # ASGI server used by `runserver` for WebSockets
+
+# Configuration
+python-dotenv>=1.0,<2

@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% load static %}
+{% block title %}{{ classroom.title }}{% endblock %}
+{% block extra_css %}
+<link rel="stylesheet" href="{% static 'css/room.css' %}">
+{% endblock %}
+
+{% block content %}
+{# Client receives ONLY its own effective permissions — all enforcement is server-side. #}
+{{ permissions|json_script:"member-permissions" }}
+<div class="room" id="classroom-root"
+     data-room-code="{{ classroom.room_code }}"
+     data-user-id="{{ user.id }}"
+     data-user-name="{{ user.name }}">
+
+    <header class="room-header">
+        <div class="room-title">
+            <h1>{{ classroom.title }}</h1>
+            <span class="badge badge-info">{{ member.get_role_display }}</span>
+        </div>
+        <div class="room-header-actions">
+            <span class="room-clock" id="room-clock">--:--</span>
+            <form method="post" action="{% url 'room:leave' classroom.room_code %}">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-danger btn-sm">خروج از کلاس</button>
+            </form>
+        </div>
+    </header>
+
+    <div class="room-body">
+        <main class="room-main">
+            <div class="stage" id="stage">
+                <div class="stage-placeholder" id="video-stage">
+                    <div class="self-avatar">{{ user.name|first }}</div>
+                    <p>ناحیه ویدیو — در فاز بعدی با WebRTC فعال می‌شود</p>
+                </div>
+                <div class="stage-whiteboard hidden" id="whiteboard-stage">
+                    <div class="wb-toolbar" role="toolbar" aria-label="ابزار تخته سفید">
+                        <button type="button" class="wb-tool active" data-tool="pen" title="قلم">✏️</button>
+                        <button type="button" class="wb-tool" data-tool="eraser" title="پاک‌کن">🧽</button>
+                        <button type="button" class="wb-tool" data-tool="text" title="متن">🔤</button>
+                        <span class="wb-sep"></span>
+                        <button type="button" class="wb-action" data-action="undo" title="بازگشت">↩️</button>
+                        <button type="button" class="wb-action" data-action="redo" title="جلو">↪️</button>
+                        <button type="button" class="wb-action" data-action="clear" title="پاک کردن همه">🗑️</button>
+                        <span class="wb-sep"></span>
+                        <label class="wb-color"><input type="color" id="wb-color" value="#2563eb" aria-label="رنگ قلم"></label>
+                    </div>
+                    <canvas id="whiteboard-canvas" aria-label="تخته سفید"></canvas>
+                </div>
+            </div>
+        </main>
+
+        <aside class="room-side">
+            <section class="side-panel participants-panel">
+                <h2>شرکت‌کنندگان <span class="count-pill" id="participant-count">0</span></h2>
+                <ul class="participant-list" id="participant-list">
+                    {% for m in members %}
+                        <li class="participant" data-user-id="{{ m.user_id }}">
+                            <span class="participant-avatar">{{ m.user.name|first }}</span>
+                            <span class="participant-name">{{ m.user.name }}</span>
+                            <span class="participant-role">{{ m.get_role_display }}</span>
+                            <span class="participant-states" aria-hidden="true">
+                                <i data-state="mic" title="میکروفون">🎤</i>
+                                <i data-state="camera" title="دوربین">📹</i>
+                                <i data-state="hand" title="دست بالا">✋</i>
+                            </span>
+                        </li>
+                    {% endfor %}
+                </ul>
+            </section>
+
+            <section class="side-panel chat-panel">
+                <h2>گفتگو <span class="ws-dot" id="chat-status" title="وضعیت اتصال">●</span></h2>
+                <div class="chat-messages" id="chat-messages" aria-live="polite"></div>
+                <form class="chat-form" id="chat-form" autocomplete="off">
+                    <input type="text" id="chat-input" placeholder="پیام خود را بنویسید…"
+                           maxlength="1000" aria-label="متن پیام">
+                    <button type="submit" class="btn btn-primary btn-sm">ارسال</button>
+                </form>
+            </section>
+        </aside>
+    </div>
+
+    <footer class="room-controls">
+        <button type="button" class="ctrl-btn" id="btn-mic" title="میکروفون (به‌زودی)">🎤</button>
+        <button type="button" class="ctrl-btn" id="btn-camera" title="دوربین (به‌زودی)">📹</button>
+        <button type="button" class="ctrl-btn" id="btn-screen" title="اشتراک صفحه (به‌زودی)">🖥️</button>
+        <button type="button" class="ctrl-btn" id="btn-whiteboard" title="تخته سفید">🧑‍🏫</button>
+        <button type="button" class="ctrl-btn" id="btn-hand" title="بالا بردن دست (به‌زودی)">✋</button>
+        <button type="button" class="ctrl-btn" id="btn-chat" title="گفتگو">💬</button>
+        <button type="button" class="ctrl-btn ctrl-exit" id="btn-exit" title="خروج">📞</button>
+    </footer>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // Module bootstrap — ES modules, no bundler needed (vanilla JS by design).
+    const script = document.createElement('script');
+    script.type = 'module';
+    script.src = "{% static 'js/room.js' %}";
+    document.body.appendChild(script);
+</script>
+{% endblock %}

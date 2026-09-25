@@ -1,0 +1,53 @@
+{% load static %}<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}کلاس آنلاین{% endblock %}</title>
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+    <link href="https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css" rel="stylesheet">
+    <link rel="stylesheet" href="{% static 'css/main.css' %}">
+    {% block extra_css %}{% endblock %}
+</head>
+<body>
+<header class="site-header">
+    <div class="container header-inner">
+        <a class="brand" href="{% url 'home' %}">
+            <span class="brand-mark">◈</span> کلاس آنلاین
+        </a>
+        <nav class="main-nav" aria-label="ناوبری اصلی">
+            {% if user.is_authenticated %}
+                <a href="{% url 'dashboard' %}">داشبورد</a>
+                <a href="{% url 'classrooms:list' %}">کلاس‌های من</a>
+                <a href="{% url 'classrooms:create' %}">ایجاد کلاس</a>
+                <a href="{% url 'accounts:profile' %}">پروفایل</a>
+                <form method="post" action="{% url 'accounts:logout' %}" class="inline-form">
+                    {% csrf_token %}
+                    <button type="submit" class="link-button">خروج</button>
+                </form>
+            {% else %}
+                <a href="{% url 'accounts:login' %}">ورود</a>
+                <a href="{% url 'accounts:register' %}" class="btn btn-primary btn-sm">ثبت‌نام</a>
+            {% endif %}
+        </nav>
+    </div>
+</header>
+
+<main class="container">
+    {% if messages %}
+        <div class="messages" role="status">
+            {% for message in messages %}
+                <div class="alert alert-{{ message.tags }}">{{ message }}</div>
+            {% endfor %}
+        </div>
+    {% endif %}
+    {% block content %}{% endblock %}
+</main>
+
+<footer class="site-footer">
+    <div class="container">کلاس آنلاین — بستر آموزش مجازی</div>
+</footer>
+<script src="{% static 'js/app.js' %}" defer></script>
+{% block extra_js %}{% endblock %}
+</body>
+</html>

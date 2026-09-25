@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}مدیریت کلاس — {{ classroom.title }}{% endblock %}
+{% block content %}
+<div class="page-head">
+    <div>
+        <h1>{{ classroom.title }}</h1>
+        <p class="muted">مدیریت کلاس · کد: <code>{{ classroom.room_code }}</code></p>
+    </div>
+    <a class="btn btn-ghost" href="{% url 'classrooms:list' %}">بازگشت</a>
+</div>
+
+<div class="card form-card">
+    <div class="link-box" data-copy-link>
+        <input type="text" readonly value="{{ request.scheme }}://{{ request.get_host }}/class/{{ classroom.room_code }}/" aria-label="لینک کلاس">
+        <button type="button" class="btn btn-sm btn-ghost copy-btn" data-copy>کپی لینک</button>
+    </div>
+    <dl class="meta-list wide">
+        <div><dt>وضعیت</dt><dd>{% if classroom.is_active %}فعال{% else %}غیرفعال{% endif %}</dd></div>
+        <div><dt>محافظت با رمز</dt><dd>{% if classroom.is_password_protected %}بله{% else %}خیر{% endif %}</dd></div>
+        <div><dt>توضیحات</dt><dd>{{ classroom.description|default:"—" }}</dd></div>
+    </dl>
+    <div class="card-actions">
+        <a class="btn btn-primary" href="{% url 'room:room' classroom.room_code %}">ورود به جلسه</a>
+        {% if classroom.is_active %}
+            <form method="post" action="{% url 'classrooms:delete' classroom.room_code %}"
+                  onsubmit="return confirm('کلاس غیرفعال شود؟');">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-danger">غیرفعال کردن کلاس</button>
+            </form>
+        {% endif %}
+    </div>
+</div>
+
+<h2 class="section-title">شرکت‌کنندگان ({{ members|length }})</h2>
+<div class="card">
+    <table class="data-table">
+        <thead>
+            <tr><th>کاربر</th><th>نقش</th><th>زمان عضویت</th></tr>
+        </thead>
+        <tbody>
+            {% for m in members %}
+                <tr>
+                    <td>{{ m.user.name }}</td>
+                    <td><span class="badge badge-info">{{ m.get_role_display }}</span></td>
+                    <td>{{ m.joined_at|date:"Y/m/d H:i" }}</td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="3" class="muted">هنوز کسی عضو نشده است.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    <p class="muted small">
+        مدیریت سطح دسترسی شرکت‌کنندگان (میکروفون، دوربین، تخته و…) از معماری آماده‌شده در نسخه‌های بعدی در همین صفحه فعال می‌شود.
+    </p>
+</div>
+{% endblock %}

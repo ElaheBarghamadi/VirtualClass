@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}کلاس‌های من{% endblock %}
+{% block content %}
+<div class="page-head">
+    <h1>کلاس‌های من</h1>
+    <a class="btn btn-primary" href="{% url 'classrooms:create' %}">+ ایجاد کلاس</a>
+</div>
+
+<h2 class="section-title">کلاس‌هایی که ساخته‌ام</h2>
+{% if owned_classrooms %}
+    <div class="card-grid">
+        {% for classroom in owned_classrooms %}
+            <article class="card classroom-card">
+                <div class="card-top">
+                    <h3>{{ classroom.title }}</h3>
+                    <span class="badge {% if classroom.is_active %}badge-success{% else %}badge-muted{% endif %}">
+                        {% if classroom.is_active %}فعال{% else %}غیرفعال{% endif %}
+                    </span>
+                </div>
+                <dl class="meta-list">
+                    <div><dt>تاریخ ایجاد</dt><dd>{{ classroom.created_at|date:"Y/m/d H:i" }}</dd></div>
+                    <div><dt>شرکت‌کنندگان</dt><dd>{{ classroom.participant_count }} نفر</dd></div>
+                </dl>
+                <div class="link-box" data-copy-link>
+                    <input type="text" readonly value="{{ request.scheme }}://{{ request.get_host }}/class/{{ classroom.room_code }}/" aria-label="لینک کلاس">
+                    <button type="button" class="btn btn-sm btn-ghost copy-btn" data-copy>کپی لینک</button>
+                </div>
+                <div class="card-actions">
+                    <a class="btn btn-primary btn-sm" href="{% url 'room:lobby' classroom.room_code %}">ورود</a>
+                    <a class="btn btn-ghost btn-sm" href="{% url 'classrooms:detail' classroom.room_code %}">مدیریت</a>
+                </div>
+            </article>
+        {% endfor %}
+    </div>
+{% else %}
+    <div class="empty-state card"><p>کلاسی نساخته‌اید.</p></div>
+{% endif %}
+
+<h2 class="section-title">کلاس‌هایی که در آن‌ها عضو هستم</h2>
+{% if memberships %}
+    <div class="card-grid">
+        {% for membership in memberships %}
+            <article class="card classroom-card">
+                <div class="card-top">
+                    <h3>{{ membership.classroom.title }}</h3>
+                    <span class="badge badge-info">{{ membership.get_role_display }}</span>
+                </div>
+                <dl class="meta-list">
+                    <div><dt>زمان عضویت</dt><dd>{{ membership.joined_at|date:"Y/m/d H:i" }}</dd></div>
+                </dl>
+                <div class="card-actions">
+                    <a class="btn btn-primary btn-sm" href="{% url 'room:lobby' membership.classroom.room_code %}">ورود به کلاس</a>
+                    <form method="post" action="{% url 'room:leave' membership.classroom.room_code %}">
+                        {% csrf_token %}
+                        <button class="btn btn-ghost btn-sm" type="submit">خروج از کلاس</button>
+                    </form>
+                </div>
+            </article>
+        {% endfor %}
+    </div>
+{% else %}
+    <div class="empty-state card"><p>در کلاسی عضو نیستید. از طریق لینک دعوت وارد یک کلاس شوید.</p></div>
+{% endif %}
+{% endblock %}

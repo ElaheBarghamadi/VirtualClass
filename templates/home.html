@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}کلاس آنلاین — خانه{% endblock %}
+{% block content %}
+<section class="hero">
+    <h1>کلاس آنلاین خود را در چند ثانیه بسازید</h1>
+    <p class="hero-sub">
+        کلاس مجازی با لینک اختصاصی، رمز عبور دلخواه، گفتگوی زنده و مدیریت شرکت‌کنندگان.
+    </p>
+    <div class="hero-actions">
+        {% if user.is_authenticated %}
+            <a class="btn btn-primary" href="{% url 'classrooms:create' %}">ایجاد کلاس جدید</a>
+            <a class="btn btn-ghost" href="{% url 'dashboard' %}">داشبورد من</a>
+        {% else %}
+            <a class="btn btn-primary" href="{% url 'accounts:register' %}">شروع رایگان</a>
+            <a class="btn btn-ghost" href="{% url 'accounts:login' %}">ورود به حساب</a>
+        {% endif %}
+    </div>
+    <div class="hero-features">
+        <div class="feature"><span>🔗</span> لینک امن و یکتا برای هر کلاس</div>
+        <div class="feature"><span>🔒</span> محافظت اختیاری با رمز عبور</div>
+        <div class="feature"><span>💬</span> گفتگوی زنده با WebSocket</div>
+        <div class="feature"><span>👥</span> نقش‌ها و سطح دسترسی</div>
+    </div>
+</section>
+{% endblock %}

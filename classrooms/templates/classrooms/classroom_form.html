@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}ایجاد کلاس{% endblock %}
+{% block content %}
+<div class="page-head">
+    <h1>ایجاد کلاس جدید</h1>
+    <a class="btn btn-ghost" href="{% url 'dashboard' %}">بازگشت</a>
+</div>
+<div class="card form-card">
+    <form method="post" novalidate>
+        {% csrf_token %}
+        <div class="field">
+            <label for="{{ form.title.id_for_label }}">عنوان کلاس</label>
+            {{ form.title }}
+            {% if form.title.errors %}<p class="field-error">{{ form.title.errors.0 }}</p>{% endif %}
+        </div>
+        <div class="field">
+            <label for="{{ form.description.id_for_label }}">توضیحات</label>
+            {{ form.description }}
+        </div>
+        <div class="field switch-field">
+            <label class="switch">
+                {{ form.is_password_protected }}
+                <span class="switch-slider" aria-hidden="true"></span>
+            </label>
+            <span>محافظت با رمز عبور</span>
+            {% if form.is_password_protected.errors %}<p class="field-error">{{ form.is_password_protected.errors.0 }}</p>{% endif %}
+        </div>
+        <div class="field" id="password-field">
+            <label for="{{ form.password.id_for_label }}">رمز کلاس</label>
+            {{ form.password }}
+            <small class="field-help">{{ form.password.help_text }}</small>
+            {% if form.password.errors %}<p class="field-error">{{ form.password.errors.0 }}</p>{% endif %}
+        </div>
+        <button type="submit" class="btn btn-primary">ایجاد کلاس</button>
+    </form>
+</div>
+{% endblock %}
+{% block extra_js %}
+<script>
+    // Toggle password field visibility based on the protection switch.
+    const toggle = document.getElementById('id_is_password_protected');
+    const passwordField = document.getElementById('password-field');
+    function syncPasswordField() {
+        passwordField.style.display = toggle.checked ? '' : 'none';
+        document.getElementById('id_password').disabled = !toggle.checked;
+    }
+    toggle.addEventListener('change', syncPasswordField);
+    syncPasswordField();
+</script>
+{% endblock %}

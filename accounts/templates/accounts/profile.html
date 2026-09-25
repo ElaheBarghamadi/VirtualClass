@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}پروفایل{% endblock %}
+{% block content %}
+<div class="page-head">
+    <h1>پروفایل کاربری</h1>
+    <a class="btn btn-ghost" href="{% url 'dashboard' %}">بازگشت به داشبورد</a>
+</div>
+<div class="card form-card">
+    <form method="post" novalidate>
+        {% csrf_token %}
+        <div class="field-grid">
+            {% for field in form %}
+                <div class="field">
+                    <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+                    {{ field }}
+                    {% if field.help_text %}<small class="field-help">{{ field.help_text }}</small>{% endif %}
+                    {% if field.errors %}<p class="field-error">{{ field.errors.0 }}</p>{% endif %}
+                </div>
+            {% endfor %}
+        </div>
+        <button type="submit" class="btn btn-primary">ذخیره تغییرات</button>
+    </form>
+</div>
+{% endblock %}

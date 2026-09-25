@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}ثبت‌نام{% endblock %}
+{% block content %}
+<div class="auth-card">
+    <h1 class="auth-title">ساخت حساب کاربری</h1>
+    <form method="post" novalidate>
+        {% csrf_token %}
+        <div class="field-grid">
+            <div class="field">
+                <label for="{{ form.username.id_for_label }}">نام کاربری</label>
+                {{ form.username }}
+                {% if form.username.errors %}<p class="field-error">{{ form.username.errors.0 }}</p>{% endif %}
+            </div>
+            <div class="field">
+                <label for="{{ form.email.id_for_label }}">ایمیل</label>
+                {{ form.email }}
+                {% if form.email.errors %}<p class="field-error">{{ form.email.errors.0 }}</p>{% endif %}
+            </div>
+            <div class="field">
+                <label for="{{ form.first_name.id_for_label }}">نام</label>
+                {{ form.first_name }}
+            </div>
+            <div class="field">
+                <label for="{{ form.last_name.id_for_label }}">نام خانوادگی</label>
+                {{ form.last_name }}
+            </div>
+            <div class="field">
+                <label for="{{ form.password1.id_for_label }}">رمز عبور</label>
+                {{ form.password1 }}
+                {% if form.password1.errors %}<p class="field-error">{{ form.password1.errors.0 }}</p>{% endif %}
+            </div>
+            <div class="field">
+                <label for="{{ form.password2.id_for_label }}">تکرار رمز عبور</label>
+                {{ form.password2 }}
+                {% if form.password2.errors %}<p class="field-error">{{ form.password2.errors.0 }}</p>{% endif %}
+            </div>
+        </div>
+        <button type="submit" class="btn btn-primary btn-block">ثبت‌نام</button>
+    </form>
+    <p class="auth-alt">قبلاً ثبت‌نام کرده‌اید؟ <a href="{% url 'accounts:login' %}">وارد شوید</a></p>
+</div>
+{% endblock %}
