@@ -885,13 +885,38 @@ function initFiles() {
             }
         });
     }
+    const list = document.getElementById('file-list');
     if (PERMISSIONS.can_present) {
-        document.querySelectorAll('.present-btn').forEach((b) => b.classList.remove('hidden'));
+        // presenters: the file row itself is the present trigger — the
+        // only visible BUTTON stays the download link.
+        list.classList.add('can-present');
+        list.querySelectorAll('.file-info').forEach((el) => {
+            if (!el.title) el.title = 'کلیک: ارائهٔ این فایل';
+        });
+    } else {
+        // non-presenters: the row is inert — drop the present affordance
+        // entirely so the DOM (and screen readers) only see the download.
+        list.querySelectorAll('.file-info').forEach((el) => {
+            el.removeAttribute('role');
+            el.removeAttribute('tabindex');
+            el.removeAttribute('data-present');
+        });
     }
-    document.getElementById('file-list').addEventListener('click', (e) => {
-        const btn = e.target.closest('[data-present]');
-        if (!btn) return;
-        api('/presentation/', { file_id: Number(btn.dataset.present), page: 1 });
+    const presentFile = (trigger) => {
+        if (!PERMISSIONS.can_present) return;
+        api('/presentation/', { file_id: Number(trigger.dataset.present), page: 1 });
+    };
+    list.addEventListener('click', (e) => {
+        if (e.target.closest('a[download]')) return; // native download
+        const trigger = e.target.closest('[data-present]');
+        if (trigger) presentFile(trigger);
+    });
+    list.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        const trigger = e.target.closest('[data-present]');
+        if (!trigger) return;
+        e.preventDefault();
+        presentFile(trigger);
     });
 }
 
@@ -901,16 +926,21 @@ function addFileItem(file) {
     const li = document.createElement('li');
     li.className = 'file-item';
     li.dataset.fileId = String(file.id);
+    const presentAttrs = PERMISSIONS.can_present
+        ? ` data-present="${Number(file.id)}" role="button" tabindex="0" title="کلیک: ارائهٔ این فایل"`
+        : '';
     li.innerHTML = `
-        <div class="file-info">
+        <div class="file-info"${presentAttrs}>
             <span class="file-name"></span>
-            <small class="muted">${file.uploader || ''}${file.size ? ' · ' + file.size : ''}</small>
+            <small class="muted"></small>
         </div>
         <div class="file-actions">
-            <a class="btn btn-sm btn-ghost" href="${file.url}" download aria-label="دانلود">⬇</a>
-            ${PERMISSIONS.can_present ? `<button type="button" class="btn btn-sm btn-ghost present-btn" data-present="${file.id}" title="ارائه این فایل">📽</button>` : ''}
+            <a class="btn btn-sm btn-primary file-download" href="${file.url}" download
+               title="دانلود این فایل" aria-label="دانلود">⬇ دانلود</a>
         </div>`;
     li.querySelector('.file-name').textContent = file.name;
+    li.querySelector('.file-info small').textContent =
+        [file.uploader, file.size].filter(Boolean).join(' · ');
     list.prepend(li);
 }
 

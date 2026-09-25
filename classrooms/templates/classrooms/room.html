@@ -225,13 +225,17 @@
                 <ul class="file-list" id="file-list" aria-label="فایل‌های کلاس">
                     {% for f in files %}
                         <li class="file-item" data-file-id="{{ f.id }}">
-                            <div class="file-info">
+                            {# The file itself presents (for presenters); the only
+                               BUTTON in the row is the download link. #}
+                            <div class="file-info" data-present="{{ f.id }}" role="button" tabindex="0">
                                 <span class="file-name">{{ f.original_name }}</span>
                                 <small class="muted">{{ f.uploader.name }} · {{ f.size_display }} · {{ f.uploaded_at|date:"m/d H:i" }}</small>
                             </div>
                             <div class="file-actions">
-                                <a class="btn btn-sm btn-ghost" href="{% url 'room:file_download' classroom.room_code f.id %}}" download>⬇</a>
-                                <button type="button" class="btn btn-sm btn-ghost present-btn hidden" data-present="{{ f.id }}" title="ارائه این فایل">📽</button>
+                                <a class="btn btn-sm btn-primary file-download"
+                                   href="{% url 'room:file_download' classroom.room_code f.id %}"
+                                   download title="دانلود این فایل"
+                                   aria-label="دانلود {{ f.original_name }}">⬇ دانلود</a>
                             </div>
                         </li>
                     {% endfor %}

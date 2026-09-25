@@ -419,10 +419,15 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
     display: flex; align-items: center; gap: .5rem; justify-content: space-between;
     background: var(--surface-2); border-radius: var(--radius-sm); padding: .5rem .7rem;
 }
-.file-info { display: grid; min-width: 0; }
+.file-info { display: grid; min-width: 0; flex: 1; padding: .15rem .3rem; border-radius: var(--radius-sm); }
 .file-name { font-size: .84rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .file-info small { font-size: .68rem; }
 .file-actions { display: flex; gap: .3rem; flex: none; }
+.file-download { white-space: nowrap; }
+/* presenters: the file row is the present trigger (the only button is download) */
+.file-list.can-present .file-info { cursor: pointer; }
+.file-list.can-present .file-info:hover { background: var(--surface-3); }
+.file-list.can-present .file-info:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 
 /* ---------- control bar (floating, minimal) ---------- */
 .room-controls {
