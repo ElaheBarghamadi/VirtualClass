@@ -74,6 +74,7 @@ class Classroom(models.Model):
     welcome_message = models.TextField(blank=True, verbose_name="پیام خوش‌آمدگویی")
     logo = models.ImageField(upload_to="classroom_logos/", blank=True, null=True, verbose_name="لوگوی کلاس")
     show_chat_default = models.BooleanField(default=True, verbose_name="نمایش گفتگو به‌صورت پیش‌فرض")
+    whiteboard_open = models.BooleanField(default=False, verbose_name="تختهٔ سفید باز است")
 
     # -- presentation state (synced over WebSocket) ----------------------------
     current_file = models.ForeignKey(

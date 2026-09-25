@@ -116,6 +116,10 @@
 
 کلید API و secret هرگز به مرورگر نمی‌رسند؛ Django فقط **JWT کوتاه‌مدت و محدود به مجوزهای مؤثر کاربر** صادر می‌کند و SFU همان را enforce می‌کند.
 
+### حالت جایگزین: WebRTC Mesh (بدون نیاز به SFU)
+
+اگر LiveKit پیکربندی نشده باشد، اتاق به‌طور خودکار به **حالت mesh** می‌رود (`static/js/mesh.js`): هر شرکت‌کننده اتصال P2P مستقیم با بقیه می‌سازد (mic/camera و اشتراک صفحه روی اتصال‌های جدا، تا تصویر صفحه با دوربین قاطی نشود). هماهنگی با *perfect negotiation* انجام می‌شود: **عضو با `member_id` بزرگ‌تر پیشنهاد می‌دهد** و کوچکت‌ر پاسخ می‌دهد؛ SDP/ICE از مسیر `rtc_signal` بالا و **نقطه‌به‌نقطه** (نه broadcast) رله می‌شوند. STUN عمومی گوگل استفاده می‌شود و کاندیدای host برای شبکهٔ محلی بدون اینترنت هم کار می‌کند. رسانه هرگز از Django عبور نمی‌کند. برای کلاس‌های بزرگ همان LiveKit توصیه می‌شود (mesh با N نفر، O(N²) اتصال می‌سازد).
+
 ### معماری WebSocket
 
 | اندپوینت | کانکیومر | وظیفه |
@@ -138,7 +142,14 @@ classroom_locked · classroom_unlocked · settings_changed
 session_started · session_ended
 file_uploaded · presentation_changed
 whiteboard_operation · whiteboard_history
+whiteboard_state · rtc_signal
 ```
+
+**`whiteboard_state`** — وقتی کسی با مجوز `can_use_whiteboard` تخته را باز/بسته می‌کند، سرور وضعیت را به **همهٔ اعضا** broadcast می‌کند و در فیلد `classroom.whiteboard_open` ذخیره می‌کند؛ بنابراین حتی عضوِ دیرهنگام هم تختهٔ باز را می‌بیند.
+
+**`rtc_signal`** — پاکتِ **کدر و محدود به ۱۶KB** برای SDP/ICE در حالت mesh:
+`{"action":"rtc_signal","to_member_id":<id>,"data":{...}}` → فقط به همان هم‌کلاسیِ فعال تحویل می‌شود
+(`{"type":"rtc_signal","from_identity":...,"data":...}`). Django هرگز محتوای سیگنال را تفسیر نمی‌کند و **هیچ رسانه‌ای** از آن عبور نمی‌کند.
 
 ### معماری سطح دسترسی
 

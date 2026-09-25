@@ -420,3 +420,135 @@ class GuestWebSocketTests(TransactionTestCase):
             assert not connected
 
         async_to_sync(scenario)()
+
+
+class RtcSignalRelayTests(TransactionTestCase):
+    """WebRTC signalling relay + shared whiteboard state over the presence WS."""
+
+    def setUp(self):
+        cache.clear()
+        self.owner = make_user("rtc_owner")
+        self.student = make_user("rtc_student")
+        self.classroom = create_classroom(self.owner, title="RTC")
+        self.owner_member = join_classroom(self.classroom, self.owner)
+        self.stu_member = join_classroom(self.classroom, self.student)
+
+    def _ws(self, user):
+        from channels.auth import AuthMiddlewareStack  # noqa: F401  (pattern parity)
+        inner = URLRouter(classroom_routes)
+
+        async def app(scope, receive, send):
+            scope = dict(scope)
+            scope["user"] = user
+            scope["session"] = {}
+            await inner(scope, receive, send)
+
+        return WebsocketCommunicator(app, f"/ws/classroom/{self.classroom.room_code}/")
+
+    async def _connected(self, user):
+        ws = self._ws(user)
+        connected, _ = await ws.connect()
+        assert connected
+        await ws.receive_json_from()  # participant_list snapshot
+        return ws
+
+    async def _close(self, ws):
+        import asyncio as _asyncio
+        try:
+            await ws.disconnect()
+        except _asyncio.CancelledError:
+            pass
+
+    async def _assert_no_relay(self, ws, timeout=0.8):
+        """Drain queued broadcasts; assert no rtc_signal was relayed."""
+        import asyncio as _asyncio
+        while True:
+            try:
+                msg = await ws.receive_json_from(timeout=timeout)
+            except (_asyncio.TimeoutError, TimeoutError):
+                return
+            assert msg.get("type") != "rtc_signal", f"unexpected relay: {msg}"
+
+    async def _receive_typed(self, ws, expected, timeout=3):
+        """Skip unrelated broadcast chatter until the expected event arrives."""
+        for _ in range(10):
+            msg = await ws.receive_json_from(timeout=timeout)
+            if msg.get("type") == expected:
+                return msg
+        raise AssertionError(f"never received '{expected}'")
+
+    def test_rtc_signal_is_relayed_to_the_target_member(self):
+        async def scenario():
+            owner_ws = await self._connected(self.owner)
+            stu_ws = await self._connected(self.student)
+
+            sdp = {"sdp": {"type": "offer", "sdp": "v=0 ...fake..."}}
+            await owner_ws.send_json_to({
+                "action": "rtc_signal", "to_member_id": self.stu_member.id, "data": sdp,
+            })
+            msg = await self._receive_typed(stu_ws, "rtc_signal")
+            assert msg["from_identity"] == f"u:{self.owner.id}", msg
+            assert msg["data"] == sdp, msg
+            await owner_ws.disconnect()
+            await stu_ws.disconnect()
+
+        async_to_sync(scenario)()
+
+    def test_rtc_signal_cannot_reach_a_stranger(self):
+        async def scenario():
+            owner_ws = await self._connected(self.owner)
+            stu_ws = await self._connected(self.student)
+
+            # target a member id from ANOTHER classroom — must be dropped
+            await owner_ws.send_json_to({
+                "action": "rtc_signal", "to_member_id": self.stu_member.id + 9999,
+                "data": {"sdp": {"type": "offer", "sdp": "x"}},
+            })
+            await self._assert_no_relay(stu_ws)
+            await self._close(stu_ws)
+            await self._close(owner_ws)
+
+        async_to_sync(scenario)()
+
+    def test_oversized_signal_is_dropped(self):
+        async def scenario():
+            owner_ws = await self._connected(self.owner)
+            stu_ws = await self._connected(self.student)
+            await owner_ws.send_json_to({
+                "action": "rtc_signal", "to_member_id": self.stu_member.id,
+                "data": {"sdp": {"type": "offer", "sdp": "x" * 20000}},
+            })
+            await self._assert_no_relay(stu_ws)
+            await self._close(stu_ws)
+            await self._close(owner_ws)
+
+        async_to_sync(scenario)()
+
+    def test_whiteboard_state_broadcast_and_persist(self):
+        async def scenario():
+            owner_ws = await self._connected(self.owner)
+            stu_ws = await self._connected(self.student)
+
+            await owner_ws.send_json_to({"action": "whiteboard_state", "open": True})
+            seen = [await self._receive_typed(ws, "whiteboard_state")
+                    for ws in (owner_ws, stu_ws)]
+            assert all(m["open"] is True for m in seen)
+            await owner_ws.disconnect()
+            await stu_ws.disconnect()
+
+        async_to_sync(scenario)()
+        self.classroom.refresh_from_db()
+        self.assertTrue(self.classroom.whiteboard_open)
+
+    def test_student_without_permission_cannot_open_whiteboard(self):
+        async def scenario():
+            owner_ws = await self._connected(self.owner)
+            stu_ws = await self._connected(self.student)
+            await stu_ws.send_json_to({"action": "whiteboard_state", "open": True})
+            msg = await self._receive_typed(stu_ws, "error")
+            await owner_ws.disconnect()
+            await stu_ws.disconnect()
+
+        async_to_sync(scenario)()
+        self.classroom.refresh_from_db()
+        self.assertFalse(self.classroom.whiteboard_open)

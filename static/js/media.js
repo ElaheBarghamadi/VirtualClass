@@ -1,19 +1,21 @@
 /**
- * media.js — WebRTC media via the LiveKit SFU.
+ * media.js — classroom media transport.
  *
- * Django's role: auth + short-lived scoped tokens (/media-token/).
- * This module's role: connect to the SFU, publish/subscribe tracks,
- * render the responsive participant grid, active-speaker highlight,
- * pinning, screen-share focus, device selection and reconnection
- * (LiveKit auto-reconnects; we re-render state after it does).
+ * Two interchangeable engines behind one API:
+ *  1. LiveKit SFU  — used when the server is configured (recommended for
+ *     larger rooms; Django issues short-lived scoped tokens).
+ *  2. P2P mesh     — automatic fallback so mic/camera/screen keep working
+ *     with zero external infrastructure (see mesh.js; Django only relays
+ *     signalling envelopes, never media).
  *
- * Media never passes through Django WebSockets.
+ * Media never passes through Django WebSockets in either mode.
  */
 import { toast } from './toast.js';
+import { MeshMedia } from './mesh.js';
 
 const LivekitClient = window.LivekitClient;
 
-class MediaManager {
+class LivekitMedia {
     constructor() {
         this.room = null;
         this.localParticipant = null;
@@ -34,20 +36,14 @@ class MediaManager {
         this.onQualityChange = () => {}; // room.js hook → connection pill
     }
 
-    async init({ roomCode, currentIdentity, permissions, mediaUrl, mediaEnabled, onStateChange, onQualityChange }) {
-        this.roomCode = roomCode;
-        this.currentIdentity = currentIdentity;
-        this.permissions = permissions;
-        this.onStateChange = onStateChange || (() => {});
-        this.onQualityChange = onQualityChange || (() => {});
-        const saved = localStorage.getItem(`room_layout_${roomCode}`);
+    async init(opts) {
+        this.roomCode = opts.roomCode;
+        this.currentIdentity = opts.currentIdentity;
+        this.permissions = opts.permissions;
+        this.onStateChange = opts.onStateChange || (() => {});
+        this.onQualityChange = opts.onQualityChange || (() => {});
+        const saved = localStorage.getItem(`room_layout_${opts.roomCode}`);
         if (saved && ['grid', 'speaker', 'focus', 'presentation'].includes(saved)) this.layout = saved;
-
-        if (!mediaEnabled || !mediaUrl || !LivekitClient) {
-            this.emptyEl && (document.getElementById('stage-empty-text').textContent =
-                'سرور رسانه پیکربندی نشده است — گفتگو و تخته فعال‌اند.');
-            return;
-        }
         this.enabled = true;
         await this.connect();
     }
@@ -425,4 +421,49 @@ class MediaManager {
     }
 }
 
-export const Media = new MediaManager();
+const livekitMedia = new LivekitMedia();
+
+/**
+ * Facade: picks the engine once at init and forwards the room.js API.
+ */
+class MediaFacade {
+    constructor() {
+        this.impl = null;
+        this.engine = 'none';
+    }
+
+    get quality() { return this.impl ? this.impl.quality : 'unknown'; }
+    get layout() { return this.impl ? this.impl.layout : 'grid'; }
+
+    async init(opts) {
+        if (opts.mediaEnabled && opts.mediaUrl && LivekitClient) {
+            this.engine = 'livekit';
+            this.impl = livekitMedia;
+        } else {
+            this.engine = 'mesh';
+            this.impl = new MeshMedia();
+        }
+        try {
+            await this.impl.init(opts);
+        } catch (err) {
+            console.warn(`[media:${this.engine}] init failed:`, err);
+        }
+    }
+
+    /** Mesh needs the presence roster + signalling transport; LiveKit ignores. */
+    syncPeers(peers) { if (this.impl && this.impl.syncPeers) this.impl.syncPeers(peers); }
+    handleSignal(msg) { if (this.impl && this.impl.handleSignal) this.impl.handleSignal(msg); }
+
+    setLayout(mode) { if (this.impl) this.impl.setLayout(mode); }
+    async toggleMicrophone() { return this.impl ? this.impl.toggleMicrophone() : false; }
+    async toggleCamera() { return this.impl ? this.impl.toggleCamera() : false; }
+    async toggleScreenShare() { return this.impl ? this.impl.toggleScreenShare() : false; }
+    async forceMute() { return this.impl && this.impl.forceMute(); }
+    async forceCameraOff() { return this.impl && this.impl.forceCameraOff(); }
+    async setMicDevice(id) { return this.impl && this.impl.setMicDevice(id); }
+    async setCameraDevice(id) { return this.impl && this.impl.setCameraDevice(id); }
+    async setOutputDevice(id) { return this.impl && this.impl.setOutputDevice(id); }
+    async listDevices() { return this.impl ? this.impl.listDevices() : []; }
+}
+
+export const Media = new MediaFacade();

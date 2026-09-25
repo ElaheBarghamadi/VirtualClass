@@ -28,12 +28,15 @@ so state restores automatically.
 """
 from __future__ import annotations
 
+import json
 import logging
 
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 
 from .models import Classroom, ClassroomMember
+
+RTC_SIGNAL_MAX_BYTES = 16 * 1024  # hard cap on relayed SDP/ICE envelopes
 from .services import (
     attendance_join,
     attendance_leave,
@@ -124,6 +127,29 @@ class ClassroomConsumer(AsyncJsonWebsocketConsumer):
             )
             return
 
+        if action == "rtc_signal":
+            # WebRTC signalling relay (mesh fallback): SDP/ICE envelopes are
+            # forwarded to ONE active member of THIS classroom, untouched
+            # except a hard size cap.  The server never parses the media
+            # payloads and clients can only reach real classmates.
+            data = content.get("data")
+            to_member_id = content.get("to_member_id")
+            if not isinstance(data, dict) or not isinstance(to_member_id, int):
+                return
+            if len(json.dumps(data)) > RTC_SIGNAL_MAX_BYTES:
+                return
+            await self._relay_rtc_signal(to_member_id, data)
+            return
+
+        if action == "whiteboard_state":
+            perms = await self._effective_permissions()
+            if not perms.get("can_use_whiteboard"):
+                await self.send_json({"type": "error", "message": "اجازهٔ استفاده از تخته را ندارید."})
+                return
+            opened = bool(content.get("open"))
+            await self._set_whiteboard_open(opened)
+            return
+
         if action == "ping":
             await self.send_json({"type": "pong"})
             return
@@ -174,6 +200,7 @@ class ClassroomConsumer(AsyncJsonWebsocketConsumer):
         return {
             "is_locked": classroom.is_locked,
             "chat_disabled": classroom.chat_disabled,
+            "whiteboard_open": classroom.whiteboard_open,
             "current_file_id": classroom.current_file_id,
             "current_file_name": classroom.current_file.original_name if classroom.current_file else None,
             "current_page": classroom.current_page,
@@ -197,6 +224,34 @@ class ClassroomConsumer(AsyncJsonWebsocketConsumer):
     @database_sync_to_async
     def _set_hand_raised(self, raised: bool) -> None:
         set_hand_raised(self.classroom, self.member, raised)
+
+    @database_sync_to_async
+    def _relay_rtc_signal(self, to_member_id: int, data: dict) -> None:
+        """Deliver a signalling envelope to one active classmate."""
+        from .services import notify_member
+
+        target = ClassroomMember.objects.filter(
+            classroom=self.classroom, id=to_member_id, is_active=True, in_waiting_room=False
+        ).first()
+        if target is None or target.id == self.member.id:
+            return
+        notify_member(self.room_code, target, {
+            "type": "rtc_signal",
+            "from_identity": self.member.identity,
+            "from_member_id": self.member.id,
+            "data": data,
+        })
+
+    @database_sync_to_async
+    def _set_whiteboard_open(self, opened: bool) -> None:
+        from .services import broadcast
+
+        Classroom.objects.filter(room_code=self.room_code).update(whiteboard_open=opened)
+        broadcast(self.room_code, {
+            "type": "whiteboard_state",
+            "open": opened,
+            "by": self.member.participant_name,
+        })
 
     @database_sync_to_async
     def _start_attendance(self) -> None:

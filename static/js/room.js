@@ -174,6 +174,11 @@ class PresenceClient {
         const hands = inRoom.filter((p) => p.hand_raised).length;
         document.getElementById('hand-pill').classList.toggle('hidden', hands === 0);
         document.getElementById('hand-count').textContent = String(hands);
+
+        // Keep the P2P mesh engine's peer set in sync (LiveKit ignores this).
+        Media.syncPeers(inRoom.map((p) => ({
+            identity: p.identity, member_id: p.member_id, name: p.name,
+        })));
     }
 
     _matches(p) {
@@ -387,6 +392,13 @@ function handleEvent(data) {
             // New pending participant (visible to hosts via next snapshot too).
             if (PRIVILEGED) presence.upsert(data.participant);
             break;
+        case 'whiteboard_state':
+            applyWhiteboardState(data.open);
+            if (data.open && data.by) toast(`${data.by} تختهٔ سفید را باز کرد.`, 'info', 2500);
+            break;
+        case 'rtc_signal':
+            Media.handleSignal(data);
+            break;
         case 'pong':
             if (presence._pingAt) {
                 presence.rtt = Math.round(performance.now() - presence._pingAt);
@@ -426,6 +438,7 @@ function handleNotification(data) {
 function applyClassroomState(state) {
     if (state.is_locked !== undefined) showLockBadge(state.is_locked);
     ChatClient.setSendEnabled(!state.chat_disabled || PRIVILEGED, 'گفتگو توسط میزبان قطع شده است.');
+    if (state.whiteboard_open) applyWhiteboardState(true);
     if (state.current_file_id) {
         applyPresentation({
             file_id: state.current_file_id,
@@ -463,6 +476,15 @@ function setSessionUI(live) {
     } else if (!live && dot) {
         dot.remove();
     }
+}
+
+// ---------------------------------------------------------------------------
+// Shared whiteboard view state (broadcast by the server to everyone)
+// ---------------------------------------------------------------------------
+function applyWhiteboardState(open) {
+    switchView(open ? 'whiteboard' : 'media');
+    document.getElementById('btn-whiteboard')?.classList.toggle('active', Boolean(open));
+    if (open) setTimeout(() => Whiteboard.resize(), 60);
 }
 
 // ---------------------------------------------------------------------------
@@ -521,10 +543,9 @@ function initControls() {
     bind('btn-whiteboard', () => {
         if (!PERMISSIONS.can_use_whiteboard) return toast('شما اجازهٔ استفاده از تخته را ندارید.', 'warning');
         if (Whiteboard.unavailable) return toast('کتابخانهٔ تخته بارگذاری نشد؛ صفحه را تازه کنید.', 'error');
+        // Ask the server to broadcast the state so EVERYONE sees the board.
         const showing = !document.getElementById('view-whiteboard').classList.contains('hidden');
-        switchView(showing ? 'media' : 'whiteboard');
-        document.getElementById('btn-whiteboard').classList.toggle('active', !showing);
-        if (!showing) setTimeout(() => Whiteboard.resize(), 60);
+        presence.send({ action: 'whiteboard_state', open: !showing });
     });
     bind('btn-chat', () => {
         activateTab('chat');
@@ -948,9 +969,15 @@ try {
         permissions: PERMISSIONS,
         mediaUrl: MEDIA_URL,
         mediaEnabled: MEDIA_ENABLED,
+        self: { identity: IDENTITY, memberId: MEMBER_ID, name: root.dataset.participantName },
+        signal: (payload) => presence.send(payload),
         onStateChange: (state) => presence.send({ action: 'media_state', ...state }),
         onQualityChange,
     });
+    // re-sync the mesh once media is up (the first snapshot may predate it)
+    Media.syncPeers(Array.from(presence.participants.values())
+        .filter((p) => !p.in_waiting_room)
+        .map((p) => ({ identity: p.identity, member_id: p.member_id, name: p.name })));
 } catch (err) {
     console.warn('[media] init failed:', err);
 }
