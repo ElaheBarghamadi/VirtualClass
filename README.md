@@ -423,7 +423,9 @@ online_classroom/
 **رمزها**
 - رمز کاربر و رمز کلاس هر دو با `make_password`/`check_password` هش می‌شوند؛ هش هرگز در HTML یا JSON نمی‌رود
 - رمز کلاس فقط در بدنهٔ POST است، نه در URL
-- **Rate limiting**: ۵ تلاش ناموفق رمز → ۱۲۰ ثانیه مسدودیت (cache-backed، در پروداکشن Redis)
+- **Rate limiting رمز کلاس**: ۵ تلاش ناموفق (per کاربر/نام) → ۱۲۰ ثانیه مسدودیت **و** سقف ۱۵ تلاش per-IP → ۳۰۰ ثانیه — چرخاندن نام مهمان یا ساخت حساب‌های متعدد دیگر حدس نامحدود نمی‌دهد
+- **Rate limiting ورود حساب**: ۸ تلاش ناموفق per IP+نام‌کاربری و ۲۰ per IP → ۵ دقیقه مسدودیت، *قبل از* تلاش احراز هویت (ارزان)؛ ورود موفق شمارنده را صفر می‌کند
+- **ساخت حساب**: حداکثر ۱۲ ثبت‌نام per IP در ساعت (HTML) + throttle روی `POST /api/auth/register/` و `/api/auth/login/` (DRF ScopedRateThrottle)
 
 **آپلود فایل**
 - whitelist پسوند → بررسی حجم → **sniffing magic bytes** → برای Office بررسی ظرف OOXML (`[Content_Types].xml` و marker مربوطه)
@@ -435,7 +437,16 @@ online_classroom/
 
 **CSRF**: روی همهٔ فرم‌ها و همهٔ POSTهای JSON (هدر `X-CSRFToken`).
 
-**WebSocket**: احراز هویت از session کوکی (`AuthMiddlewareStack` + `SessionMiddlewareStack`) + بررسی عضویت فعال در `connect` + بازبینی مجوز در هر پیام.
+**WebSocket**
+- احراز هویت از session کوکی (`AuthMiddlewareStack` + `SessionMiddlewareStack`) + بررسی عضویت فعال در `connect` + بازبینی مجوز در هر پیام
+- **دفاع CSWSH**: مرورگرها کوکی‌ها را به *هر* handshake وب‌سوکت می‌چسبانند و same-origin policy روی WS اعمال نمی‌شود؛ اگر سایت مخربی می‌توانست با کوکی قربانی سوکت باز کند، به‌جای او چت می‌کرد/می‌کشید. حالا هر سه consumer هدر `Origin` را با `Host` (یا `CSRF_TRUSTED_ORIGINS`) مقایسه می‌کنند و handshake بیگانه با کد ۴۴۰۳ رد می‌شود. کلاینت‌های بدون `Origin` (اپ native، اسکریپت سروری) unaffected اند
+- **Rate limiter per-connection**: چت ۱۰ پیام/ثانیه، تخته ۴۰ op/ثانیه، presence ۲۰ پیام/ثانیه — flood به channel layer/دیتابیس بی‌اثر است
+- **type confusion بسته شد**: `file_id: true` یا `page: true` (bool زیرکلاس int است) رد می‌شوند؛ `page` بزرگ به ۹۹۹۹ clamp می‌شود (overflow در PostgreSQL → ۵۰۰ نمی‌شود)
+
+**ورودی‌های مخرب HTTP**
+- بدنهٔ JSON خراب → **۴۰۰ تمیز، هرگز ۵۰۰** (`_json_body` روی همهٔ اکشن‌های میزبان)؛ `session_id`/`ban_minutes`/`page`/`file_id` غیرعددی هم ۴۰۰
+- عضو **اتاق انتظار** تا تأیید شدن نه به فایل‌های اشتراکی می‌رسد (۴۰۴) نه به REST API کلاس (۴۰۳)
+- `GET /api/classrooms/<code>/` برای مالکی که عضو فعال هم هست دیگر ۵۰۰ نمی‌دهد (`distinct()` روی OR-join)
 
 **مهمان‌ها**
 - `guest_uid` با `secrets.token_urlsafe(16)` ساخته می‌شود و فقط در session سمت سرور همان مرورگر ذخیره می‌شود؛ شناسهٔ جعلی در WS/HTTP → رد
@@ -452,7 +463,7 @@ online_classroom/
 ## ۶. تست‌ها
 
 ```bash
-python manage.py test     # 106 تست
+python manage.py test     # 141 تست
 ```
 
 | حوزه | پوشش |

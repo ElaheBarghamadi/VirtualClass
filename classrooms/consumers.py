@@ -35,8 +35,10 @@ from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 
 from .models import Classroom, ClassroomMember
+from .ws_security import RateLimiter, ws_origin_allowed
 
 RTC_SIGNAL_MAX_BYTES = 16 * 1024  # hard cap on relayed SDP/ICE envelopes
+RECEIVE_RATE_LIMIT = 20  # client messages per second per connection
 from .services import (
     attendance_join,
     attendance_leave,
@@ -58,6 +60,14 @@ class ClassroomConsumer(AsyncJsonWebsocketConsumer):
         self.member = None
         self.classroom = None
         self.user = self.scope.get("user")
+
+        # CSWSH defence: a browser handshake from a foreign origin would
+        # ride on the victim's cookies — reject it before anything else.
+        if not ws_origin_allowed(self.scope):
+            logger.warning("ws_origin_rejected room=%s", self.room_code)
+            await self.close(code=4403)
+            return
+        self._limiter = RateLimiter(RECEIVE_RATE_LIMIT)
 
         # Server-side authorisation: only active members (registered or
         # session-bound guests) may connect.
@@ -122,6 +132,11 @@ class ClassroomConsumer(AsyncJsonWebsocketConsumer):
     # ------------------------------------------------------------------
     async def receive_json(self, content: dict, **kwargs) -> None:
         action = content.get("action")
+
+        limiter = getattr(self, "_limiter", None)
+        if limiter is not None and not limiter.allow():
+            logger.info("rate_limited room=%s action=%r", self.room_code, action)
+            return
 
         if getattr(self, "waiting", False):
             # Not admitted yet — only keep-alive is accepted.

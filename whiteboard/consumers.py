@@ -32,12 +32,14 @@ from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from classrooms.models import Classroom, ClassroomMember
 from classrooms.permissions import effective_permissions
 from classrooms.services import resolve_scope_member
+from classrooms.ws_security import RateLimiter, ws_origin_allowed
 
 from .models import Whiteboard, WhiteboardEvent
 
 logger = logging.getLogger(__name__)
 
 MAX_OP_BYTES = 64 * 1024
+OP_RATE_LIMIT = 40  # ops per second per connection (lasers included)
 HISTORY_LIMIT = 2000
 VALID_OP_TYPES = {"draw", "text", "remove", "clear", "page_add", "page_setup", "page_go", "laser"}
 # Laser pointers are ephemeral: relayed to the group, never persisted.
@@ -56,6 +58,13 @@ class WhiteboardConsumer(AsyncJsonWebsocketConsumer):
         self.member = None
         self.user = self.scope.get("user")
         self.authenticated = bool(self.user is not None and getattr(self.user, "is_authenticated", False))
+
+        # CSWSH defence — see classrooms.ws_security.
+        if not ws_origin_allowed(self.scope):
+            logger.warning("ws_origin_rejected room=%s", self.room_code)
+            await self.close(code=4403)
+            return
+        self._limiter = RateLimiter(OP_RATE_LIMIT)
 
         self.classroom, self.member = await self._load_membership()
         if self.member is None:
@@ -80,6 +89,11 @@ class WhiteboardConsumer(AsyncJsonWebsocketConsumer):
 
     async def receive_json(self, content: dict, **kwargs) -> None:
         if content.get("action") != "op":
+            return
+
+        limiter = getattr(self, "_limiter", None)
+        if limiter is not None and not limiter.allow():
+            logger.info("whiteboard_rate_limited room=%s", self.room_code)
             return
 
         op = content.get("op")
@@ -166,7 +180,9 @@ class WhiteboardConsumer(AsyncJsonWebsocketConsumer):
             return False
         if op["type"] == "page_add":
             # page_add must carry the new page number
-            if not isinstance(op.get("page"), int) or op["page"] < 2:
+            # (bool is an int subclass — exclude it explicitly)
+            page = op.get("page")
+            if not isinstance(page, int) or isinstance(page, bool) or page < 2:
                 return False
         if op["type"] == "page_setup":
             color, grid = op.get("color"), op.get("grid")
@@ -177,13 +193,15 @@ class WhiteboardConsumer(AsyncJsonWebsocketConsumer):
             if grid is not None and grid not in VALID_GRIDS:
                 return False
         if op["type"] == "page_go":
-            if not isinstance(op.get("page"), int) or op["page"] < 1:
+            page = op.get("page")
+            if not isinstance(page, int) or isinstance(page, bool) or page < 1:
                 return False
         if op["type"] == "laser":
             if not isinstance(op.get("x"), (int, float)) or not isinstance(op.get("y"), (int, float)):
                 return False
         # presentation annotations ride the same protocol tagged with file_id
-        if "file_id" in op and not isinstance(op.get("file_id"), int):
+        file_id = op.get("file_id")
+        if "file_id" in op and (not isinstance(file_id, int) or isinstance(file_id, bool)):
             return False
         return True
 

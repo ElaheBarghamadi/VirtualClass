@@ -202,6 +202,11 @@ REST_FRAMEWORK = {
     ],
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 20,
+    # Scoped rates used by the throttled auth endpoints (api.py).
+    "DEFAULT_THROTTLE_RATES": {
+        "login": "30/hour",
+        "register": "20/hour",
+    },
 }
 
 # ---------------------------------------------------------------------------

@@ -22,6 +22,7 @@ from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from classrooms.models import Classroom, ClassroomMember
 from classrooms.permissions import effective_permissions, is_privileged
 from classrooms.services import resolve_scope_member
+from classrooms.ws_security import RateLimiter, ws_origin_allowed
 
 from .models import ChatMessage
 
@@ -29,6 +30,7 @@ logger = logging.getLogger(__name__)
 
 HISTORY_LIMIT = 100
 MAX_MESSAGE_LENGTH = 1000
+SEND_RATE_LIMIT = 10  # messages per second per connection
 
 
 class ChatConsumer(AsyncJsonWebsocketConsumer):
@@ -41,6 +43,13 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         self.member = None
         self.user = self.scope.get("user")
         self.authenticated = bool(self.user is not None and getattr(self.user, "is_authenticated", False))
+
+        # CSWSH defence — see classrooms.ws_security.
+        if not ws_origin_allowed(self.scope):
+            logger.warning("ws_origin_rejected room=%s", self.room_code)
+            await self.close(code=4403)
+            return
+        self._limiter = RateLimiter(SEND_RATE_LIMIT)
 
         self.classroom, self.member = await self._load_membership()
         if self.member is None:
@@ -62,6 +71,10 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         action = content.get("action")
 
         if action == "send_message":
+            limiter = getattr(self, "_limiter", None)
+            if limiter is not None and not limiter.allow():
+                await self.send_json({"type": "error", "message": "آهسته‌تر پیام بفرستید."})
+                return
             await self._handle_send(content)
         elif action == "delete_message":
             await self._handle_delete(content)

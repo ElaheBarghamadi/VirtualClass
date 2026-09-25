@@ -10,6 +10,7 @@ from django.shortcuts import get_object_or_404
 from rest_framework import generics, permissions, status
 from rest_framework.authtoken.views import ObtainAuthToken
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from chat.models import ChatMessage
@@ -41,16 +42,20 @@ from .services import (
 
 
 class RegisterAPIView(generics.CreateAPIView):
-    """POST /api/auth/register/"""
+    """POST /api/auth/register/ — IP-throttled against account flooding."""
 
     serializer_class = RegisterSerializer
     permission_classes = [permissions.AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "register" 
 
 
 class LoginAPIView(ObtainAuthToken):
-    """POST /api/auth/login/ → returns an auth token."""
+    """POST /api/auth/login/ → auth token; IP-throttled against brute force."""
 
     permission_classes = [permissions.AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "login" 
 
 
 class _ClassroomScopedMixin:
@@ -69,7 +74,11 @@ class _ClassroomScopedMixin:
     def initial(self, request, *args, **kwargs):
         super().initial(request, *args, **kwargs)
         member = self.get_member()
-        if member is None or (self.require_privileged and not is_privileged(member)):
+        if (
+            member is None
+            or member.in_waiting_room  # not admitted yet
+            or (self.require_privileged and not is_privileged(member))
+        ):
             from rest_framework.exceptions import PermissionDenied as DRFPermissionDenied
 
             raise DRFPermissionDenied("دسترسی غیرمجاز به این کلاس.")
@@ -108,9 +117,10 @@ class ClassroomDetailAPIView(generics.RetrieveAPIView):
 
     def get_queryset(self):
         user = self.request.user
-        return Classroom.objects.filter(owner=user) | Classroom.objects.filter(
-            members__user=user, members__is_active=True
-        )
+        return (
+            Classroom.objects.filter(owner=user)
+            | Classroom.objects.filter(members__user=user, members__is_active=True)
+        ).distinct()
 
 
 class ClassroomParticipantsAPIView(_ClassroomScopedMixin, generics.ListAPIView):

@@ -72,11 +72,19 @@ class PermissionDenied(Exception):
 # ---------------------------------------------------------------------------
 PASSWORD_MAX_ATTEMPTS = 5
 PASSWORD_LOCK_SECONDS = 120
+# Per-IP cap: rotating guest names / accounts must not yield unlimited
+# guesses against one classroom's password.
+PASSWORD_MAX_ATTEMPTS_IP = 15
+PASSWORD_LOCK_SECONDS_IP = 300
 
 
 def _attempts_key(classroom: Classroom, who) -> str:
     """Rate-limit key — works for User objects and guest name strings."""
     return f"classpw:{classroom.id}:{getattr(who, 'id', who)}"
+
+
+def _attempts_key_ip(classroom: Classroom, ip: str) -> str:
+    return f"classpw-ip:{classroom.id}:{ip}"
 
 
 def register_failed_password(classroom: Classroom, who) -> None:
@@ -93,6 +101,22 @@ def password_attempts_blocked(classroom: Classroom, who) -> bool:
 
 def reset_password_attempts(classroom: Classroom, who) -> None:
     cache.delete(_attempts_key(classroom, who))
+
+
+def register_failed_password_ip(classroom: Classroom, ip: str) -> None:
+    if not ip:
+        return
+    key = _attempts_key_ip(classroom, ip)
+    try:
+        cache.incr(key)
+    except ValueError:
+        cache.set(key, 1, PASSWORD_LOCK_SECONDS_IP)
+
+
+def password_attempts_blocked_ip(classroom: Classroom, ip: str) -> bool:
+    if not ip:
+        return False
+    return (cache.get(_attempts_key_ip(classroom, ip)) or 0) >= PASSWORD_MAX_ATTEMPTS_IP
 
 
 # ---------------------------------------------------------------------------
@@ -599,14 +623,18 @@ def set_presentation(classroom: Classroom, operator: User, file_id: int | None, 
     actor = get_active_member(classroom, operator)
     if actor is None or not actor.can_present or not effective_permissions(actor, classroom)["can_present"]:
         raise PermissionDenied("شما اجازهٔ ارائه ندارید.")
-    if file_id:
+    if file_id is not None:
+        # strict int — a bool/str/float from JSON must not become "file 1"
+        if isinstance(file_id, bool) or not isinstance(file_id, int):
+            raise ValueError("file_id نامعتبر است.")
         shared = classroom.files.filter(id=file_id).first()
         if shared is None:
             raise ClassroomAccessError("فایل انتخاب‌شده متعلق به این کلاس نیست.")
         classroom.current_file = shared
     else:
         classroom.current_file = None
-    classroom.current_page = max(1, int(page or 1))
+    # clamp: unbounded values would overflow a PostgreSQL IntegerField
+    classroom.current_page = max(1, min(9999, int(page or 1)))
     classroom.save(update_fields=["current_file", "current_page", "updated_at"])
     broadcast(classroom.room_code, {
         "type": "presentation_changed",

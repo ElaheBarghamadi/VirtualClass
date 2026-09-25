@@ -50,6 +50,8 @@ from .services import (
     join_classroom_guest,
     leave_classroom,
     mute_all,
+    password_attempts_blocked_ip,
+    register_failed_password_ip,
     remove_member,
     request_unmute,
     resolve_member,
@@ -240,6 +242,10 @@ def lobby_view(request, room_code: str):
         return ctx
 
     if request.method == "POST":
+        client_ip = request.META.get("REMOTE_ADDR", "")
+        if classroom.is_password_protected and password_attempts_blocked_ip(classroom, client_ip):
+            messages.error(request, "تلاش‌های ناموفق بیش از حد مجاز است؛ کمی بعد دوباره تلاش کنید.")
+            return render(request, "classrooms/lobby.html", _lobby_ctx())
         if authenticated:
             raw_password = ""
             if classroom.is_password_protected:
@@ -249,11 +255,15 @@ def lobby_view(request, room_code: str):
                 raw_password = join_form.cleaned_data["password"]
             try:
                 member = join_classroom(classroom, request.user, raw_password)
-            except (WrongClassroomPassword, ClassroomLocked, UserBanned, TooManyAttempts, ClassroomAccessError) as exc:
-                if join_form is not None and isinstance(exc, WrongClassroomPassword):
+            except WrongClassroomPassword as exc:
+                register_failed_password_ip(classroom, client_ip)
+                if join_form is not None:
                     join_form.add_error("password", str(exc))
                 else:
                     messages.error(request, str(exc))
+                return render(request, "classrooms/lobby.html", _lobby_ctx())
+            except (ClassroomLocked, UserBanned, TooManyAttempts, ClassroomAccessError) as exc:
+                messages.error(request, str(exc))
                 return render(request, "classrooms/lobby.html", _lobby_ctx())
         else:
             join_form = GuestJoinForm(
@@ -267,11 +277,15 @@ def lobby_view(request, room_code: str):
                     join_form.cleaned_data["display_name"],
                     join_form.cleaned_data.get("password", ""),
                 )
-            except (WrongClassroomPassword, ClassroomLocked, TooManyAttempts, ClassroomAccessError) as exc:
-                if isinstance(exc, WrongClassroomPassword) and "password" in join_form.fields:
+            except WrongClassroomPassword as exc:
+                register_failed_password_ip(classroom, client_ip)
+                if "password" in join_form.fields:
                     join_form.add_error("password", str(exc))
                 else:
                     messages.error(request, str(exc))
+                return render(request, "classrooms/lobby.html", _lobby_ctx())
+            except (ClassroomLocked, TooManyAttempts, ClassroomAccessError) as exc:
+                messages.error(request, str(exc))
                 return render(request, "classrooms/lobby.html", _lobby_ctx())
             # bind the guest membership to THIS browser session
             request.session[guest_session_key(classroom)] = member.guest_uid
@@ -385,13 +399,28 @@ def _json_error(exc: Exception, status: int = 403) -> JsonResponse:
     return JsonResponse({"detail": str(exc)}, status=status)
 
 
+def _json_body(request) -> dict:
+    """Parse a JSON request body safely.
+
+    Malformed JSON must be a clean 400 — never an unhandled 500 that an
+    attacker can use to probe internals or spam error logs.
+    """
+    try:
+        body = json.loads(request.body or "{}")
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise ValueError("بدنهٔ درخواست JSON معتبر نیست.") from exc
+    if not isinstance(body, dict):
+        raise ValueError("بدنهٔ درخواست باید یک شیء JSON باشد.")
+    return body
+
+
 @login_required
 @require_POST
 def member_permission_view(request, room_code: str, member_id: int):
     """Toggle one capability flag of a participant."""
     classroom = get_object_or_404(Classroom, room_code=room_code)
     try:
-        body = json.loads(request.body or "{}")
+        body = _json_body(request)
         set_member_permission(
             classroom, request.user, member_id, body.get("permission", ""), bool(body.get("value"))
         )
@@ -408,7 +437,7 @@ def member_role_view(request, room_code: str, member_id: int):
     """Assign MODERATOR/PRESENTER/STUDENT (OWNER-only)."""
     classroom = get_object_or_404(Classroom, room_code=room_code)
     try:
-        body = json.loads(request.body or "{}")
+        body = _json_body(request)
         set_member_role(classroom, request.user, member_id, body.get("role", ""))
     except PermissionDenied as exc:
         return _json_error(exc)
@@ -421,14 +450,16 @@ def member_role_view(request, room_code: str, member_id: int):
 @require_POST
 def member_mute_view(request, room_code: str, member_id: int):
     classroom = get_object_or_404(Classroom, room_code=room_code)
-    body = json.loads(request.body or "{}")
     try:
+        body = _json_body(request)
         if body.get("request_unmute"):
             request_unmute(classroom, request.user, member_id)
         else:
             set_member_muted(classroom, request.user, member_id, bool(body.get("muted", True)))
     except PermissionDenied as exc:
         return _json_error(exc)
+    except ValueError as exc:
+        return _json_error(exc, status=400)
     return JsonResponse({"ok": True})
 
 
@@ -447,8 +478,8 @@ def mute_all_view(request, room_code: str):
 @require_POST
 def member_remove_view(request, room_code: str, member_id: int):
     classroom = get_object_or_404(Classroom, room_code=room_code)
-    body = json.loads(request.body or "{}")
     try:
+        body = _json_body(request)
         ban_minutes = int(body.get("ban_minutes") or 0)
         remove_member(classroom, request.user, member_id, ban_minutes=ban_minutes)
     except PermissionDenied as exc:
@@ -462,14 +493,16 @@ def member_remove_view(request, room_code: str, member_id: int):
 @require_POST
 def waiting_room_action_view(request, room_code: str, member_id: int):
     classroom = get_object_or_404(Classroom, room_code=room_code)
-    body = json.loads(request.body or "{}")
     try:
+        body = _json_body(request)
         if body.get("approve"):
             approve_waiting_room(classroom, request.user, member_id)
         else:
             deny_waiting_room(classroom, request.user, member_id)
     except PermissionDenied as exc:
         return _json_error(exc)
+    except ValueError as exc:
+        return _json_error(exc, status=400)
     return JsonResponse({"ok": True})
 
 
@@ -477,11 +510,13 @@ def waiting_room_action_view(request, room_code: str, member_id: int):
 @require_POST
 def lock_view(request, room_code: str):
     classroom = get_object_or_404(Classroom, room_code=room_code)
-    body = json.loads(request.body or "{}")
     try:
+        body = _json_body(request)
         set_classroom_locked(classroom, request.user, bool(body.get("locked", True)))
     except PermissionDenied as exc:
         return _json_error(exc)
+    except ValueError as exc:
+        return _json_error(exc, status=400)
     return JsonResponse({"ok": True})
 
 
@@ -489,12 +524,14 @@ def lock_view(request, room_code: str):
 @require_POST
 def settings_view(request, room_code: str):
     classroom = get_object_or_404(Classroom, room_code=room_code)
-    body = json.loads(request.body or "{}")
-    values = body.get("settings") if isinstance(body.get("settings"), dict) else body
     try:
+        body = _json_body(request)
+        values = body.get("settings") if isinstance(body.get("settings"), dict) else body
         update_settings(classroom, request.user, values)
     except PermissionDenied as exc:
         return _json_error(exc)
+    except ValueError as exc:
+        return _json_error(exc, status=400)
     return JsonResponse({"ok": True})
 
 
@@ -502,8 +539,8 @@ def settings_view(request, room_code: str):
 @require_POST
 def presentation_view(request, room_code: str):
     classroom = get_object_or_404(Classroom, room_code=room_code)
-    body = json.loads(request.body or "{}")
     try:
+        body = _json_body(request)
         set_presentation(classroom, request.user, body.get("file_id"), int(body.get("page") or 1))
     except PermissionDenied as exc:
         return _json_error(exc)
@@ -521,10 +558,14 @@ def presentation_view(request, room_code: str):
 @require_POST
 def session_start_view(request, room_code: str):
     classroom = get_object_or_404(Classroom, room_code=room_code)
-    body = json.loads(request.body or "{}")
+    try:
+        body = _json_body(request)
+        session_id = int(body.get("session_id") or 0)
+    except ValueError:
+        return JsonResponse({"detail": "session_id نامعتبر است."}, status=400)
     session = None
-    if body.get("session_id"):
-        session = get_object_or_404(ClassroomSession, id=body["session_id"], classroom=classroom)
+    if session_id:
+        session = get_object_or_404(ClassroomSession, id=session_id, classroom=classroom)
     try:
         live = start_session(classroom, request.user, session)
     except PermissionDenied as exc:
@@ -612,7 +653,8 @@ def file_download_view(request, room_code: str, file_id: int):
     our safe copy."""
     classroom = get_object_or_404(Classroom, room_code=room_code)
     member = resolve_member(request, classroom)
-    if member is None:
+    if member is None or member.in_waiting_room:
+        # not admitted yet — shared material must stay hidden
         raise Http404
     shared = get_object_or_404(SharedFile, id=file_id, classroom=classroom)
     response = FileResponse(shared.file.open("rb"), as_attachment=True, filename=shared.original_name)
