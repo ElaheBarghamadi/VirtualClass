@@ -322,3 +322,130 @@ class WhiteboardPageTests(TransactionTestCase):
             await ws2.disconnect()
 
         async_to_sync(scenario)()
+
+
+class WhiteboardStyleOpsTests(TransactionTestCase):
+    """page_setup / page_go / laser: validation, persistence, relay."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="st_owner", password="x")
+        self.viewer = User.objects.create_user(username="st_viewer", password="x")
+        self.classroom = create_classroom(self.owner, title="Style")
+        join_classroom(self.classroom, self.viewer)
+
+    def _ws(self, user):
+        return WebsocketCommunicator(
+            app_with_user(user, wb_routes), f"/ws/classroom/{self.classroom.room_code}/whiteboard/"
+        )
+
+    def test_page_setup_persisted_and_broadcast(self):
+        async def scenario():
+            ow = self._ws(self.owner)
+            connected, _ = await ow.connect()
+            assert connected
+            await ow.receive_json_from()
+            vw = self._ws(self.viewer)
+            connected, _ = await vw.connect()
+            assert connected
+            await vw.receive_json_from()
+
+            await ow.send_json_to({"action": "op", "op": {
+                "type": "page_setup", "page": 1, "color": "#123abc", "grid": "grid", "id": "ps1",
+            }})
+            msg = await vw.receive_json_from()
+            assert msg["type"] == "whiteboard_operation", msg
+            assert msg["op"]["color"] == "#123abc" and msg["op"]["grid"] == "grid"
+
+            # invalid colour rejected
+            await ow.send_json_to({"action": "op", "op": {"type": "page_setup", "page": 1, "color": "red"}})
+            msg = await ow.receive_json_from()
+            assert msg["type"] == "error", msg
+            # invalid grid rejected
+            await ow.send_json_to({"action": "op", "op": {"type": "page_setup", "page": 1, "grid": "waves"}})
+            msg = await ow.receive_json_from()
+            assert msg["type"] == "error", msg
+            await ow.disconnect()
+            await vw.disconnect()
+
+        async_to_sync(scenario)()
+        ev = WhiteboardEvent.objects.get(operation__type="page_setup")
+        assert ev.page == 1 and ev.operation["color"] == "#123abc"
+        assert WhiteboardEvent.objects.filter(operation__type="page_setup").count() == 1
+
+    def test_page_go_relayed_and_validated(self):
+        async def scenario():
+            ow = self._ws(self.owner)
+            connected, _ = await ow.connect()
+            assert connected
+            await ow.receive_json_from()
+            vw = self._ws(self.viewer)
+            connected, _ = await vw.connect()
+            assert connected
+            await vw.receive_json_from()
+
+            await ow.send_json_to({"action": "op", "op": {"type": "page_go", "page": 3, "id": "go1"}})
+            msg = await vw.receive_json_from()
+            assert msg["type"] == "whiteboard_operation" and msg["op"]["type"] == "page_go", msg
+            assert msg["op"]["page"] == 3
+
+            await ow.send_json_to({"action": "op", "op": {"type": "page_go"}})
+            msg = await ow.receive_json_from()
+            assert msg["type"] == "error", msg
+            await ow.disconnect()
+            await vw.disconnect()
+
+        async_to_sync(scenario)()
+        assert WhiteboardEvent.objects.filter(operation__type="page_go", page=3).exists()
+
+    def test_laser_is_ephemeral_and_relayed(self):
+        async def scenario():
+            ow = self._ws(self.owner)
+            connected, _ = await ow.connect()
+            assert connected
+            await ow.receive_json_from()
+            vw = self._ws(self.viewer)
+            connected, _ = await vw.connect()
+            assert connected
+            await vw.receive_json_from()
+
+            await ow.send_json_to({"action": "op", "op": {"type": "laser", "page": 1, "x": 42, "y": 7}})
+            msg = await vw.receive_json_from()
+            assert msg["type"] == "whiteboard_operation", msg
+            assert msg["op"]["type"] == "laser" and msg["op"]["x"] == 42
+            assert msg.get("ephemeral") is True
+
+            # invalid laser rejected (skip our own relayed-laser echo first)
+            await ow.send_json_to({"action": "op", "op": {"type": "laser", "page": 1, "x": "a", "y": 2}})
+            for _ in range(5):
+                msg = await ow.receive_json_from()
+                if msg.get("type") == "error":
+                    break
+            assert msg["type"] == "error", msg
+            await ow.disconnect()
+            await vw.disconnect()
+
+        async_to_sync(scenario)()
+        assert not WhiteboardEvent.objects.filter(operation__type="laser").exists()
+
+    def test_clear_keeps_page_setup_marker(self):
+        async def scenario():
+            ow = self._ws(self.owner)
+            connected, _ = await ow.connect()
+            assert connected
+            await ow.receive_json_from()
+            await ow.send_json_to({"action": "op", "op": {
+                "type": "draw", "tool": "pen", "points": [[1, 2], [3, 4]],
+                "color": "#000", "width": 2, "id": "d1", "page": 1,
+            }})
+            await ow.send_json_to({"action": "op", "op": {
+                "type": "page_setup", "page": 1, "color": "#fefefe", "id": "ps",
+            }})
+            await ow.send_json_to({"action": "op", "op": {"type": "clear", "id": "cl", "page": 1}})
+            await asyncio.sleep(0.4)
+            await ow.disconnect()
+
+        async_to_sync(scenario)()
+        remaining = [(e.operation.get("type"), e.page) for e in WhiteboardEvent.objects.order_by("id")]
+        # the draw is compacted; the setup marker + the clear itself remain
+        assert ("draw", 1) not in remaining, remaining
+        assert ("page_setup", 1) in remaining, remaining

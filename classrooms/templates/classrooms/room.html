@@ -117,6 +117,7 @@
                         <button type="button" class="wb-tool" data-tool="rectangle" title="مستطیل" aria-label="مستطیل">▭</button>
                         <button type="button" class="wb-tool" data-tool="circle" title="دایره" aria-label="دایره">◯</button>
                         <button type="button" class="wb-tool" data-tool="text" title="متن" aria-label="متن">🔤</button>
+                        <button type="button" class="wb-tool" data-tool="laser" title="نشانگر لیزری" aria-label="نشانگر لیزری">🔴</button>
                         <span class="wb-sep"></span>
                         <button type="button" class="wb-action" data-action="undo" title="بازگشت" aria-label="بازگشت">↩️</button>
                         <button type="button" class="wb-action" data-action="redo" title="جلو" aria-label="جلو">↪️</button>
@@ -131,6 +132,9 @@
                         <span class="wb-sep"></span>
                         <button type="button" id="wb-save" class="wb-action" title="ذخیرهٔ این صفحه (PNG)" aria-label="ذخیرهٔ این صفحه">💾</button>
                         <button type="button" class="wb-action" data-action="fullscreen-stage" title="تمام‌صفحه" aria-label="تمام‌صفحه">⛶</button>
+                        <span class="wb-sep"></span>
+                        <label class="wb-color" title="رنگ زمینهٔ صفحه"><input type="color" id="wb-bg" value="#ffffff" aria-label="رنگ زمینهٔ صفحه"></label>
+                        <button type="button" class="wb-action" id="wb-grid" title="پس‌زمینهٔ شطرنجی" aria-label="پس‌زمینهٔ شطرنجی" aria-pressed="false">▦</button>
                         <span class="wb-sep"></span>
                         <label class="wb-color"><input type="color" id="wb-color" value="#2563eb" aria-label="رنگ قلم"></label>
                         <label class="wb-width"><input type="range" id="wb-width" min="1" max="24" value="3" aria-label="ضخامت قلم"></label>

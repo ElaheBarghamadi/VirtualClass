@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
@@ -38,7 +39,10 @@ logger = logging.getLogger(__name__)
 
 MAX_OP_BYTES = 64 * 1024
 HISTORY_LIMIT = 2000
-VALID_OP_TYPES = {"draw", "text", "remove", "clear", "page_add"}
+VALID_OP_TYPES = {"draw", "text", "remove", "clear", "page_add", "page_setup", "page_go", "laser"}
+# Laser pointers are ephemeral: relayed to the group, never persisted.
+EPHEMERAL_OP_TYPES = {"laser"}
+VALID_GRIDS = {"none", "grid", "dots"}
 VALID_TOOLS = {"pen", "highlighter", "eraser", "line", "arrow", "rectangle", "circle"}
 
 
@@ -88,6 +92,21 @@ class WhiteboardConsumer(AsyncJsonWebsocketConsumer):
             await self.send_json({"type": "error", "message": "شما اجازهٔ استفاده از تخته را ندارید."})
             return
 
+        if op.get("type") in EPHEMERAL_OP_TYPES:
+            # Fire-and-forget relay: no DB write, no seq movement.
+            await self.channel_layer.group_send(
+                self.group_name,
+                {
+                    "type": "whiteboard.operation",
+                    "op": {**op, "page": self._normalise_page(op)},
+                    "seq": getattr(self, "last_seq", 0),
+                    "ephemeral": True,
+                    "actor_identity": self.member.identity,
+                    "actor_name": self.member.participant_name,
+                },
+            )
+            return
+
         op, seq = await self._persist(op)
         self.last_seq = seq
         await self.channel_layer.group_send(
@@ -104,13 +123,16 @@ class WhiteboardConsumer(AsyncJsonWebsocketConsumer):
     # -- group handler -------------------------------------------------------
     async def whiteboard_operation(self, event: dict) -> None:
         # Guard against the snapshot/operation race on (re)connect.
-        if event.get("seq", 0) <= getattr(self, "last_seq", 0):
-            return
-        self.last_seq = event["seq"]
+        # Ephemeral ops (laser) carry no seq and skip the guard.
+        if not event.get("ephemeral"):
+            if event.get("seq", 0) <= getattr(self, "last_seq", 0):
+                return
+            self.last_seq = event["seq"]
         await self.send_json({
             "type": "whiteboard_operation",
             "op": event["op"],
             "seq": event["seq"],
+            "ephemeral": bool(event.get("ephemeral")),
             "actor_identity": event.get("actor_identity", ""),
             "actor_name": event.get("actor_name", ""),
         })
@@ -145,6 +167,20 @@ class WhiteboardConsumer(AsyncJsonWebsocketConsumer):
         if op["type"] == "page_add":
             # page_add must carry the new page number
             if not isinstance(op.get("page"), int) or op["page"] < 2:
+                return False
+        if op["type"] == "page_setup":
+            color, grid = op.get("color"), op.get("grid")
+            if color is None and grid is None:
+                return False
+            if color is not None and not re.fullmatch(r"#[0-9a-fA-F]{6}", str(color)):
+                return False
+            if grid is not None and grid not in VALID_GRIDS:
+                return False
+        if op["type"] == "page_go":
+            if not isinstance(op.get("page"), int) or op["page"] < 1:
+                return False
+        if op["type"] == "laser":
+            if not isinstance(op.get("x"), (int, float)) or not isinstance(op.get("y"), (int, float)):
                 return False
         return True
 
@@ -193,7 +229,7 @@ class WhiteboardConsumer(AsyncJsonWebsocketConsumer):
             # Compaction: a clear invalidates everything before it on
             # THIS page only — other pages keep their content, and the
             # page_add marker stays so the page itself survives.
-            board.events.filter(page=page).exclude(operation__type="page_add").delete()
+            board.events.filter(page=page).exclude(operation__type__in=["page_add", "page_setup"]).delete()
         member = ClassroomMember.objects.filter(id=self.member.id).first()
         event = WhiteboardEvent.objects.create(
             whiteboard=board,

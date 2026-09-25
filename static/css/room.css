@@ -209,8 +209,24 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
 .wb-pages button:disabled { opacity: .38; cursor: default; }
 .wb-pages button:not(:disabled):hover { background: var(--surface-2); }
 #wb-page-label { font-size: .8rem; white-space: nowrap; padding: 0 .25rem; color: var(--room-text); }
-.wb-canvas-wrap { flex: 1; min-height: 0; }
+.wb-canvas-wrap { flex: 1; min-height: 0; position: relative; }
 .wb-canvas-wrap canvas { border-radius: var(--radius); cursor: crosshair; touch-action: none; background: var(--surface); }
+.wb-action.active { background: var(--accent); color: var(--accent-contrast); }
+
+/* laser pointer dot (remote + local) */
+.laser-dot {
+    position: absolute; width: 14px; height: 14px; margin: -7px 0 0 -7px;
+    border-radius: 50%; pointer-events: none; z-index: 5;
+    background: radial-gradient(circle, #ff2d2d 0%, #ff2d2d 45%, rgba(255, 45, 45, .35) 70%, transparent 72%);
+    box-shadow: 0 0 10px 2px rgba(255, 45, 45, .55);
+    opacity: 0;
+}
+.laser-dot.pulse { animation: laser-fade .9s ease-out forwards; }
+@keyframes laser-fade {
+    0% { opacity: 1; transform: scale(1); }
+    70% { opacity: .9; transform: scale(1.05); }
+    100% { opacity: 0; transform: scale(.7); }
+}
 
 /* ---------- side panel ---------- */
 .room-side {
