@@ -14,8 +14,9 @@
     <script src="{% static 'js/theme.js' %}"></script>
     {% block extra_css %}{% endblock %}
 </head>
-<body>
+<body{% if full_page %} class="full-page"{% endif %}>
 <a class="skip-link" href="#main-content">پرش به محتوای اصلی</a>
+{% if not full_page %}
 <header class="site-header">
     <div class="container header-inner">
         <a class="brand" href="{% url 'home' %}">
@@ -38,8 +39,9 @@
         </nav>
     </div>
 </header>
+{% endif %}
 
-<main class="container" id="main-content">
+<main {% if not full_page %}class="container" {% endif %}id="main-content">
     {% if messages %}
         <div class="messages" role="status">
             {% for message in messages %}
@@ -50,9 +52,11 @@
     {% block content %}{% endblock %}
 </main>
 
+{% if not full_page %}
 <footer class="site-footer">
     <div class="container">{{ ui.app_name }} — بستر آموزش مجازی</div>
 </footer>
+{% endif %}
 <script src="{% static 'js/app.js' %}" defer></script>
 {% block extra_js %}{% endblock %}
 </body>

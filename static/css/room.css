@@ -11,15 +11,26 @@
     --room-muted: var(--muted);
     display: flex;
     flex-direction: column;
-    height: calc(100vh - 130px);
-    min-height: 560px;
+    /* full-viewport meeting layout (Skyroom-style): no chrome, no margins */
+    height: 100vh;
+    height: 100dvh;
+    width: 100vw;
+    min-height: 0;
     background: var(--room-bg);
     color: var(--room-text);
-    border-radius: var(--radius-lg);
     overflow: hidden;
-    margin: 1rem 0;
-    border: 1px solid var(--room-border);
-    box-shadow: var(--shadow);
+    margin: 0;
+    border: none;
+    border-radius: 0;
+    position: relative; /* containing block for the mobile drawer */
+}
+
+/* the room page drops the site chrome entirely */
+body.full-page { overflow: hidden; }
+body.full-page > main { width: 100%; padding: 0; margin: 0; display: block; }
+body.full-page .messages {
+    position: fixed; top: .75rem; inset-inline: 0; z-index: 60;
+    width: min(520px, calc(100% - 2rem)); margin-inline: auto;
 }
 
 /* ---------- header ---------- */
@@ -399,7 +410,6 @@
 
 /* ---------- responsive ---------- */
 @media (max-width: 900px) {
-    .room { height: calc(100vh - 110px); border-radius: var(--radius); }
     .room-body { grid-template-columns: 1fr; grid-template-rows: 1fr; }
     .room-side {
         position: absolute; inset-block: 0; inset-inline-end: 0; width: min(330px, 86%);

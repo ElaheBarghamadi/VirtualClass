@@ -322,6 +322,8 @@ def _room_context(request, classroom: Classroom, member) -> dict:
         "files_json": files_json,
         "media": media_config_payload(),
         "waiting_room_count": classroom.members.filter(is_active=True, in_waiting_room=True).count(),
+        # the room takes over the whole viewport — no header/footer/margins
+        "full_page": True,
     }
 
 
