@@ -1,47 +1,133 @@
 {% extends "base.html" %}
 {% load static %}
 {% block title %}ورود به {{ classroom.title }}{% endblock %}
+{% block extra_css %}
+<style>
+  :root {
+    {% if classroom.accent_color %}
+    --accent: {{ classroom.accent_color }};
+    --accent-hover: {{ classroom.accent_color }};
+    --accent-contrast: #fff;
+    --accent-soft: color-mix(in srgb, {{ classroom.accent_color }} 14%, transparent);
+    {% endif %}
+  }
+</style>
+{% endblock %}
 {% block content %}
 <div class="lobby-wrapper">
     <div class="card lobby-card wide">
-        <h1 class="lobby-title">{{ classroom.title }}</h1>
+        <h1 class="lobby-title">
+            {% if classroom.logo %}<img class="lobby-logo" src="{{ classroom.logo.url }}" alt="">{% endif %}
+            {{ classroom.title }}
+        </h1>
         {% if classroom.description %}<p class="muted">{{ classroom.description }}</p>{% endif %}
+        {% if classroom.welcome_message %}
+            <p class="lobby-welcome">{{ classroom.welcome_message }}</p>
+        {% endif %}
+
         <dl class="lobby-meta">
             <div><dt>معلم</dt><dd>{{ classroom.owner.name }}</dd></div>
             <div><dt>شرکت‌کنندگان</dt><dd>{{ classroom.active_member_count }} نفر</dd></div>
             {% if classroom.is_password_protected %}<div><dt>دسترسی</dt><dd>🔒 محافظت‌شده با رمز</dd></div>{% endif %}
-            {% if classroom.is_locked %}<div><dt>وضعیت</dt><dd>🔒 قفل — ورود اعضای جدید مسدود است</dd></div>{% endif %}
             {% if classroom.enable_waiting_room %}<div><dt>اتاق انتظار</dt><dd>فعال — ورود با تأیید میزبان</dd></div>{% endif %}
         </dl>
 
-        <div class="lobby-preview">
-            <video id="lobby-video" autoplay playsinline muted aria-label="پیش‌نمایش دوربین"></video>
-            <div class="lobby-devices">
-                <label>دوربین
-                    <select id="device-camera" aria-label="انتخاب دوربین"><option>پیش‌فرض</option></select>
-                </label>
-                <label>میکروفون
-                    <select id="device-mic" aria-label="انتخاب میکروفون"><option>پیش‌فرض</option></select>
-                </label>
-                <div class="mic-meter" aria-hidden="true"><div id="mic-level"></div></div>
-                <button type="button" class="btn btn-sm btn-ghost" id="btn-preview-toggle">📹 روشن کردن پیش‌نمایش</button>
+        {% if classroom.is_locked %}
+            <div class="lobby-locked" role="alert">
+                🔒 این کلاس توسط میزبان قفل شده است. امکان ورود شرکت‌کنندهٔ جدید وجود ندارد؛
+                اگر فکر می‌کنید اشتباهی رخ داده، با میزبان تماس بگیرید.
             </div>
-        </div>
+        {% endif %}
 
-        <form method="post" novalidate>
+        <div id="browser-warning" class="alert alert-warning" hidden></div>
+
+        <!-- گام ۱: مشخصات ورود -->
+        <form method="post" novalidate id="join-form" data-step-target="devices">
             {% csrf_token %}
-            {% if join_form %}
-                <div class="field">
-                    <label for="{{ join_form.password.id_for_label }}">رمز کلاس</label>
-                    {{ join_form.password }}
-                    {% if join_form.password.errors %}<p class="field-error">{{ join_form.password.errors.0 }}</p>{% endif %}
+            <div id="step-join">
+                {% if not authenticated %}
+                    <div class="field">
+                        <label for="id_display_name">نام نمایشی</label>
+                        {{ join_form.display_name }}
+                        {% if join_form.display_name.help_text %}
+                            <p class="field-help">{{ join_form.display_name.help_text }}</p>
+                        {% endif %}
+                        {% if join_form.display_name.errors %}<p class="field-error" role="alert">{{ join_form.display_name.errors.0 }}</p>{% endif %}
+                    </div>
+                {% else %}
+                    <p class="muted">با حساب <strong>{{ default_name }}</strong> وارد می‌شوید.</p>
+                {% endif %}
+
+                {% if join_form and join_form.password %}
+                    <div class="field">
+                        <label for="{{ join_form.password.id_for_label }}">رمز کلاس</label>
+                        {{ join_form.password }}
+                        {% if join_form.password.errors %}<p class="field-error" role="alert">{{ join_form.password.errors.0 }}</p>{% endif %}
+                    </div>
+                {% endif %}
+
+                <button type="button" class="btn btn-accent btn-block btn-lg" id="btn-to-devices"
+                        {% if classroom.is_locked %}disabled{% endif %}>
+                    بررسی دستگاه‌ها و ورود ←
+                </button>
+                <noscript>
+                    <button type="submit" class="btn btn-accent btn-block btn-lg"
+                            {% if classroom.is_locked %}disabled{% endif %}>ورود به کلاس</button>
+                </noscript>
+                <p class="lobby-guest-note">
+                    {% if authenticated %}
+                        عضو کلاس‌های خودتان هستید؟ <a href="{% url 'dashboard' %}">داشبورد</a>
+                    {% else %}
+                        حساب کاربری دارید؟ <a href="{% url 'accounts:login' %}?next={{ request.path }}">ورود با حساب</a>
+                        — یا همین‌طور به‌عنوان مهمان بپیوندید.
+                    {% endif %}
+                </p>
+            </div>
+
+            <!-- گام ۲: بررسی دستگاه‌ها -->
+            <div id="step-devices" hidden>
+                <div class="lobby-preview">
+                    <div class="preview-shell">
+                        <video id="lobby-video" autoplay playsinline muted aria-label="پیش‌نمایش دوربین"></video>
+                        <div id="cam-state" class="cam-state" role="status">
+                            <span id="cam-state-icon" aria-hidden="true">📷</span>
+                            <span id="cam-state-text">دوربین را بررسی کنید</span>
+                        </div>
+                    </div>
+                    <div class="lobby-devices">
+                        <label>دوربین
+                            <select id="device-camera" aria-label="انتخاب دوربین"></select>
+                        </label>
+                        <label>میکروفون
+                            <select id="device-mic" aria-label="انتخاب میکروفون"></select>
+                        </label>
+                        <label>بلندگو
+                            <select id="device-speaker" aria-label="انتخاب بلندگو"></select>
+                        </label>
+                        <div class="device-tests">
+                            <button type="button" class="btn btn-sm btn-ghost" id="btn-mic-test">🎤 تست میکروفون</button>
+                            <button type="button" class="btn btn-sm btn-ghost" id="btn-speaker-test">🔊 تست بلندگو</button>
+                        </div>
+                        <div class="mic-meter" aria-label="سطح صدا"><div id="mic-level"></div></div>
+                        <p id="mic-feedback" class="field-help" role="status"></p>
+                        <p id="speaker-feedback" class="field-help" role="status"></p>
+                    </div>
                 </div>
-            {% endif %}
-            <button type="submit" class="btn btn-primary btn-block btn-lg" {% if classroom.is_locked %}disabled{% endif %}>
-                ورود به کلاس
-            </button>
+                <div id="device-error" class="alert alert-error" role="alert" hidden></div>
+
+                <div class="device-actions">
+                    <button type="button" class="btn btn-ghost" id="btn-back-join">→ مرحلهٔ قبل</button>
+                    <button type="submit" class="btn btn-accent btn-lg" id="btn-join"
+                            {% if classroom.is_locked %}disabled{% endif %}>پیوستن به کلاس</button>
+                </div>
+            </div>
         </form>
+
+        {% if authenticated %}
         <a class="btn btn-ghost btn-block" href="{% url 'dashboard' %}">بازگشت به داشبورد</a>
+        {% else %}
+        <a class="btn btn-ghost btn-block" href="{% url 'home' %}">بازگشت به صفحهٔ اصلی</a>
+        {% endif %}
     </div>
 </div>
 {% endblock %}

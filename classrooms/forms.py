@@ -1,8 +1,16 @@
 """Forms for classroom creation, joining, scheduling and settings."""
+import re
+
 from django import forms
+from django.core.exceptions import ValidationError
 
 from .models import Classroom, ClassroomSession
-from .services import SETTING_FIELDS
+from .services import (
+    GUEST_NAME_MAX,
+    GUEST_NAME_MIN,
+    SETTING_FIELDS,
+    validate_display_name,
+)
 
 
 class ClassroomForm(forms.ModelForm):
@@ -46,6 +54,76 @@ class ClassroomJoinForm(forms.Form):
         widget=forms.PasswordInput(attrs={"autocomplete": "current-password", "autofocus": True}),
         label="رمز کلاس",
     )
+
+
+class GuestJoinForm(forms.Form):
+    """Lobby form for guests — display name (+ password when protected)."""
+
+    display_name = forms.CharField(
+        max_length=GUEST_NAME_MAX,
+        label="نام نمایشی",
+        widget=forms.TextInput(attrs={"autofocus": True, "autocomplete": "nickname", "maxlength": GUEST_NAME_MAX}),
+        help_text=f"بین {GUEST_NAME_MIN} تا {GUEST_NAME_MAX} نویسه — همین نام در کلاس نمایش داده می‌شود.",
+    )
+    password = forms.CharField(
+        required=False,
+        widget=forms.PasswordInput(attrs={"autocomplete": "current-password"}),
+        label="رمز کلاس",
+    )
+
+    def __init__(self, *args, requires_password: bool = False, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.requires_password = requires_password
+        if not requires_password:
+            del self.fields["password"]
+
+    def clean_display_name(self) -> str:
+        try:
+            return validate_display_name(self.cleaned_data["display_name"])
+        except ValidationError as exc:
+            raise forms.ValidationError(exc.message) from exc
+
+    def clean_password(self) -> str:
+        value = self.cleaned_data.get("password", "")
+        if self.requires_password and not value:
+            raise forms.ValidationError("ورود به این کلاس نیازمند رمز است.")
+        return value
+
+
+class ClassroomCustomizationForm(forms.ModelForm):
+    """Owner-only appearance & access customization (phase 3)."""
+
+    class Meta:
+        model = Classroom
+        fields = (
+            "title",
+            "description",
+            "logo",
+            "accent_color",
+            "welcome_message",
+            "allow_guests",
+            "show_chat_default",
+        )
+        labels = {
+            "title": "عنوان کلاس",
+            "description": "توضیحات",
+            "logo": "لوگو",
+            "accent_color": "رنگ اصلی کلاس",
+            "welcome_message": "پیام خوش‌آمدگویی",
+            "allow_guests": "اجازهٔ ورود مهمان با لینک (بدون حساب کاربری)",
+            "show_chat_default": "نمایش گفتگو به‌صورت پیش‌فرض",
+        }
+        widgets = {
+            "description": forms.Textarea(attrs={"rows": 3}),
+            "welcome_message": forms.Textarea(attrs={"rows": 2, "maxlength": 200}),
+            "accent_color": forms.TextInput(attrs={"type": "color"}),
+        }
+
+    def clean_accent_color(self) -> str:
+        value = (self.cleaned_data.get("accent_color") or "").strip().lower()
+        if not re.fullmatch(r"#[0-9a-f]{6}", value):
+            raise forms.ValidationError("رنگ باید هگز شش‌رقمی باشد (مانند #4f46e5).")
+        return value
 
 
 class SessionScheduleForm(forms.ModelForm):

@@ -23,12 +23,12 @@ class WhiteboardImpl {
         this.myRedo = [];
         this.remote = false;       // suppress broadcast while applying remote ops
         this.canDraw = false;
-        this.userId = null;
+        this.identity = null;
         this.retryDelay = 1000;
     }
 
-    init({ roomCode, userId, canDraw }) {
-        this.userId = userId;
+    init({ roomCode, identity, canDraw }) {
+        this.identity = identity;
         this.canDraw = canDraw;
         const el = document.getElementById('whiteboard-canvas');
         if (!el) return;
@@ -59,7 +59,7 @@ class WhiteboardImpl {
                 data.events.forEach((e) => this._applyOp(e.op));
                 this.remote = false;
             } else if (data.type === 'whiteboard_operation') {
-                if (data.actor_id === this.userId) return; // already applied locally
+                if (data.actor_identity === this.identity) return; // already applied locally
                 this.remote = true;
                 this._applyOp(data.op);
                 this.remote = false;
@@ -209,7 +209,7 @@ class WhiteboardImpl {
 
     // ------------------------------------------------------------ serialization
     _id() {
-        return `${this.userId}-${Date.now()}-${++this.idCounter}`;
+        return `${this.identity}-${Date.now()}-${++this.idCounter}`;
     }
 
     _serialize(obj) {

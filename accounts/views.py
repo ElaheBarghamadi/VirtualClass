@@ -19,13 +19,14 @@ def register_view(request):
         user = form.save()
         login(request, user)
         messages.success(request, "حساب کاربری شما با موفقیت ساخته شد. خوش آمدید!")
-        return redirect("dashboard")
+        return redirect("accounts:post_login")
     return render(request, "accounts/register.html", {"form": form})
 
 
-@require_http_methods(["GET"])
+@login_required
+@require_http_methods(["GET", "POST"])
 def profile_view(request):
-    """Display and update basic profile information."""
+    """Display and update profile information + UI preferences."""
     if request.method == "POST":
         form = ProfileForm(request.POST, instance=request.user)
         if form.is_valid():
@@ -35,3 +36,10 @@ def profile_view(request):
     else:
         form = ProfileForm(instance=request.user)
     return render(request, "accounts/profile.html", {"form": form})
+
+
+@login_required
+def post_login_redirect(request):
+    """Honour the per-user landing-page preference after login."""
+    target = request.user.landing_page
+    return redirect("home" if target == "home" else "dashboard")

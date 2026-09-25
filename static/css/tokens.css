@@ -1,0 +1,186 @@
+/* ==========================================================================
+   Design tokens — the single source of truth for colour, spacing, type,
+   elevation and motion.  Every component in main.css / room.css consumes
+   these variables; raw hex values must not appear outside this file.
+   Themes are switched with [data-theme] on <html>; the classroom accent is
+   injected per-page as --accent / --accent-contrast.
+   ========================================================================== */
+
+:root {
+  /* ---- brand ---------------------------------------------------------- */
+  --primary: #4f46e5;
+  --primary-hover: #4338ca;
+  --primary-soft: rgba(79, 70, 229, 0.12);
+  --secondary: #0f766e;
+  --secondary-hover: #115e59;
+
+  /* ---- semantic ------------------------------------------------------- */
+  --success: #15803d;
+  --success-soft: rgba(21, 128, 61, 0.14);
+  --warning: #b45309;
+  --warning-soft: rgba(180, 83, 9, 0.14);
+  --danger: #b91c1c;
+  --danger-soft: rgba(185, 28, 28, 0.12);
+  --info: #0369a1;
+  --info-soft: rgba(3, 105, 161, 0.12);
+
+  /* ---- surfaces (light theme) ------------------------------------------ */
+  --background: #f5f6fa;
+  --surface: #ffffff;
+  --surface-2: #f1f2f7;
+  --surface-3: #e6e8f0;
+  --border: #d7dae5;
+  --border-strong: #b9bdcd;
+  --text: #171a26;
+  --text-secondary: #454b5e;
+  --muted: #6b7186;
+  --on-primary: #ffffff;
+
+  /* classroom accent (overridden per classroom) */
+  --accent: #4f46e5;
+  --accent-hover: #4338ca;
+  --accent-contrast: #ffffff;
+  --accent-soft: rgba(79, 70, 229, 0.12);
+
+  /* ---- geometry -------------------------------------------------------- */
+  --radius-sm: 8px;
+  --radius: 12px;
+  --radius-lg: 18px;
+  --radius-pill: 999px;
+  --gap: 16px;
+  --gap-sm: 8px;
+  --gap-lg: 24px;
+
+  /* comfortable density (see [data-density="compact"]) */
+  --row-padding: 12px 14px;
+  --control-height: 42px;
+  --control-height-sm: 34px;
+  --font-scale: 1;
+
+  /* ---- elevation ------------------------------------------------------- */
+  --shadow-sm: 0 1px 2px rgba(16, 20, 34, 0.08);
+  --shadow: 0 4px 16px rgba(16, 20, 34, 0.10);
+  --shadow-lg: 0 18px 48px rgba(16, 20, 34, 0.18);
+
+  /* ---- motion ---------------------------------------------------------- */
+  --ease: cubic-bezier(0.22, 0.68, 0.36, 1);
+  --speed: 0.18s;
+  --speed-slow: 0.3s;
+
+  /* ---- typography ------------------------------------------------------ */
+  --font: "Vazirmatn", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --fs-xs: calc(0.75rem * var(--font-scale));
+  --fs-sm: calc(0.875rem * var(--font-scale));
+  --fs-md: calc(1rem * var(--font-scale));
+  --fs-lg: calc(1.25rem * var(--font-scale));
+  --fs-xl: calc(1.6rem * var(--font-scale));
+
+  /* ---- focus ----------------------------------------------------------- */
+  --focus-ring: 0 0 0 3px var(--accent-soft), 0 0 0 1px var(--accent);
+}
+
+/* --------------------------------------------------------------------------
+   Dark theme — every surface variable re-assigned; contrast ratios for
+   --text on --surface and --muted on --background stay above 4.5:1.
+   -------------------------------------------------------------------------- */
+[data-theme="dark"] {
+  --primary: #818cf8;
+  --primary-hover: #a5b4fc;
+  --primary-soft: rgba(129, 140, 248, 0.18);
+  --secondary: #2dd4bf;
+  --secondary-hover: #5eead4;
+
+  --success: #4ade80;
+  --success-soft: rgba(74, 222, 128, 0.16);
+  --warning: #fbbf24;
+  --warning-soft: rgba(251, 191, 36, 0.16);
+  --danger: #f87171;
+  --danger-soft: rgba(248, 113, 113, 0.16);
+  --info: #38bdf8;
+  --info-soft: rgba(56, 189, 248, 0.16);
+
+  --background: #0e1117;
+  --surface: #171b24;
+  --surface-2: #1f2430;
+  --surface-3: #2a3040;
+  --border: #2c3242;
+  --border-strong: #3d4459;
+  --text: #e8eaf2;
+  --text-secondary: #b9bfd0;
+  --muted: #8f96ab;
+  --on-primary: #12141c;
+
+  --accent: #818cf8;
+  --accent-hover: #a5b4fc;
+  --accent-contrast: #12141c;
+  --accent-soft: rgba(129, 140, 248, 0.18);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 18px 48px rgba(0, 0, 0, 0.6);
+}
+
+/* compact density */
+[data-density="compact"] {
+  --row-padding: 6px 10px;
+  --control-height: 34px;
+  --control-height-sm: 28px;
+  --font-scale: 0.92;
+  --gap: 12px;
+}
+
+/* user preference + OS preference: no non-essential animation */
+[data-motion="reduced"] *,
+[data-motion="reduced"] *::before,
+[data-motion="reduced"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-motion="full"]) *,
+  :root:not([data-motion="full"]) *::before,
+  :root:not([data-motion="full"]) *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --primary: #818cf8;
+    --primary-hover: #a5b4fc;
+    --primary-soft: rgba(129, 140, 248, 0.18);
+    --secondary: #2dd4bf;
+    --secondary-hover: #5eead4;
+    --success: #4ade80;
+    --success-soft: rgba(74, 222, 128, 0.16);
+    --warning: #fbbf24;
+    --warning-soft: rgba(251, 191, 36, 0.16);
+    --danger: #f87171;
+    --danger-soft: rgba(248, 113, 113, 0.16);
+    --info: #38bdf8;
+    --info-soft: rgba(56, 189, 248, 0.16);
+    --background: #0e1117;
+    --surface: #171b24;
+    --surface-2: #1f2430;
+    --surface-3: #2a3040;
+    --border: #2c3242;
+    --border-strong: #3d4459;
+    --text: #e8eaf2;
+    --text-secondary: #b9bfd0;
+    --muted: #8f96ab;
+    --on-primary: #12141c;
+    --accent: #818cf8;
+    --accent-hover: #a5b4fc;
+    --accent-contrast: #12141c;
+    --accent-soft: rgba(129, 140, 248, 0.18);
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+    --shadow-lg: 0 18px 48px rgba(0, 0, 0, 0.6);
+  }
+}

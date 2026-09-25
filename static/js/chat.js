@@ -10,7 +10,7 @@ import { toast } from './toast.js';
 class ChatClientImpl {
     constructor() {
         this.ws = null;
-        this.userId = null;
+        this.identity = null;
         this.privileged = false;
         this.messagesEl = document.getElementById('chat-messages');
         this.statusEl = document.getElementById('chat-status');
@@ -23,9 +23,9 @@ class ChatClientImpl {
         this.onStatusChange = () => {};
     }
 
-    connect(roomCode, userId, privileged = false) {
+    connect(roomCode, identity, privileged = false) {
         this.roomCode = roomCode;
-        this.userId = userId;
+        this.identity = identity;
         this.privileged = privileged;
         const proto = location.protocol === 'https:' ? 'wss' : 'ws';
         this.ws = new WebSocket(`${proto}://${location.host}/ws/classroom/${roomCode}/chat/`);
@@ -38,7 +38,7 @@ class ChatClientImpl {
         this.ws.onclose = () => {
             this.statusEl?.classList.remove('connected');
             this.onStatusChange('reconnecting');
-            setTimeout(() => this.connect(roomCode, userId, privileged), this.retryDelay = Math.min(this.retryDelay * 2, 15000));
+            setTimeout(() => this.connect(roomCode, identity, privileged), this.retryDelay = Math.min(this.retryDelay * 2, 15000));
         };
         this.ws.onmessage = (evt) => this.handle(JSON.parse(evt.data));
 
@@ -81,7 +81,7 @@ class ChatClientImpl {
     }
 
     renderMessage(m, { silent = false } = {}) {
-        const own = m.sender_id === this.userId;
+        const own = m.sender_identity === this.identity;
         const div = document.createElement('div');
         div.className = 'chat-msg' + (own ? ' own' : '');
         div.dataset.messageId = String(m.id);

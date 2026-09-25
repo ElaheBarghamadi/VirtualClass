@@ -11,11 +11,31 @@ from django.db import models
 class User(AbstractUser):
     """Application user. Extend freely — profile data belongs here."""
 
+    class Theme(models.TextChoices):
+        SYSTEM = "system", "خودکار (سیستم)"
+        LIGHT = "light", "روشن"
+        DARK = "dark", "تیره"
+
+    class Density(models.TextChoices):
+        COMFORTABLE = "comfortable", "راحت"
+        COMPACT = "compact", "فشرده"
+
     display_name = models.CharField(
         max_length=100,
         blank=True,
         verbose_name="نام نمایشی",
         help_text="اگر خالی باشد، نام کاربری نمایش داده می‌شود.",
+    )
+
+    # -- UI preferences (phase 3) ------------------------------------------------
+    theme = models.CharField(max_length=10, choices=Theme.choices, default=Theme.SYSTEM, verbose_name="پوسته")
+    density = models.CharField(max_length=12, choices=Density.choices, default=Density.COMFORTABLE, verbose_name="تراکم رابط")
+    reduce_animations = models.BooleanField(default=False, verbose_name="کاهش انیمیشن‌ها")
+    landing_page = models.CharField(
+        max_length=20,
+        choices=[("dashboard", "داشبورد"), ("home", "صفحهٔ خانه")],
+        default="dashboard",
+        verbose_name="صفحهٔ فرود",
     )
 
     class Meta:

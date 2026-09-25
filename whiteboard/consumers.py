@@ -30,7 +30,7 @@ from channels.generic.websocket import AsyncJsonWebsocketConsumer
 
 from classrooms.models import Classroom, ClassroomMember
 from classrooms.permissions import effective_permissions
-from classrooms.services import get_active_member
+from classrooms.services import resolve_scope_member
 
 from .models import Whiteboard, WhiteboardEvent
 
@@ -51,13 +51,13 @@ class WhiteboardConsumer(AsyncJsonWebsocketConsumer):
         self.classroom = None
         self.member = None
         self.user = self.scope.get("user")
-
-        if self.user is None or not self.user.is_authenticated:
-            await self.close(code=4401)
-            return
+        self.authenticated = bool(self.user is not None and getattr(self.user, "is_authenticated", False))
 
         self.classroom, self.member = await self._load_membership()
-        if self.member is None or self.member.in_waiting_room:
+        if self.member is None:
+            await self.close(code=4401 if not getattr(self.user, "is_authenticated", False) and not self.scope.get("session") else 4403)
+            return
+        if self.member.in_waiting_room:
             await self.close(code=4403)
             return
 
@@ -96,8 +96,8 @@ class WhiteboardConsumer(AsyncJsonWebsocketConsumer):
                 "type": "whiteboard.operation",
                 "op": op,
                 "seq": seq,
-                "actor_id": self.user.id,
-                "actor_name": self.user.name,
+                "actor_identity": self.member.identity,
+                "actor_name": self.member.participant_name,
             },
         )
 
@@ -111,8 +111,8 @@ class WhiteboardConsumer(AsyncJsonWebsocketConsumer):
             "type": "whiteboard_operation",
             "op": event["op"],
             "seq": event["seq"],
-            "actor_id": event["actor_id"],
-            "actor_name": event["actor_name"],
+            "actor_identity": event.get("actor_identity", ""),
+            "actor_name": event.get("actor_name", ""),
         })
 
     # -- validation -------------------------------------------------------------
@@ -138,15 +138,12 @@ class WhiteboardConsumer(AsyncJsonWebsocketConsumer):
     # -- DB helpers ---------------------------------------------------------------
     @database_sync_to_async
     def _load_membership(self):
-        classroom = Classroom.objects.filter(room_code=self.room_code, is_active=True).first()
-        if classroom is None:
-            return None, None
-        return classroom, get_active_member(classroom, self.user)
+        return resolve_scope_member(self.scope, self.room_code)
 
     @database_sync_to_async
     def _can_draw_now(self) -> bool:
         classroom = Classroom.objects.filter(room_code=self.room_code).first()
-        member = ClassroomMember.objects.filter(classroom=classroom, user=self.user).first()
+        member = ClassroomMember.objects.filter(id=self.member.id).first()
         if classroom is None:
             return False
         return effective_permissions(member, classroom)["can_use_whiteboard"]
@@ -162,7 +159,7 @@ class WhiteboardConsumer(AsyncJsonWebsocketConsumer):
             {
                 "id": e.id,
                 "op": e.operation,
-                "actor_id": e.actor_id,
+                "actor_identity": e.actor_identity,
                 "actor_name": e.actor.name if e.actor else None,
             }
             for e in events
@@ -176,7 +173,13 @@ class WhiteboardConsumer(AsyncJsonWebsocketConsumer):
         if op.get("type") == "clear":
             # Compaction: a clear invalidates everything before it.
             board.events.all().delete()
-        event = WhiteboardEvent.objects.create(whiteboard=board, actor=self.user, operation=op)
+        member = ClassroomMember.objects.filter(id=self.member.id).first()
+        event = WhiteboardEvent.objects.create(
+            whiteboard=board,
+            actor=member.user if member and member.user_id else None,
+            actor_identity=(member.identity if member else "")[:48],
+            operation=op,
+        )
         board.save(update_fields=["updated_at"])
         op = dict(op)
         op["event_id"] = event.id

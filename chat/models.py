@@ -16,12 +16,27 @@ class ChatMessage(models.Model):
         related_name="chat_messages",
         verbose_name="کلاس",
     )
+    # Either a registered sender (``sender``) or a guest/registered member
+    # (``sender_member``); the display name is denormalised so history
+    # stays readable regardless of account state.
     sender = models.ForeignKey(
         settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
         on_delete=models.CASCADE,
         related_name="chat_messages",
         verbose_name="فرستنده",
     )
+    sender_member = models.ForeignKey(
+        "classrooms.ClassroomMember",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="chat_messages",
+        verbose_name="عضو فرستنده",
+    )
+    sender_name = models.CharField(max_length=80, default="", verbose_name="نام فرستنده")
+    sender_identity = models.CharField(max_length=48, default="", verbose_name="شناسهٔ فرستنده")
     message = models.TextField(verbose_name="متن پیام")
     created_at = models.DateTimeField(auto_now_add=True, db_index=True, verbose_name="زمان ارسال")
     # Moderation: privileged users can soft-delete a message; the row is
@@ -36,16 +51,16 @@ class ChatMessage(models.Model):
             models.Index(fields=("classroom", "created_at"), name="chat_class_created_idx"),
         ]
 
-    def __str__(self) -> str:
-        return f"{self.sender} @ {self.classroom.room_code}: {self.message[:40]}"
-
     def to_dict(self) -> dict:
         """JSON-safe representation sent over the WebSocket."""
         return {
             "id": self.id,
-            "sender_id": self.sender_id,
-            "sender_name": self.sender.name,
+            "sender_identity": self.sender_identity,
+            "sender_name": self.sender_name or (self.sender.name if self.sender_id else "?"),
             "message": "" if self.is_deleted else self.message,
             "is_deleted": self.is_deleted,
             "created_at": self.created_at.isoformat(),
         }
+
+    def __str__(self) -> str:
+        return f"{self.sender_name or self.sender_id} @ {self.classroom.room_code}: {self.message[:40]}"

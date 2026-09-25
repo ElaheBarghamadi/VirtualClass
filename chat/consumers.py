@@ -21,7 +21,7 @@ from channels.generic.websocket import AsyncJsonWebsocketConsumer
 
 from classrooms.models import Classroom, ClassroomMember
 from classrooms.permissions import effective_permissions, is_privileged
-from classrooms.services import get_active_member
+from classrooms.services import resolve_scope_member
 
 from .models import ChatMessage
 
@@ -40,13 +40,13 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         self.classroom = None
         self.member = None
         self.user = self.scope.get("user")
-
-        if self.user is None or not self.user.is_authenticated:
-            await self.close(code=4401)
-            return
+        self.authenticated = bool(self.user is not None and getattr(self.user, "is_authenticated", False))
 
         self.classroom, self.member = await self._load_membership()
-        if self.member is None or self.member.in_waiting_room:
+        if self.member is None:
+            await self.close(code=4401 if not getattr(self.user, "is_authenticated", False) and not self.scope.get("session") else 4403)
+            return
+        if self.member.in_waiting_room:
             await self.close(code=4403)
             return
 
@@ -112,22 +112,19 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
     # -- helpers -----------------------------------------------------------
     @database_sync_to_async
     def _load_membership(self):
-        classroom = Classroom.objects.filter(room_code=self.room_code, is_active=True).first()
-        if classroom is None:
-            return None, None
-        return classroom, get_active_member(classroom, self.user)
+        return resolve_scope_member(self.scope, self.room_code)
 
     @database_sync_to_async
     def _can_send_now(self) -> bool:
         classroom = Classroom.objects.filter(room_code=self.room_code).first()
-        member = ClassroomMember.objects.filter(classroom=classroom, user=self.user).first()
+        member = ClassroomMember.objects.filter(id=self.member.id).first()
         if classroom is None:
             return False
         return effective_permissions(member, classroom)["can_send_messages"]
 
     @database_sync_to_async
     def _is_privileged_now(self) -> bool:
-        member = ClassroomMember.objects.filter(classroom__room_code=self.room_code, user=self.user).first()
+        member = ClassroomMember.objects.filter(id=self.member.id).first()
         return is_privileged(member)
 
     @database_sync_to_async
@@ -137,8 +134,14 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
 
     @database_sync_to_async
     def _save_message(self, message: str) -> dict:
+        member = ClassroomMember.objects.filter(id=self.member.id).select_related("user").first()
         return ChatMessage.objects.create(
-            classroom=self.classroom, sender=self.user, message=message
+            classroom=self.classroom,
+            sender=member.user if member and member.user_id else None,
+            sender_member=member,
+            sender_name=(member.participant_name if member else "")[:80],
+            sender_identity=(member.identity if member else "")[:48],
+            message=message,
         ).to_dict()
 
     @database_sync_to_async

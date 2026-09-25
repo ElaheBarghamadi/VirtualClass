@@ -34,6 +34,29 @@
 
 <div class="two-col">
     <div>
+        <h2 class="section-title">شخصی‌سازی کلاس</h2>
+        <div class="card form-card">
+            <form method="post" enctype="multipart/form-data" novalidate>
+                {% csrf_token %}
+                {% for field in customization_form %}
+                    {% if field.field.widget.input_type == "checkbox" %}
+                        <label class="switch-row">{{ field }} <span>{{ field.label }}</span></label>
+                    {% else %}
+                        <div class="field">
+                            <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+                            {{ field }}
+                            {% if field.help_text %}<p class="field-help">{{ field.help_text }}</p>{% endif %}
+                            {% if field.errors %}<p class="field-error" role="alert">{{ field.errors.0 }}</p>{% endif %}
+                        </div>
+                    {% endif %}
+                {% endfor %}
+                {% if classroom.logo %}
+                    <p class="field-help">لوگوی فعلی: <img class="classroom-logo" src="{{ classroom.logo.url }}" alt="لوگوی کلاس"></p>
+                {% endif %}
+                <button type="submit" name="save_customization" class="btn btn-primary">ذخیرهٔ شخصی‌سازی</button>
+            </form>
+        </div>
+
         <h2 class="section-title">تنظیمات کلاس</h2>
         <div class="card form-card">
             <form method="post">
@@ -94,7 +117,10 @@
                 <tbody>
                     {% for m in members %}
                         <tr>
-                            <td>{{ m.user.name }}</td>
+                            <td>
+                                {{ m.participant_name }}
+                                {% if m.is_guest %}<span class="badge badge-muted">مهمان</span>{% endif %}
+                            </td>
                             <td><span class="badge badge-info">{{ m.get_role_display }}</span></td>
                             <td>{{ m.joined_at|date:"Y/m/d H:i" }}</td>
                         </tr>

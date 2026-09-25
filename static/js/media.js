@@ -24,18 +24,24 @@ class MediaManager {
         this.activeSpeaker = null;
         this.enabled = false;
         this.roomCode = '';
-        this.currentUserId = null;
+        this.currentIdentity = null;
         this.permissions = {};
         this.micOn = false;
         this.cameraOn = false;
+        this.layout = 'grid';            // grid | speaker | focus | presentation
+        this.quality = 'unknown';        // from LiveKit's real stats
         this.onStateChange = () => {};   // room.js hook → presence media_state
+        this.onQualityChange = () => {}; // room.js hook → connection pill
     }
 
-    async init({ roomCode, currentUserId, permissions, mediaUrl, mediaEnabled, onStateChange }) {
+    async init({ roomCode, currentIdentity, permissions, mediaUrl, mediaEnabled, onStateChange, onQualityChange }) {
         this.roomCode = roomCode;
-        this.currentUserId = currentUserId;
+        this.currentIdentity = currentIdentity;
         this.permissions = permissions;
         this.onStateChange = onStateChange || (() => {});
+        this.onQualityChange = onQualityChange || (() => {});
+        const saved = localStorage.getItem(`room_layout_${roomCode}`);
+        if (saved && ['grid', 'speaker', 'focus', 'presentation'].includes(saved)) this.layout = saved;
 
         if (!mediaEnabled || !mediaUrl || !LivekitClient) {
             this.emptyEl && (document.getElementById('stage-empty-text').textContent =
@@ -85,8 +91,29 @@ class MediaManager {
             .on(R.ActiveSpeakersChanged, (speakers) => this._setActiveSpeaker(speakers[0]))
             .on(R.LocalTrackPublished, () => this._syncLocalUI())
             .on(R.LocalTrackUnpublished, () => this._syncLocalUI())
+            .on(R.ConnectionQualityChanged, (quality, participant) => {
+                // Real quality computed by LiveKit from WebRTC stats
+                // (RTT, packet loss, bandwidth) — never a fake level.
+                const isLocal = participant === this.room.localParticipant;
+                if (isLocal) {
+                    this.quality = String(quality || 'unknown');
+                    this.onQualityChange(this.quality, null);
+                } else if (participant) {
+                    this.onQualityChange(String(quality || 'unknown'), participant.identity);
+                }
+            })
+            .on(R.SignalReconnecting, () => this.onQualityChange('reconnecting', null))
+            .on(R.SignalConnected, () => this.onQualityChange(this.quality, null))
             .on(R.Disconnected, () => toast('اتصال رسانه قطع شد؛ در حال تلاش مجدد…', 'warning'))
             .on(R.MediaDevicesError, (e) => toast(`خطای دستگاه رسانه: ${e.message || ''}`, 'error'));
+    }
+
+    /** Persist + apply a stage layout. */
+    setLayout(mode) {
+        if (!['grid', 'speaker', 'focus', 'presentation'].includes(mode)) return;
+        this.layout = mode;
+        try { localStorage.setItem(`room_layout_${this.roomCode}`, mode); } catch (e) { /* private mode */ }
+        this._layout();
     }
 
     _ownerOf(track) {
@@ -221,14 +248,25 @@ class MediaManager {
     }
 
     _layout() {
-        // Grid columns: pinned/speaker → focus; otherwise responsive grid.
-        const focus = this.pinnedIdentity || null;
         const count = this.tiles.size;
         this.tilesEl.dataset.count = String(count);
+        this.tilesEl.dataset.layout = this.layout;
+
+        // Which participant dominates the stage in each mode:
+        // grid → none; speaker/focus/presentation → pinned or active speaker.
+        let focus = null;
+        if (this.layout === 'grid') {
+            focus = this.pinnedIdentity || null; // explicit pin still honoured
+        } else {
+            focus = this.pinnedIdentity || this.activeSpeaker || null;
+        }
+
         this.tilesEl.classList.toggle('has-focus', Boolean(focus));
+        const hideStrips = this.layout === 'focus';
         this.tiles.forEach((tile, identity) => {
             tile.classList.toggle('focus', identity === focus);
             tile.classList.toggle('mini', Boolean(focus) && identity !== focus);
+            tile.classList.toggle('strip-hidden', hideStrips && identity !== focus);
         });
         this.emptyEl.classList.toggle('hidden', count > 0);
     }

@@ -17,6 +17,7 @@ django_asgi_app = get_asgi_application()
 
 from channels.auth import AuthMiddlewareStack  # noqa: E402
 from channels.routing import ProtocolTypeRouter, URLRouter  # noqa: E402
+from channels.sessions import SessionMiddlewareStack  # noqa: E402
 
 from chat.routing import websocket_urlpatterns as chat_ws  # noqa: E402
 from classrooms.routing import websocket_urlpatterns as classroom_ws  # noqa: E402
@@ -25,8 +26,10 @@ from whiteboard.routing import websocket_urlpatterns as whiteboard_ws  # noqa: E
 application = ProtocolTypeRouter(
     {
         "http": django_asgi_app,
-        "websocket": AuthMiddlewareStack(
-            URLRouter([*classroom_ws, *chat_ws, *whiteboard_ws])
+        # SessionMiddlewareStack gives consumers access to the Django
+        # session — how guest participants are authenticated on sockets.
+        "websocket": SessionMiddlewareStack(
+            AuthMiddlewareStack(URLRouter([*classroom_ws, *chat_ws, *whiteboard_ws]))
         ),
     }
 )

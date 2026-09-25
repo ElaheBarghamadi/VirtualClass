@@ -298,7 +298,7 @@ class SessionAttendanceTests(TestCase):
         self.owner = make_user("s_owner")
         self.student = make_user("s_student")
         self.classroom = create_classroom(self.owner, title="Sessions")
-        join_classroom(self.classroom, self.student)
+        self.stu_member = join_classroom(self.classroom, self.student)
 
     def test_schedule_start_end_flow(self):
         session = ClassroomSession.objects.create(
@@ -327,17 +327,17 @@ class SessionAttendanceTests(TestCase):
 
     def test_attendance_multiple_joins(self):
         live = start_session(self.classroom, self.owner)
-        attendance_join(self.classroom, self.student)
-        attendance_leave(self.classroom, self.student)
-        attendance_join(self.classroom, self.student)
-        attendance_leave(self.classroom, self.student)
+        attendance_join(self.classroom, self.stu_member)
+        attendance_leave(self.classroom, self.stu_member)
+        attendance_join(self.classroom, self.stu_member)
+        attendance_leave(self.classroom, self.stu_member)
 
-        records = AttendanceRecord.objects.filter(session=live, user=self.student)
+        records = AttendanceRecord.objects.filter(session=live, member=self.stu_member)
         self.assertEqual(records.count(), 2)
         self.assertTrue(all(r.left_at is not None for r in records))
 
     def test_attendance_requires_live_session(self):
-        self.assertIsNone(attendance_join(self.classroom, self.student))
+        self.assertIsNone(attendance_join(self.classroom, self.stu_member))
 
     def test_attendance_page_owner_only(self):
         live = start_session(self.classroom, self.owner)

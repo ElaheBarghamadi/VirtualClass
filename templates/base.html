@@ -1,19 +1,25 @@
 {% load static %}<!DOCTYPE html>
-<html lang="fa" dir="rtl">
+<html lang="fa" dir="rtl"
+      data-theme-pref="{{ ui.theme }}"
+      data-density="{{ ui.density }}"
+      {% if ui.reduce_animations %}data-motion="reduced"{% endif %}>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}کلاس آنلاین{% endblock %}</title>
+    <title>{% block title %}{{ ui.app_name }}{% endblock %}</title>
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
     <link href="https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css" rel="stylesheet">
+    <link rel="stylesheet" href="{% static 'css/tokens.css' %}">
     <link rel="stylesheet" href="{% static 'css/main.css' %}">
+    <script src="{% static 'js/theme.js' %}"></script>
     {% block extra_css %}{% endblock %}
 </head>
 <body>
+<a class="skip-link" href="#main-content">پرش به محتوای اصلی</a>
 <header class="site-header">
     <div class="container header-inner">
         <a class="brand" href="{% url 'home' %}">
-            <span class="brand-mark">◈</span> کلاس آنلاین
+            <span class="brand-mark" aria-hidden="true">◈</span> {{ ui.app_name }}
         </a>
         <nav class="main-nav" aria-label="ناوبری اصلی">
             {% if user.is_authenticated %}
@@ -33,7 +39,7 @@
     </div>
 </header>
 
-<main class="container">
+<main class="container" id="main-content">
     {% if messages %}
         <div class="messages" role="status">
             {% for message in messages %}
@@ -45,7 +51,7 @@
 </main>
 
 <footer class="site-footer">
-    <div class="container">کلاس آنلاین — بستر آموزش مجازی</div>
+    <div class="container">{{ ui.app_name }} — بستر آموزش مجازی</div>
 </footer>
 <script src="{% static 'js/app.js' %}" defer></script>
 {% block extra_js %}{% endblock %}

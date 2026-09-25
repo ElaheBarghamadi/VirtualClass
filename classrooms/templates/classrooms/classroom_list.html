@@ -12,7 +12,7 @@
         {% for classroom in owned_classrooms %}
             <article class="card classroom-card">
                 <div class="card-top">
-                    <h3>{{ classroom.title }}</h3>
+                    <h3>{% if classroom.logo %}<img class="classroom-logo" src="{{ classroom.logo.url }}" alt="">{% endif %}{% if classroom.accent_color %}<span class="accent-dot" style="background:{{ classroom.accent_color }}" aria-hidden="true"></span>{% endif %}{{ classroom.title }}</h3>
                     <span class="badge {% if classroom.is_active %}badge-success{% else %}badge-muted{% endif %}">
                         {% if classroom.is_active %}فعال{% else %}غیرفعال{% endif %}
                     </span>
@@ -42,7 +42,7 @@
         {% for membership in memberships %}
             <article class="card classroom-card">
                 <div class="card-top">
-                    <h3>{{ membership.classroom.title }}</h3>
+                    <h3>{% if membership.classroom.logo %}<img class="classroom-logo" src="{{ membership.classroom.logo.url }}" alt="">{% endif %}{% if membership.classroom.accent_color %}<span class="accent-dot" style="background:{{ membership.classroom.accent_color }}" aria-hidden="true"></span>{% endif %}{{ membership.classroom.title }}</h3>
                     <span class="badge badge-info">{{ membership.get_role_display }}</span>
                 </div>
                 <dl class="meta-list">

@@ -28,13 +28,18 @@ class AuthFlowTests(TestCase):
                 "password2": "S0mething!complex",
             },
         )
-        self.assertRedirects(response, reverse("dashboard"))
+        self.assertRedirects(response, reverse("accounts:post_login"), target_status_code=302,
+                             fetch_redirect_response=False)
         self.assertTrue(User.objects.filter(username="elahe").exists())
 
         self.client.logout()
         response = self.client.post(
             reverse("accounts:login"), {"username": "elahe", "password": "S0mething!complex"}
         )
+        # login lands on the landing-preference redirect, then the dashboard
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, reverse("accounts:post_login"))
+        response = self.client.get(reverse("accounts:post_login"))
         self.assertRedirects(response, reverse("dashboard"))
 
         response = self.client.post(reverse("accounts:logout"))

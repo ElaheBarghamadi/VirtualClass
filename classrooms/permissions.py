@@ -32,6 +32,7 @@ class Role(TextChoices):
     MODERATOR = "MODERATOR", "مدیر جلسه"
     PRESENTER = "PRESENTER", "ارائه‌دهنده"
     STUDENT = "STUDENT", "دانش‌آموز"
+    GUEST = "GUEST", "مهمان"
 
 
 PRIVILEGED_ROLES = {Role.OWNER, Role.MODERATOR}
@@ -85,6 +86,17 @@ ROLE_DEFAULTS: dict[str, PermissionDefaults] = {
         can_present=True,
     ),
     Role.STUDENT: PermissionDefaults(
+        can_use_microphone=True,
+        can_use_camera=True,
+        can_share_screen=False,
+        can_use_whiteboard=False,
+        can_send_messages=True,
+        can_upload_files=False,
+        can_raise_hand=True,
+        can_present=False,
+    ),
+    # Guests: conservative defaults; the owner can grant more per member.
+    Role.GUEST: PermissionDefaults(
         can_use_microphone=True,
         can_use_camera=True,
         can_share_screen=False,
@@ -150,14 +162,18 @@ def effective_permissions(member: "ClassroomMember" | None, classroom: "Classroo
 
     perms = member.permissions_dict()
 
-    if member.role == Role.STUDENT:
+    if member.role in {Role.STUDENT, Role.GUEST}:
         perms["can_send_messages"] &= classroom.allow_student_chat
         perms["can_share_screen"] &= classroom.allow_student_screen_share
         perms["can_use_whiteboard"] &= classroom.allow_student_whiteboard
         perms["can_use_microphone"] &= classroom.allow_student_mic
         perms["can_use_camera"] &= classroom.allow_student_camera
 
-    if member.role != Role.OWNER:
+    # File upload: gated by the room setting for everyone except the owner,
+    # and never available to guests.
+    if member.is_guest:
+        perms["can_upload_files"] = False
+    elif member.role != Role.OWNER:
         perms["can_upload_files"] &= classroom.allow_file_upload
 
     if classroom.chat_disabled and member.role not in PRIVILEGED_ROLES:

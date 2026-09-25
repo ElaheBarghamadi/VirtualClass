@@ -16,7 +16,7 @@
 - گرید ویدیوی ریسپانسیو (۱، ۲، ۳، ۴، ۶، ۹ نفر)، تشخیص **سخن‌گویندهٔ فعال**، **پین کردن** شرکت‌کننده، فوکوس روی اشتراک صفحه
 
 **مدیریت کلاس**
-- نقش‌ها: OWNER / MODERATOR / PRESENTER / STUDENT — مالک نقش‌ها را اعطا/لغو می‌کند
+- نقش‌ها: OWNER / MODERATOR / PRESENTER / STUDENT / GUEST — مالک نقش‌ها را اعطا/لغو می‌کند
 - سطح دسترسی جزئی: `can_use_microphone`, `can_use_camera`, `can_share_screen`, `can_use_whiteboard`, `can_send_messages`, `can_upload_files`, `can_raise_hand`, `can_present`
 - پنل میزبان برای هر شرکت‌کننده: بی‌صدا کردن، درخواست روشن کردن میکروفون، تغییر نقش/دسترسی، حذف از کلاس (با ممنوعیت موقت)
 - «بی‌صدا کردن همه» و «بی‌صدا کردن همه جز من»
@@ -25,6 +25,28 @@
 - اتاق انتظار با تأیید/رد توسط میزبان
 - قفل کلاس (ورود اعضای جدید مسدود، اعضا متصل می‌مانند)
 - پنل تنظیمات کلاس (ذخیره در دیتابیس)
+
+**ورود مهمان (بدون حساب کاربری)**
+- لینک کلاس برای همه کار می‌کند: لابی → نام نمایشی (+رمز در صورت نیاز) → بررسی دستگاه‌ها → ورود
+- شناسهٔ امن و تصادفی برای هر مهمان (`secrets.token_urlsafe`)، نام یکتا در هر کلاس («Ali»، «Ali (2)»)
+- اعتبارسنجی نام: trim، حداقل/حداکثر طول، حذف کاراکترهای markup، نمایش escape‌شده
+- مهمان دقیقاً با همان سیستم مجوزها (`can_*`) مدیریت می‌شود؛ هیچ bypass وجود ندارد
+- مالک می‌تواند ورود مهمان را per-classroom غیرفعال کند؛ صفحهٔ اختصاصی برای کلاس‌های بدون مهمان
+- دسترسی مهمان به session خودش محدود است: داشبورد/پروفایل/کنترل میزبان/کلاس دیگر در دسترس نیست
+
+**تجربهٔ کاربری یکپارچه (Phase 3)**
+- **سیستم طراحی**: همهٔ رنگ‌ها/فاصله‌ها/سایه‌ها از `tokens.css` (CSS variables) — بدون رنگ hard-code پراکنده
+- **پوسته**: روشن / تیره / خودکار(سیستم) — ذخیره در حساب کاربری (و کوکی برای مهمان)، کنتراست دسترسی‌پذیر، پشتیبانی `prefers-reduced-motion`
+- **ترجیحات کاربر**: پوسته، تراکم رابط (راحت/فشرده)، کاهش انیمیشن، صفحهٔ فرود پس از ورود
+- **شخصی‌سازی کلاس توسط مالک**: عنوان، توضیحات، لوگو، رنگ اصلی (accent)، پیام خوش‌آمدگویی، اجازهٔ مهمان، نمایش پیش‌فرض گفتگو — با broadcast زنده به افراد داخل کلاس
+- **بررسی دستگاه‌ها قبل از ورود (واقعی، نه شبیه‌سازی)**: پیش‌نمایش دوربین با حالت‌های مختلف (در حال بررسی/فعال/مسدود/یافت نشد/در اختیار برنامهٔ دیگر)، تست میکروفون با **تحلیل سیگنال واقعی** (AnalyserNode)، تست بلندگو با پخش بوق و تأیید کاربر، انتخاب دوربین/میکروفون/بلندگو با `enumerateDevices` و رفرش خودکار، راهنمای فارسی برای خطای دسترسی
+- **چیدمان صحنه**: شبکه / سخنران / تمرکز / ارائه — انتخاب کاربر در localStorage ذخیره می‌شود
+- **منوی «بیشتر»**: تنظیمات دستگاه‌ها (تغییر بدون خروج از کلاس)، پوسته، تنظیمات کلاس (میزبان)، صفحهٔ مدیریت، کلیدهای میان‌بر، راهنما، گزارش مشکل
+- **میان‌برهای صفحه‌کلید**: `M` میکروفون، `V` دوربین، `C` گفتگو، `P` شرکت‌کنندگان، `S` اشتراک صفحه — هنگام تایپ غیرفعال
+- **کیفیت اتصال واقعی**: `ConnectionQualityChanged` لایوکیت (بر پایهٔ RTT/افت بسته) + RTT سیگنالینگ از ping/pong — بدون سطح کیفی جعلی
+- **مودال یکپارچه** (`modal.js`): همهٔ تأییدها (خروج، حذف، پایان جلسه، قفل) با دیالوگ دسترسی‌پذیر، focus trap و بازگشت فوکوس
+- **صفحات وضعیت**: کلاس پایان‌یافته (۴۱۰)، قفل‌شده، فقط-کاربری، لینک نامعتبر (۴۰۴)، دسترسی غیرمجاز (۴۰۳)
+- **دسترس‌پذیری**: skip-link، فوکوس قابل مشاهده، ARIA برای دیالوگ/منو/تب‌ها، وضعیت‌ها فقط با رنگ منتقل نمی‌شوند
 
 **محتوا**
 - گفتگوی زنده با تاریخچه، زمان، هویت فرستنده، شمارندهٔ پیام خوانده‌نشده
@@ -102,12 +124,12 @@
 | `/ws/classroom/<code>/chat/` | `ChatConsumer` | گفتگوی زنده + تاریخچه + ذخیره در DB + حذف پیام توسط مدیر |
 | `/ws/classroom/<code>/whiteboard/` | `WhiteboardConsumer` | همگام‌سازی عملیات ساخت‌یافتهٔ تخته + ذخیرهٔ رویدادها |
 
-**اعتبارسنجی اتصال:** کاربر باید احراز هویت شده و عضو فعال آن کلاس باشد (وگرنه ۴۴۰۱/۴۴۰۳). هر عملیات **به‌صورت مستقل و زنده** بازبینی می‌شود — تغییر تنظیمات در میانهٔ جلسه فوراً اثر می‌کند.
+**اعتبارسنجی اتصال:** کاربر ثبت‌نام‌شده (session/auth) یا مهمانِ دارای `guest_uid` در session خودش باید عضو فعال آن کلاس باشد (وگرنه ۴۴۰۱/۴۴۰۳) — با `SessionMiddlewareStack` در ASGI. هر عملیات **به‌صورت مستقل و زنده** بازبینی می‌شود — تغییر تنظیمات در میانهٔ جلسه فوراً اثر می‌کند.
 
 ### پروتکل رویدادها
 
 ```
-user_joined · user_left · participant_list · media_state
+user_joined · user_left · participant_list · media_state · classroom_updated
 raise_hand · lower_hand
 chat_message · chat_deleted
 permission_changed · role_changed · participant_muted · mute_all
@@ -143,6 +165,27 @@ Role ──► PermissionDefaults (ماتریس پیش‌فرض نقش)
 `classrooms/permissions.py` تنها جایی است که قواعد نوشته شده‌اند. افزودن قابلیت جدید = یک فیلد روی `ClassroomMember` + یک مقدار پیش‌فرض در ماتریس. **هیچ مجوزی در ویوها یا کانکیومرها hard-code نشده است.**
 
 **تغییر JavaScript در مرورگر هیچ دسترسی‌ای ایجاد نمی‌کند:** دکمه‌ها فقط affordance هستند؛ هر درخواست (HTTP یا WebSocket) سمت سرور بازبینی می‌شود و توکن SFU هم بر اساس همان مجوزهای مؤثر صادر می‌شود، پس حتی فراخوانی دستی تابع فرانت‌اند نتیجه‌ای ندارد.
+
+### معماری دسترسی مهمان
+
+مهمان‌ها **یک `ClassroomMember` با `user=NULL`** هستند (نه مدل جدا) — همان خط لولهٔ
+مجوز/میزبان/consumer برای هر دو کار می‌کند:
+
+```
+ClassroomMember
+├── user          → NULL برای مهمان
+├── is_guest      → True
+├── guest_uid     → secrets.token_urlsafe(16)  (حدس‌ناپذیر)
+├── display_name  → «Ali» / «Ali (2)»
+└── identity      → «g:<guest_uid>» یا «u:<user_id>»  (کلید عمومی کلاینت)
+```
+
+احراز هویت مهمان فقط از **session سمت سرور** انجام می‌شود
+(`request.session["guest_member_<room_code>"]`): در HTTP با `resolve_member` و در
+WebSocket با `SessionMiddlewareStack` + `resolve_scope_member`. هیچ شناسه‌ای از
+کلاینت پذیرفته نمی‌شود؛ uid جعلی = ۴۰۳/close. نام‌ها در `ChatMessage.sender_name`
+و `WhiteboardEvent.actor_identity` دنورمالایز می‌شوند تا تاریخچه پس از خروج مهمان
+هم درست نمایش داده شود.
 
 ### معماری دیتابیس
 
@@ -281,7 +324,8 @@ python manage.py test
 online_classroom/
 ├── manage.py
 ├── config/                  # settings, urls, asgi (WebSocket routing), wsgi
-├── accounts/                # کاربر سفارشی، ثبت‌نام، ورود، پروفایل
+├── accounts/                # کاربر سفارشی، ثبت‌نام، ورود، پروفایل،
+│                            #   context_processors (ترجیحات UI)
 ├── classrooms/              # هستهٔ دامنه
 │   ├── models.py            # Classroom, ClassroomMember, ClassroomSession,
 │   │                        #   AttendanceRecord, SharedFile
@@ -296,10 +340,10 @@ online_classroom/
 ├── whiteboard/              # Whiteboard, WhiteboardEvent + WhiteboardConsumer
 ├── core/                    # صفحات عمومی، API URLها، templatetags
 ├── static/
-│   ├── css/                 # main.css, room.css
-│   └── js/                  # room.js, media.js, chat.js, whiteboard.js,
-│                            #   lobby.js, toast.js, app.js
-├── templates/               # base.html, home.html
+│   ├── css/                 # tokens.css (design system), main.css, room.css
+│   └── js/                  # theme.js, modal.js, room.js, media.js, chat.js,
+│                            #   whiteboard.js, lobby.js, toast.js, app.js
+├── templates/               # base.html, home.html, 403.html, 404.html
 ├── Dockerfile / docker-compose.yml / .dockerignore
 ├── requirements.txt / .env.example / .gitignore
 └── README.md
@@ -310,12 +354,14 @@ online_classroom/
 ```
 /                                        خانه
 /accounts/register|login|logout|profile
+/accounts/after-login/                   ریدایرکت بر اساس صفحهٔ فرود کاربر
 /dashboard/                              داشبورد + جلسات پیش‌رو
 /classrooms/                             کلاس‌های من
 /classrooms/create/                      ایجاد کلاس
 /classrooms/<code>/                      مدیریت (تنظیمات، زمان‌بندی، جلسات)
 /class/<code>/                           لینک عمومی → لابی
-/class/<code>/lobby/                     لابی + پیش‌نمایش دستگاه‌ها
+/class/<code>/lobby/                     لابی: نام/رمز → بررسی واقعی دستگاه‌ها
+/class/<code>/leave/                     خروج (مهمان از session خارج می‌شود)
 /class/<code>/waiting/                   اتاق انتظار
 /class/<code>/room/                      صفحهٔ کلاس
 /class/<code>/media-token/               توکن کوتاه‌مدت LiveKit
@@ -356,7 +402,13 @@ online_classroom/
 
 **CSRF**: روی همهٔ فرم‌ها و همهٔ POSTهای JSON (هدر `X-CSRFToken`).
 
-**WebSocket**: احراز هویت از session کوکی + بررسی عضویت فعال در `connect` + بازبینی مجوز در هر پیام.
+**WebSocket**: احراز هویت از session کوکی (`AuthMiddlewareStack` + `SessionMiddlewareStack`) + بررسی عضویت فعال در `connect` + بازبینی مجوز در هر پیام.
+
+**مهمان‌ها**
+- `guest_uid` با `secrets.token_urlsafe(16)` ساخته می‌شود و فقط در session سمت سرور همان مرورگر ذخیره می‌شود؛ شناسهٔ جعلی در WS/HTTP → رد
+- scope مهمان به یک کلاس محدود است (`guest_member_<room_code>`)؛ با session یک کلاس نمی‌توان وارد کلاس دیگر شد
+- endpointهای داشبورد، پروفایل، مدیریت کلاس و اکشن‌های میزبان همچنان `login_required`اند — مهمان حتی با session معتبر به آن‌ها نمی‌رسد
+- `can_upload_files` برای مهمان همیشه False است، حتی اگر flag در دیتابیس True باشد
 
 **کوکی‌ها/هدرها**: `SameSite=Lax`، و در حالت غیردیباگ `Secure`، `HSTS` و `SSL redirect` به‌صورت خودکار فعال می‌شوند.
 
@@ -367,7 +419,7 @@ online_classroom/
 ## ۶. تست‌ها
 
 ```bash
-python manage.py test     # 70 تست
+python manage.py test     # 106 تست
 ```
 
 | حوزه | پوشش |
@@ -382,11 +434,14 @@ python manage.py test     # 70 تست
 | فایل‌ها | آپلود مجاز، پسوند غیرمجاز، **پسوند جعلی**، فایل خالی، ظرف Office نامعتبر، سقف حجم، path traversal، دانلود غیرمجاز |
 | توکن رسانه | grants مالک، grants دانش‌آموز، حذف میکروفون برای کاربر mute، ۴۰۳ برای غیرعضو، ۵۰۳ بدون پیکربندی |
 | WebSocket | اتصال/قطع، `user_joined`/`user_left`، بالا بردن دست، گفتگو، حذف پیام، رد دانش‌آموز در تخته، عملیات نامعتبر، compact شدن `clear`، رد کاربر ناشناس و غیرعضو |
+| مهمان‌ها | ورود با نام، trim/طول/markup، نام تکراری → «Ali (2)»، رمز درست/غلط، guests غیرفعال (۴۰۳)، کلاس قفل/غیرفعال، اتاق انتظار، هویت `g:` در WS، رد uid جعلی، عدم دسترسی به داشبورد/مدیریت/کلاس دیگر، host action → redirect به login، خروج = unbind از session |
+| مجوز مهمان | پیش‌فرض‌های نقش GUEST، `can_upload_files` همیشه False، محدود شدن با تنظیمات اتاق مثل دانش‌آموز، عدم امکان ارتقای نقش توسط خود مهمان |
 
 ---
 
 ## ۷. نقشهٔ راه
 
+- رابط چندزبانه (زیرساخت ترجیحات کاربر آماده است؛ UI فعلی فارسی است)
 - ضبط جلسه (LiveKit Egress)
 - Breakout rooms
 - همگام‌سازی cursor/لیزر اشاره‌گر روی تخته

@@ -78,7 +78,7 @@ class WhiteboardConsumerTests(TransactionTestCase):
             msg = await owner_ws.receive_json_from()
             assert msg["type"] == "whiteboard_operation", msg
             assert msg["op"]["tool"] == "pen"
-            assert msg["actor_id"] == self.presenter.id
+            assert msg["actor_identity"] == f"u:{self.presenter.id}"
 
             # The student (viewer, no draw permission) still sees the op,
             # but their own draw attempt is refused server-side.

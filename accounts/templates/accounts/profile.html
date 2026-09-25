@@ -8,16 +8,38 @@
 <div class="card form-card">
     <form method="post" novalidate>
         {% csrf_token %}
-        <div class="field-grid">
-            {% for field in form %}
-                <div class="field">
-                    <label for="{{ field.id_for_label }}">{{ field.label }}</label>
-                    {{ field }}
-                    {% if field.help_text %}<small class="field-help">{{ field.help_text }}</small>{% endif %}
-                    {% if field.errors %}<p class="field-error">{{ field.errors.0 }}</p>{% endif %}
-                </div>
-            {% endfor %}
-        </div>
+        <fieldset class="profile-section">
+            <legend>اطلاعات حساب</legend>
+            <div class="field-grid">
+                {% for field in form %}
+                    {% if field.name == "first_name" or field.name == "last_name" or field.name == "email" or field.name == "display_name" %}
+                        <div class="field">
+                            <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+                            {{ field }}
+                            {% if field.help_text %}<small class="field-help">{{ field.help_text }}</small>{% endif %}
+                            {% if field.errors %}<p class="field-error">{{ field.errors.0 }}</p>{% endif %}
+                        </div>
+                    {% endif %}
+                {% endfor %}
+            </div>
+        </fieldset>
+        <fieldset class="profile-section">
+            <legend>ظاهر و ترجیحات</legend>
+            <div class="field-grid">
+                {% for field in form %}
+                    {% if field.name == "theme" or field.name == "density" or field.name == "landing_page" %}
+                        <div class="field">
+                            <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+                            {{ field }}
+                            {% if field.errors %}<p class="field-error">{{ field.errors.0 }}</p>{% endif %}
+                        </div>
+                    {% endif %}
+                {% endfor %}
+            </div>
+            <label class="switch-row">
+                {{ form.reduce_animations }} <span>{{ form.reduce_animations.label }}</span>
+            </label>
+        </fieldset>
         <button type="submit" class="btn btn-primary">ذخیره تغییرات</button>
     </form>
 </div>

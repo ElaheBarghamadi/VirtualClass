@@ -35,16 +35,26 @@ class RegisterSerializer(serializers.ModelSerializer):
 
 
 class MemberSerializer(serializers.ModelSerializer):
-    """Participant data — stored flags + live moderation state."""
+    """Participant data — stored flags + live moderation state.
 
-    user = UserSerializer(read_only=True)
+    Works for registered members and guests alike: ``user`` is null for
+    guests, whose identity is carried by ``identity``/``name``.
+    """
+
+    user = UserSerializer(read_only=True, allow_null=True)
     role_label = serializers.CharField(source="get_role_display", read_only=True)
+    name = serializers.CharField(source="participant_name", read_only=True)
+    identity = serializers.CharField(read_only=True)
+    is_guest = serializers.BooleanField(read_only=True)
 
     class Meta:
         model = ClassroomMember
         fields = (
             "id",
             "user",
+            "identity",
+            "name",
+            "is_guest",
             "role",
             "role_label",
             "joined_at",
@@ -168,7 +178,7 @@ class ChatMessageSerializer(serializers.Serializer):
     """Read-only chat history (writes go through the WebSocket)."""
 
     id = serializers.IntegerField()
-    sender_id = serializers.IntegerField()
+    sender_identity = serializers.CharField()
     sender_name = serializers.CharField()
     message = serializers.CharField()
     is_deleted = serializers.BooleanField()

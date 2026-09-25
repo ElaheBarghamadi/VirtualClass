@@ -9,7 +9,13 @@
         <div class="waiting-spinner" aria-hidden="true"></div>
         <p>میزبان هنوز ورود شما را تأیید نکرده است.<br>لطفاً منتظر بمانید…</p>
         <p class="muted small" id="waiting-status">متصل به کلاس…</p>
-        <a class="btn btn-ghost btn-block" href="{% url 'dashboard' %}">بازگشت به داشبورد</a>
+        {% if user.is_authenticated %}
+            <a class="btn btn-ghost btn-block" href="{% url 'dashboard' %}">بازگشت به داشبورد</a>
+        {% endif %}
+        <form method="post" action="{% url 'room:leave' classroom.room_code %}">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-ghost btn-block">انصراف و خروج</button>
+        </form>
     </div>
 </div>
 {% endblock %}

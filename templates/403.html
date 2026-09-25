@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}دسترسی غیرمجاز{% endblock %}
+{% block content %}
+<div class="card status-page">
+    <div class="status-icon" aria-hidden="true">⛔</div>
+    <h1>دسترسی غیرمجاز</h1>
+    <p class="muted">
+        شما اجازهٔ انجام این عملیات یا مشاهدهٔ این صفحه را ندارید.
+        اگر فکر می‌کنید اشتباهی رخ داده، با میزبان کلاس تماس بگیرید.
+    </p>
+    <div class="status-actions">
+        <a class="btn btn-primary" href="{% url 'home' %}">صفحهٔ اصلی</a>
+        {% if user.is_authenticated %}
+            <a class="btn btn-ghost" href="{% url 'dashboard' %}">داشبورد</a>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

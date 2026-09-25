@@ -27,14 +27,27 @@ class LoginForm(AuthenticationForm):
 
 
 class ProfileForm(forms.ModelForm):
-    """Edit basic profile information."""
+    """Edit basic profile information + UI preferences."""
 
     class Meta:
         model = User
-        fields = ("first_name", "last_name", "email", "display_name")
+        fields = (
+            "first_name",
+            "last_name",
+            "email",
+            "display_name",
+            "theme",
+            "density",
+            "reduce_animations",
+            "landing_page",
+        )
         labels = {
             "first_name": "نام",
             "last_name": "نام خانوادگی",
             "email": "ایمیل",
             "display_name": "نام نمایشی",
+            "theme": "پوسته",
+            "density": "تراکم رابط کاربری",
+            "reduce_animations": "کاهش انیمیشن‌ها",
+            "landing_page": "صفحهٔ فرود پس از ورود",
         }

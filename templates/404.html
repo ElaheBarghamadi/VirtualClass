@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}پیدا نشد{% endblock %}
+{% block content %}
+<div class="card status-page">
+    <div class="status-icon" aria-hidden="true">🔍</div>
+    <h1>صفحه یا کلاس پیدا نشد</h1>
+    <p class="muted">
+        لینکی که دنبال کرده‌اید معتبر نیست یا کلاس مورد نظر حذف شده است.
+        آدرس را بررسی کنید یا از میزبان کلاس لینک تازه بخواهید.
+    </p>
+    <div class="status-actions">
+        <a class="btn btn-primary" href="{% url 'home' %}">صفحهٔ اصلی</a>
+        {% if user.is_authenticated %}
+            <a class="btn btn-ghost" href="{% url 'dashboard' %}">داشبورد</a>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

@@ -68,6 +68,13 @@ class Classroom(models.Model):
     allow_file_upload = models.BooleanField(default=True, verbose_name="بارگذاری فایل (غیر مالک)")
     chat_disabled = models.BooleanField(default=False, verbose_name="قطع کامل گفتگو")
 
+    # -- phase 3: customization & guest access ----------------------------------
+    allow_guests = models.BooleanField(default=True, verbose_name="ورود مهمان با لینک")
+    accent_color = models.CharField(max_length=7, blank=True, verbose_name="رنگ اصلی کلاس")
+    welcome_message = models.TextField(blank=True, verbose_name="پیام خوش‌آمدگویی")
+    logo = models.ImageField(upload_to="classroom_logos/", blank=True, null=True, verbose_name="لوگوی کلاس")
+    show_chat_default = models.BooleanField(default=True, verbose_name="نمایش گفتگو به‌صورت پیش‌فرض")
+
     # -- presentation state (synced over WebSocket) ----------------------------
     current_file = models.ForeignKey(
         "SharedFile",
@@ -117,15 +124,32 @@ class Classroom(models.Model):
 
 
 class ClassroomMember(models.Model):
-    """A user's membership in a classroom: role, capabilities, live state."""
+    """A participant in a classroom: role, capabilities, live state.
+
+    A member is either a **registered user** (``user`` set) or a **guest**
+    (``is_guest`` + ``guest_uid`` + ``display_name``).  Guests get no
+    permanent Django account; they are bound to the browser session that
+    created them.  Everything else (roles, permission flags, moderation
+    state, host controls) is shared between both kinds.
+    """
 
     classroom = models.ForeignKey(Classroom, on_delete=models.CASCADE, related_name="members", verbose_name="کلاس")
     user = models.ForeignKey(
-        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="classroom_memberships", verbose_name="کاربر"
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="classroom_memberships",
+        verbose_name="کاربر",
     )
     role = models.CharField(max_length=20, choices=Role.choices, default=Role.STUDENT, verbose_name="نقش")
     joined_at = models.DateTimeField(default=timezone.now, verbose_name="زمان عضویت")
     is_active = models.BooleanField(default=True, verbose_name="عضویت فعال")
+
+    # -- guest identity (never expose the internal pk to clients) ---------------
+    is_guest = models.BooleanField(default=False, verbose_name="مهمان")
+    guest_uid = models.CharField(max_length=32, null=True, blank=True, unique=True, verbose_name="شناسهٔ مهمان")
+    display_name = models.CharField(max_length=60, blank=True, verbose_name="نام نمایشی")
 
     # -- granular capabilities (server-side source of truth) --------------------
     can_use_microphone = models.BooleanField(default=True, verbose_name="اجازه میکروفون")
@@ -148,7 +172,13 @@ class ClassroomMember(models.Model):
         verbose_name = "عضو کلاس"
         verbose_name_plural = "اعضای کلاس"
         constraints = [
-            models.UniqueConstraint(fields=("classroom", "user"), name="unique_classroom_member"),
+            # One membership per registered user per classroom.  Guests are
+            # unique by guest_uid instead (global unique index above).
+            models.UniqueConstraint(
+                fields=("classroom", "user"),
+                condition=models.Q(user__isnull=False),
+                name="unique_classroom_member",
+            ),
         ]
         ordering = ("role", "joined_at")
         indexes = [
@@ -157,12 +187,29 @@ class ClassroomMember(models.Model):
         ]
 
     def __str__(self) -> str:
-        return f"{self.user} – {self.get_role_display()} @ {self.classroom.room_code}"
+        return f"{self.participant_name} – {self.get_role_display()} @ {self.classroom.room_code}"
 
     def save(self, *args, **kwargs) -> None:
         if self._state.adding:
             apply_role_defaults(self)
+            if self.is_guest and not self.guest_uid:
+                self.guest_uid = secrets.token_urlsafe(16)
         super().save(*args, **kwargs)
+
+    # -- identity helpers ---------------------------------------------------------
+    @property
+    def participant_name(self) -> str:
+        """Display name: explicit override → account name → guest label."""
+        if self.display_name:
+            return self.display_name
+        if self.user_id:
+            return self.user.name
+        return "مهمان"
+
+    @property
+    def identity(self) -> str:
+        """Stable public identity for clients (never the database pk)."""
+        return f"g:{self.guest_uid}" if self.is_guest else f"u:{self.user_id}"
 
     def permissions_dict(self) -> dict[str, bool]:
         """Serialisable view of this member's stored capability flags."""
@@ -216,7 +263,12 @@ class AttendanceRecord(models.Model):
     session = models.ForeignKey(ClassroomSession, on_delete=models.CASCADE, related_name="attendance", verbose_name="جلسه")
     member = models.ForeignKey(ClassroomMember, on_delete=models.CASCADE, related_name="attendance", verbose_name="عضو")
     user = models.ForeignKey(
-        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="attendance_records", verbose_name="کاربر"
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="attendance_records",
+        verbose_name="کاربر",
     )
     joined_at = models.DateTimeField(default=timezone.now, db_index=True, verbose_name="زمان ورود")
     left_at = models.DateTimeField(null=True, blank=True, verbose_name="زمان خروج")

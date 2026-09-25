@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}ورود با حساب کاربری{% endblock %}
+{% block content %}
+<div class="card status-page">
+    <div class="status-icon" aria-hidden="true">👤</div>
+    <h1>ورود به این کلاس فقط با حساب کاربری</h1>
+    <p class="muted">
+        میزبان کلاس «{{ classroom.title }}» ورود مهمان را غیرفعال کرده است.
+        برای پیوستن، وارد حساب کاربری خود شوید یا یک حساب رایگان بسازید.
+    </p>
+    <div class="status-actions">
+        <a class="btn btn-primary" href="{% url 'accounts:login' %}?next={{ request.path }}">ورود به حساب</a>
+        <a class="btn btn-ghost" href="{% url 'accounts:register' %}?next={{ request.path }}">ساخت حساب جدید</a>
+    </div>
+</div>
+{% endblock %}

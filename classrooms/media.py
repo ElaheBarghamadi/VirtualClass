@@ -43,12 +43,13 @@ def room_name(classroom: Classroom) -> str:
     return f"classroom_{classroom.room_code}"
 
 
-def generate_media_token(user, classroom: Classroom, perms: dict[str, bool], role: str = Role.STUDENT) -> str:
-    """Create a short-lived LiveKit JWT scoped to this user + room.
+def generate_media_token(member, classroom: Classroom, perms: dict[str, bool]) -> str:
+    """Create a short-lived LiveKit JWT scoped to this participant + room.
 
     Publish rights are derived from ``perms`` (the server-side effective
     permission map) — a modified client cannot widen them, because the
-    SFU enforces the token.
+    SFU enforces the token.  Identity is ``u:<id>`` for registered users
+    and ``g:<uid>`` for guests — matching the roster identities.
     """
     if livekit_api is None:  # pragma: no cover
         raise RuntimeError("livekit-api is not installed")
@@ -72,9 +73,9 @@ def generate_media_token(user, classroom: Classroom, perms: dict[str, bool], rol
 
     token = (
         livekit_api.AccessToken(settings.LIVEKIT_API_KEY, settings.LIVEKIT_API_SECRET)
-        .with_identity(f"user:{user.id}")
-        .with_name(user.name[:60])
-        .with_metadata(json.dumps({"role": role}, separators=(",", ":")))
+        .with_identity(member.identity)
+        .with_name(member.participant_name[:60])
+        .with_metadata(json.dumps({"role": member.role}, separators=(",", ":")))
         .with_ttl(timedelta(minutes=settings.LIVEKIT_TOKEN_TTL_MINUTES))
         .with_grants(grants)
     )

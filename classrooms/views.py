@@ -19,7 +19,14 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_http_methods, require_POST
 
 from .file_validation import validate_upload
-from .forms import ClassroomForm, ClassroomJoinForm, SessionScheduleForm, ClassroomSettingsForm
+from .forms import (
+    ClassroomCustomizationForm,
+    ClassroomForm,
+    ClassroomJoinForm,
+    ClassroomSettingsForm,
+    GuestJoinForm,
+    SessionScheduleForm,
+)
 from .media import generate_media_token, media_config_payload, media_enabled
 from .models import Classroom, ClassroomSession, SharedFile
 from .permissions import PRIVILEGED_ROLES, Role, effective_permissions, is_privileged
@@ -38,11 +45,14 @@ from .services import (
     end_session,
     get_active_member,
     get_live_session,
+    guest_session_key,
     join_classroom,
+    join_classroom_guest,
     leave_classroom,
     mute_all,
     remove_member,
     request_unmute,
+    resolve_member,
     set_classroom_locked,
     set_member_muted,
     set_member_permission,
@@ -130,6 +140,21 @@ def classroom_detail_view(request, room_code: str):
     )
     schedule_form = SessionScheduleForm(request.POST or None, prefix="sched")
     settings_form = ClassroomSettingsForm(instance=classroom)
+    customization_form = ClassroomCustomizationForm(instance=classroom)
+    if request.method == "POST" and "save_customization" in request.POST:
+        customization_form = ClassroomCustomizationForm(request.POST, request.FILES, instance=classroom)
+        if customization_form.is_valid():
+            customization_form.save()
+            from .services import broadcast
+
+            broadcast(classroom.room_code, {
+                "type": "classroom_updated",
+                "title": classroom.title,
+                "accent_color": classroom.accent_color,
+                "welcome_message": classroom.welcome_message,
+            })
+            messages.success(request, "شخصی‌سازی کلاس ذخیره شد.")
+            return redirect("classrooms:detail", room_code=room_code)
     if request.method == "POST" and "schedule_session" in request.POST:
         if schedule_form.is_valid():
             session = schedule_form.save(commit=False)
@@ -164,6 +189,7 @@ def classroom_detail_view(request, room_code: str):
             "sessions": sessions,
             "schedule_form": schedule_form,
             "settings_form": settings_form,
+            "customization_form": customization_form,
         },
     )
 
@@ -181,59 +207,94 @@ def classroom_delete_view(request, room_code: str):
 # ---------------------------------------------------------------------------
 # Lobby & room
 # ---------------------------------------------------------------------------
-@login_required
 @require_http_methods(["GET", "POST"])
 def lobby_view(request, room_code: str):
-    """Classroom lobby: info + password gate (never in the URL)."""
-    classroom = get_object_or_404(
-        Classroom.objects.select_related("owner"), room_code=room_code, is_active=True
-    )
-    join_form = ClassroomJoinForm() if classroom.is_password_protected else None
+    """Classroom lobby — works for registered users AND guests.
 
-    if request.method == "POST":
-        raw_password = ""
-        if classroom.is_password_protected:
-            join_form = ClassroomJoinForm(request.POST)
-            if not join_form.is_valid():
-                return render(request, "classrooms/lobby.html", {"classroom": classroom, "join_form": join_form})
-            raw_password = join_form.cleaned_data["password"]
-        try:
-            member = join_classroom(classroom, request.user, raw_password)
-        except (WrongClassroomPassword, ClassroomLocked, UserBanned, TooManyAttempts, ClassroomAccessError) as exc:
-            error = str(exc)
-            if join_form is not None and isinstance(exc, WrongClassroomPassword):
-                join_form.add_error("password", error)
-            else:
-                messages.error(request, error)
-            return render(
-                request,
-                "classrooms/lobby.html",
-                {"classroom": classroom, "join_form": join_form},
-            )
-        if member.in_waiting_room:
-            return redirect("room:waiting", room_code=classroom.room_code)
-        return redirect("room:room", room_code=classroom.room_code)
+    Registered members are routed straight through; guests get the
+    display-name form (+ password gate when the classroom requires one).
+    The password is only ever POSTed — never in a URL.
+    """
+    classroom = get_object_or_404(Classroom.objects.select_related("owner"), room_code=room_code)
+    if not classroom.is_active:
+        return render(request, "classrooms/ended.html", {"classroom": classroom}, status=410)
+    authenticated = request.user.is_authenticated
 
-    existing = get_active_member(classroom, request.user)
+    # existing participant (user or session-bound guest) goes straight in
+    existing = resolve_member(request, classroom)
     if existing and not existing.in_waiting_room:
         return redirect("room:room", room_code=classroom.room_code)
     if existing and existing.in_waiting_room:
         return redirect("room:waiting", room_code=classroom.room_code)
 
-    return render(request, "classrooms/lobby.html", {"classroom": classroom, "join_form": join_form})
+    if authenticated:
+        join_form = ClassroomJoinForm() if classroom.is_password_protected else None
+    else:
+        if not classroom.allow_guests:
+            return render(request, "classrooms/guests_disabled.html", {"classroom": classroom}, status=403)
+        join_form = GuestJoinForm(requires_password=classroom.is_password_protected)
+
+    def _lobby_ctx(**extra):
+        ctx = {"classroom": classroom, "join_form": join_form, "authenticated": authenticated}
+        ctx.update(extra)
+        return ctx
+
+    if request.method == "POST":
+        if authenticated:
+            raw_password = ""
+            if classroom.is_password_protected:
+                join_form = ClassroomJoinForm(request.POST)
+                if not join_form.is_valid():
+                    return render(request, "classrooms/lobby.html", _lobby_ctx())
+                raw_password = join_form.cleaned_data["password"]
+            try:
+                member = join_classroom(classroom, request.user, raw_password)
+            except (WrongClassroomPassword, ClassroomLocked, UserBanned, TooManyAttempts, ClassroomAccessError) as exc:
+                if join_form is not None and isinstance(exc, WrongClassroomPassword):
+                    join_form.add_error("password", str(exc))
+                else:
+                    messages.error(request, str(exc))
+                return render(request, "classrooms/lobby.html", _lobby_ctx())
+        else:
+            join_form = GuestJoinForm(
+                request.POST, requires_password=classroom.is_password_protected
+            )
+            if not join_form.is_valid():
+                return render(request, "classrooms/lobby.html", _lobby_ctx())
+            try:
+                member = join_classroom_guest(
+                    classroom,
+                    join_form.cleaned_data["display_name"],
+                    join_form.cleaned_data.get("password", ""),
+                )
+            except (WrongClassroomPassword, ClassroomLocked, TooManyAttempts, ClassroomAccessError) as exc:
+                if isinstance(exc, WrongClassroomPassword) and "password" in join_form.fields:
+                    join_form.add_error("password", str(exc))
+                else:
+                    messages.error(request, str(exc))
+                return render(request, "classrooms/lobby.html", _lobby_ctx())
+            # bind the guest membership to THIS browser session
+            request.session[guest_session_key(classroom)] = member.guest_uid
+
+        if member.in_waiting_room:
+            return redirect("room:waiting", room_code=classroom.room_code)
+        return redirect("room:room", room_code=classroom.room_code)
+
+    return render(request, "classrooms/lobby.html", _lobby_ctx(
+        default_name=request.user.name if authenticated else "",
+    ))
 
 
-@login_required
 @require_http_methods(["GET"])
 def waiting_view(request, room_code: str):
-    """Waiting room — held here until the host approves entry."""
+    """Waiting room — held here until the host approves entry (users + guests)."""
     classroom = get_object_or_404(Classroom, room_code=room_code, is_active=True)
-    member = get_active_member(classroom, request.user)
+    member = resolve_member(request, classroom)
     if member is None:
         return redirect("room:lobby", room_code=room_code)
     if not member.in_waiting_room:
         return redirect("room:room", room_code=room_code)
-    return render(request, "classrooms/waiting_room.html", {"classroom": classroom})
+    return render(request, "classrooms/waiting_room.html", {"classroom": classroom, "member": member})
 
 
 def _room_context(request, classroom: Classroom, member) -> dict:
@@ -264,12 +325,12 @@ def _room_context(request, classroom: Classroom, member) -> dict:
     }
 
 
-@login_required
 @require_http_methods(["GET"])
 def room_view(request, room_code: str):
-    """The live classroom interface.  Requires an active membership."""
+    """The live classroom interface.  Requires an active membership
+    (registered user or session-bound guest)."""
     classroom = get_object_or_404(Classroom, room_code=room_code, is_active=True)
-    member = get_active_member(classroom, request.user)
+    member = resolve_member(request, classroom)
     if member is None:
         messages.info(request, "برای ورود به کلاس ابتدا باید عضو شوید.")
         return redirect("room:lobby", room_code=room_code)
@@ -278,29 +339,40 @@ def room_view(request, room_code: str):
     return render(request, "classrooms/room.html", _room_context(request, classroom, member))
 
 
-@login_required
 @require_POST
 def leave_view(request, room_code: str):
+    """Leave the classroom — guests are unbound from their session too."""
     classroom = get_object_or_404(Classroom, room_code=room_code)
-    leave_classroom(classroom, request.user)
+    member = resolve_member(request, classroom)
+    if member is not None:
+        if member.is_guest:
+            member.is_active = False
+            member.save(update_fields=["is_active"])
+            request.session.pop(guest_session_key(classroom), None)
+        else:
+            leave_classroom(classroom, request.user)
     messages.success(request, "از کلاس خارج شدید.")
-    return redirect("dashboard")
+    return redirect("dashboard" if request.user.is_authenticated else "home")
 
 
 # ---------------------------------------------------------------------------
 # Media token (LiveKit) — short-lived, scoped to effective permissions
 # ---------------------------------------------------------------------------
-@login_required
 @require_http_methods(["GET"])
 def media_token_view(request, room_code: str):
+    """Short-lived LiveKit JWT for the current participant (user or guest).
+
+    Publish rights come from server-side effective permissions — the
+    client cannot widen them.
+    """
     if not media_enabled():
         return JsonResponse({"detail": "سرور رسانه پیکربندی نشده است."}, status=503)
     classroom = get_object_or_404(Classroom, room_code=room_code, is_active=True)
-    member = get_active_member(classroom, request.user)
+    member = resolve_member(request, classroom)
     if member is None or member.in_waiting_room:
         return JsonResponse({"detail": "دسترسی غیرمجاز."}, status=403)
     perms = effective_permissions(member, classroom)
-    token = generate_media_token(request.user, classroom, perms, role=member.role)
+    token = generate_media_token(member, classroom, perms)
     return JsonResponse({"token": token, "url": settings.LIVEKIT_URL})
 
 
@@ -532,12 +604,12 @@ def file_upload_view(request, room_code: str):
     return JsonResponse({"ok": True, "id": shared.id, "name": shared.original_name})
 
 
-@login_required
 @require_http_methods(["GET"])
 def file_download_view(request, room_code: str, file_id: int):
-    """Download — membership-gated; filename comes from our safe copy."""
+    """Download — membership-gated (users + guests); filename comes from
+    our safe copy."""
     classroom = get_object_or_404(Classroom, room_code=room_code)
-    member = get_active_member(classroom, request.user)
+    member = resolve_member(request, classroom)
     if member is None:
         raise Http404
     shared = get_object_or_404(SharedFile, id=file_id, classroom=classroom)

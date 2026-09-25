@@ -3,23 +3,30 @@
  *
  * Owns: the presence WebSocket (+connection status/reconnection), the
  * roster with search/filters and host controls, tab & drawer UI, the
- * control bar (permission-gated, server remains authoritative), files,
- * presentation, settings modal, sessions, notifications (toasts) and
- * integration with media.js / chat.js / whiteboard.js.
+ * control bar (permission-gated, server remains authoritative), stage
+ * layouts, the "more" menu (devices/settings/shortcuts/help/report),
+ * keyboard shortcuts, files, presentation, sessions, notifications and
+ * integration with media.js / chat.js / whiteboard.js / modal.js.
+ *
+ * Participants are keyed by their public identity (`u:<id>` / `g:<uid>`)
+ * — registered users and guests share one pipeline.
  */
 import { ChatClient } from './chat.js';
 import { Whiteboard } from './whiteboard.js';
 import { Media } from './media.js';
-import { toast, confirmAction } from './toast.js';
+import { toast } from './toast.js';
+import { confirmDialog, infoDialog } from './modal.js';
 
 const root = document.getElementById('classroom-root');
 const ROOM_CODE = root.dataset.roomCode;
-const USER_ID = Number(root.dataset.userId);
+const IDENTITY = root.dataset.identity;
 const MEMBER_ID = Number(root.dataset.memberId);
 const PRIVILEGED = root.dataset.privileged === '1';
 const MEDIA_ENABLED = root.dataset.mediaEnabled === '1';
 const MEDIA_URL = root.dataset.mediaUrl;
+const SHOW_CHAT = root.dataset.showChat === '1';
 const PERMISSIONS = JSON.parse(document.getElementById('member-permissions').textContent);
+const EXIT_URL = root.dataset.isGuest === '1' ? '/' : '/dashboard/';
 
 const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]')?.value
     || document.cookie.match(/csrftoken=([^;]+)/)?.[1] || '';
@@ -47,7 +54,7 @@ async function api(path, body = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// Presence WebSocket + connection status
+// Presence WebSocket + connection status + real RTT
 // ---------------------------------------------------------------------------
 class PresenceClient {
     constructor() {
@@ -58,22 +65,40 @@ class PresenceClient {
         this.listEl = document.getElementById('participant-list');
         this.countEl = document.getElementById('participant-count');
         this.waitingEl = document.getElementById('waiting-list');
-        this.participants = new Map();  // user_id → participant payload
+        this.participants = new Map();  // identity → participant payload
         this.searchTerm = '';
         this.filter = 'ALL';
+        this._pingAt = 0;
+        this.rtt = null;
     }
 
     connect() {
         this.setStatus(this.ws ? 'reconnecting' : 'connecting');
         const proto = location.protocol === 'https:' ? 'wss' : 'ws';
         this.ws = new WebSocket(`${proto}://${location.host}/ws/classroom/${ROOM_CODE}/`);
-        this.ws.onopen = () => { this.retryDelay = 1000; this.setStatus('connected'); };
+        this.ws.onopen = () => {
+            this.retryDelay = 1000;
+            this.setStatus('connected');
+            // real round-trip measurement, repeated every 10s
+            this._measureRtt();
+            this._rttTimer = setInterval(() => this._measureRtt(), 10_000);
+        };
         this.ws.onmessage = (evt) => handleEvent(JSON.parse(evt.data));
         this.ws.onclose = (evt) => {
-            if (evt.code === 4403) { toast('دسترسی شما به کلاس قطع شده است.', 'error'); return; }
+            clearInterval(this._rttTimer);
+            if (evt.code === 4401 || evt.code === 4403) {
+                toast('دسترسی شما به کلاس قطع شده است.', 'error');
+                setTimeout(() => { location.href = `/class/${ROOM_CODE}/lobby/`; }, 1800);
+                return;
+            }
             this.setStatus('reconnecting');
             setTimeout(() => this.connect(), this.retryDelay = Math.min(this.retryDelay * 2, 15000));
         };
+    }
+
+    _measureRtt() {
+        this._pingAt = performance.now();
+        this.send({ action: 'ping' });
     }
 
     send(payload) {
@@ -91,26 +116,38 @@ class PresenceClient {
         const [cls, text] = map[state] || map.connecting;
         this.el.className = `conn-pill ${cls}`;
         this.el.querySelector('.conn-text').textContent = text;
+        this._updateTitle();
+    }
+
+    _updateTitle() {
+        const bits = [`وضعیت: ${this.el.querySelector('.conn-text').textContent}`];
+        if (this.rtt !== null) bits.push(`تأخیر سیگنالینگ: ${this.rtt}ms`);
+        if (Media.quality && Media.quality !== 'unknown') bits.push(`کیفیت رسانه: ${qualityLabel(Media.quality)}`);
+        this.el.title = bits.join(' · ');
     }
 
     // ------------------------------------------------------------ roster
     upsert(p) {
-        this.participants.set(p.user_id, { ...(this.participants.get(p.user_id) || {}), ...p });
+        if (!p || !p.identity) return;
+        this.participants.set(p.identity, { ...(this.participants.get(p.identity) || {}), ...p });
         this.render();
     }
 
-    remove(userId) {
-        this.participants.delete(userId);
+    remove(identity) {
+        this.participants.delete(identity);
         this.render();
     }
 
     render() {
+        const skeleton = document.getElementById('roster-skeleton');
+        if (skeleton) skeleton.classList.add('hidden');
+
         const all = Array.from(this.participants.values());
         const inRoom = all.filter((p) => !p.in_waiting_room);
         const waiting = all.filter((p) => p.in_waiting_room);
 
         // Sort: hands raised first, then role rank, then join time.
-        const roleRank = { OWNER: 0, MODERATOR: 1, PRESENTER: 2, STUDENT: 3 };
+        const roleRank = { OWNER: 0, MODERATOR: 1, PRESENTER: 2, STUDENT: 3, GUEST: 4 };
         inRoom.sort((a, b) =>
             (b.hand_raised ? 1 : 0) - (a.hand_raised ? 1 : 0)
             || (roleRank[a.role] ?? 9) - (roleRank[b.role] ?? 9)
@@ -152,22 +189,24 @@ class PresenceClient {
     _row(p) {
         const li = document.createElement('li');
         li.className = 'participant';
-        li.dataset.userId = String(p.user_id);
+        li.dataset.identity = String(p.identity);
 
         li.innerHTML = `
-            <span class="participant-avatar">${(p.name || '?').charAt(0)}</span>
+            <span class="participant-avatar"></span>
             <span class="participant-name"></span>
-            <span class="participant-role">${p.role_label || ''}</span>
+            <span class="participant-role"></span>
             <span class="participant-states" aria-hidden="true">
                 <i class="s-hand ${p.hand_raised ? 'on' : ''}" title="دست بالا">✋</i>
                 <i class="s-mic ${p.mic_on === false ? 'off' : ''}" title="میکروفون">🎤</i>
                 <i class="s-camera ${p.camera_on === false ? 'off' : ''}" title="دوربین">📹</i>
                 <i class="s-muted ${p.muted ? 'on' : ''}" title="بی‌صدا توسط مدیر">🔇</i>
             </span>`;
+        li.querySelector('.participant-avatar').textContent = (p.name || '?').charAt(0);
         li.querySelector('.participant-name').textContent =
-            p.user_id === USER_ID ? `${p.name} (شما)` : p.name;
+            p.identity === IDENTITY ? `${p.name} (شما)` : p.name;
+        li.querySelector('.participant-role').textContent = p.role_label || '';
 
-        if (PRIVILEGED && p.user_id !== USER_ID && p.role !== 'OWNER') {
+        if (PRIVILEGED && p.identity !== IDENTITY && p.role !== 'OWNER') {
             li.appendChild(this._hostControls(p));
         }
         return li;
@@ -202,8 +241,8 @@ class PresenceClient {
         );
 
         const rm = btn('حذف از کلاس', '🚫', async () => {
-            if (!confirmAction(`${p.name} از کلاس حذف شود؟`)) return;
-            const ban = confirmAction('ورود مجدد او ۵ دقیقه مسدود شود؟');
+            if (!await confirmDialog('حذف شرکت‌کننده', `${p.name} از کلاس حذف شود؟`, { danger: true, okLabel: 'حذف' })) return;
+            const ban = await confirmDialog('مسدودسازی موقت', 'ورود مجدد او ۵ دقیقه مسدود شود؟', { okLabel: 'بله، مسدود شود' });
             await api(`/members/${p.member_id}/remove/`, { ban_minutes: ban ? 5 : 0 });
         });
         rm.classList.add('danger');
@@ -222,8 +261,8 @@ class PresenceClient {
         li.querySelector('.participant-name').textContent = p.name;
         const [approve, deny] = li.querySelectorAll('button');
         approve.addEventListener('click', () => api(`/members/${p.member_id}/waiting/`, { approve: true }));
-        deny.addEventListener('click', () => {
-            if (confirmAction(`درخواست ${p.name} رد شود؟`)) {
+        deny.addEventListener('click', async () => {
+            if (await confirmDialog('رد درخواست', `درخواست ${p.name} رد شود؟`, { danger: true, okLabel: 'رد' })) {
                 api(`/members/${p.member_id}/waiting/`, { approve: false });
             }
         });
@@ -233,6 +272,10 @@ class PresenceClient {
 
 const presence = new PresenceClient();
 
+function qualityLabel(q) {
+    return { excellent: 'عالی', good: 'خوب', poor: 'ضعیف', lost: 'قطع', unknown: 'نامشخص' }[q] || q;
+}
+
 // ---------------------------------------------------------------------------
 // Event router — one consistent server protocol
 // ---------------------------------------------------------------------------
@@ -240,24 +283,24 @@ function handleEvent(data) {
     switch (data.type) {
         case 'participant_list':
             presence.participants.clear();
-            data.participants.forEach((p) => presence.participants.set(p.user_id, p));
+            data.participants.forEach((p) => { if (p.identity) presence.participants.set(p.identity, p); });
             presence.render();
             applyClassroomState(data.classroom || {});
             break;
         case 'user_joined':
             presence.upsert(data.participant);
-            if (data.participant.user_id !== USER_ID) {
+            if (data.participant.identity !== IDENTITY) {
                 ChatClient.addSystemMessage(`${data.participant.name} به کلاس پیوست.`);
             }
             break;
         case 'user_left':
-            presence.remove(data.participant.user_id);
+            presence.remove(data.participant.identity);
             ChatClient.addSystemMessage(`${data.participant.name} کلاس را ترک کرد.`);
             break;
         case 'raise_hand':
         case 'lower_hand':
             presence.upsert(data.participant);
-            if (data.type === 'raise_hand' && data.participant.user_id !== USER_ID) {
+            if (data.type === 'raise_hand' && data.participant.identity !== IDENTITY) {
                 toast(`✋ ${data.participant.name} دست خود را بالا برد.`, 'info', 2500);
             }
             break;
@@ -265,23 +308,23 @@ function handleEvent(data) {
             presence.upsert(data.participant);
             break;
         case 'permission_changed':
-            if (data.user_id === USER_ID) {
+            if (data.identity === IDENTITY) {
                 PERMISSIONS[data.permission] = data.value;
                 Whiteboard.setPermission(PERMISSIONS.can_use_whiteboard);
                 refreshControlStates();
             }
             break;
         case 'role_changed':
-            if (data.user_id === USER_ID) {
+            if (data.identity === IDENTITY) {
                 toast(data.text || 'نقش شما تغییر کرد.', 'success');
                 setTimeout(() => location.reload(), 1200); // re-render privileges
             } else {
-                presence.upsert({ user_id: data.user_id, role: data.role, role_label: data.role_label });
+                presence.upsert({ identity: data.identity, role: data.role, role_label: data.role_label });
             }
             break;
         case 'participant_muted':
-            presence.upsert({ user_id: data.user_id, muted: data.muted, member_id: data.member_id });
-            if (data.user_id === USER_ID && data.muted) {
+            presence.upsert({ identity: data.identity, muted: data.muted, member_id: data.member_id });
+            if (data.identity === IDENTITY && data.muted) {
                 toast('میکروفون شما توسط مدیر بی‌صدا شد.', 'warning');
                 Media.forceMute();
             }
@@ -290,15 +333,15 @@ function handleEvent(data) {
             if (data.except_member_id !== MEMBER_ID) {
                 toast('همهٔ شرکت‌کنندگان بی‌صدا شدند.', 'warning');
                 Media.forceMute();
-                const me = presence.participants.get(USER_ID);
+                const me = presence.participants.get(IDENTITY);
                 if (me) presence.upsert({ ...me, muted: true });
             }
             break;
         case 'participant_removed':
-            presence.remove(data.user_id);
-            if (data.user_id === USER_ID) {
+            presence.remove(data.identity);
+            if (data.identity === IDENTITY) {
                 toast('شما از کلاس حذف شدید.', 'error', 8000);
-                setTimeout(() => { location.href = `/dashboard/`; }, 1600);
+                setTimeout(() => { location.href = EXIT_URL; }, 1600);
             }
             break;
         case 'notification':
@@ -329,6 +372,10 @@ function handleEvent(data) {
             toast('جلسه پایان یافت.', 'info');
             setSessionUI(false);
             break;
+        case 'classroom_updated':
+            if (data.title) document.querySelector('.room-title h1').textContent = data.title;
+            toast('اطلاعات کلاس به‌روزرسانی شد.', 'info', 2200);
+            break;
         case 'file_uploaded':
             addFileItem(data.file);
             toast(`فایل «${data.file.name}» بارگذاری شد.`, 'info', 2500);
@@ -341,6 +388,11 @@ function handleEvent(data) {
             if (PRIVILEGED) presence.upsert(data.participant);
             break;
         case 'pong':
+            if (presence._pingAt) {
+                presence.rtt = Math.round(performance.now() - presence._pingAt);
+                presence._pingAt = 0;
+                presence._updateTitle();
+            }
             break;
         default:
             break;
@@ -351,21 +403,20 @@ function handleNotification(data) {
     toast(data.text || '', data.level || 'info');
     switch (data.event) {
         case 'removed':
-            setTimeout(() => { location.href = '/dashboard/'; }, 1600);
+            setTimeout(() => { location.href = EXIT_URL; }, 1600);
             break;
         case 'waiting_room_approved':
             setTimeout(() => location.reload(), 600);
             break;
         case 'waiting_room_denied':
-            setTimeout(() => { location.href = '/dashboard/'; }, 1600);
+            setTimeout(() => { location.href = EXIT_URL; }, 1600);
             break;
         case 'muted':
             Media.forceMute();
             break;
         case 'unmute_requested':
-            if (confirmAction('میزبان از شما خواست میکروفون را روشن کنید. روشن شود؟')) {
-                Media.toggleMicrophone();
-            }
+            confirmDialog('درخواست میزبان', 'میزبان از شما خواست میکروفون را روشن کنید. روشن شود؟', { okLabel: 'روشن کردن' })
+                .then((ok) => { if (ok) Media.toggleMicrophone(); });
             break;
         default:
             break;
@@ -415,7 +466,7 @@ function setSessionUI(live) {
 }
 
 // ---------------------------------------------------------------------------
-// Tabs, drawers, controls
+// Tabs, drawers, layouts
 // ---------------------------------------------------------------------------
 function initTabs() {
     document.querySelectorAll('.side-tab').forEach((tab) => {
@@ -435,6 +486,24 @@ function activateTab(name) {
     if (name === 'chat') ChatClient.resetUnread();
 }
 
+function initLayouts() {
+    const buttons = document.querySelectorAll('.layout-btn');
+    const apply = (mode, persist = true) => {
+        buttons.forEach((b) => {
+            const on = b.dataset.layout === mode;
+            b.classList.toggle('active', on);
+            b.setAttribute('aria-pressed', String(on));
+        });
+        Media.setLayout(mode);
+        void persist;
+    };
+    buttons.forEach((b) => b.addEventListener('click', () => apply(b.dataset.layout)));
+    apply(Media.layout, false); // restore persisted choice
+}
+
+// ---------------------------------------------------------------------------
+// Control bar
+// ---------------------------------------------------------------------------
 function initControls() {
     const bind = (id, fn) => document.getElementById(id)?.addEventListener('click', fn);
 
@@ -467,21 +536,22 @@ function initControls() {
     });
     bind('btn-exit-screen', () => switchView('media'));
     bind('btn-exit-presentation', () => switchView('media'));
-    bind('btn-exit', () => {
-        if (confirmAction('از کلاس خارج شوید؟')) {
-            root.querySelector('form[action*="/leave/"]').submit();
+    bind('btn-exit', async () => {
+        if (await confirmDialog('خروج از کلاس', 'از کلاس خارج شوید؟ برای ورود مجدد باید دوباره به کلاس بپیوندید.', { danger: true, okLabel: 'خروج' })) {
+            document.getElementById('leave-submit').form.submit();
         }
     });
+    bind('btn-more', () => toggleMoreMenu());
 
     if (PRIVILEGED) {
         bind('btn-mute-all', async () => {
-            if (!confirmAction('همهٔ شرکت‌کنندگان بی‌صدا شوند؟')) return;
+            if (!await confirmDialog('بی‌صدا کردن همه', 'همهٔ شرکت‌کنندگان بی‌صدا شوند؟', { okLabel: 'بی‌صدا کن' })) return;
             await api('/mute-all/');
         });
         bind('btn-lock', async () => {
             const badge = document.getElementById('lock-badge');
             const willLock = !badge;
-            if (willLock && !confirmAction('کلاس قفل شود؟ ورود اعضای جدید مسدود می‌شود.')) return;
+            if (willLock && !await confirmDialog('قفل کردن کلاس', 'کلاس قفل شود؟ ورود اعضای جدید مسدود می‌شود.', { okLabel: 'قفل کن' })) return;
             await api('/lock/', { locked: willLock });
         });
         bind('btn-session', async () => {
@@ -490,8 +560,9 @@ function initControls() {
                 await api('/sessions/start/');
             } else {
                 const sid = root.dataset.liveSession;
-                if (sid) await api(`/sessions/${sid}/end/`);
-                else toast('شناسهٔ جلسه یافت نشد؛ صفحه را تازه کنید.', 'warning');
+                if (!sid) return toast('شناسهٔ جلسه یافت نشد؛ صفحه را تازه کنید.', 'warning');
+                if (!await confirmDialog('پایان جلسه', 'جلسهٔ جاری پایان یابد؟ گزارش حضور ثبت می‌شود.', { danger: true, okLabel: 'پایان جلسه' })) return;
+                await api(`/sessions/${sid}/end/`);
             }
         });
         initSettingsModal();
@@ -513,11 +584,184 @@ function refreshControlStates() {
 }
 
 // ---------------------------------------------------------------------------
+// "More" menu — permission-filtered
+// ---------------------------------------------------------------------------
+function toggleMoreMenu(force) {
+    const menu = document.getElementById('more-menu');
+    const btn = document.getElementById('btn-more');
+    const show = force !== undefined ? force : menu.classList.contains('hidden');
+    menu.classList.toggle('hidden', !show);
+    btn.setAttribute('aria-expanded', String(show));
+    if (show) menu.querySelector('button')?.focus();
+}
+
+function initMoreMenu() {
+    document.addEventListener('click', (e) => {
+        const menu = document.getElementById('more-menu');
+        if (!menu.classList.contains('hidden') &&
+            !menu.contains(e.target) && e.target.closest('#btn-more') === null) {
+            toggleMoreMenu(false);
+        }
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') toggleMoreMenu(false);
+    });
+
+    const bind = (id, fn) => document.getElementById(id)?.addEventListener('click', () => { toggleMoreMenu(false); fn(); });
+    bind('menu-devices', openDevicesDialog);
+    bind('menu-theme', () => {
+        const order = ['system', 'light', 'dark'];
+        const next = order[(order.indexOf(window.UITheme.preference) + 1) % order.length];
+        window.UITheme.set(next);
+        toast(`پوسته: ${{ system: 'خودکار', light: 'روشن', dark: 'تیره' }[next]}`, 'info', 1800);
+    });
+    bind('menu-settings', () => document.getElementById('settings-dialog')?.showModal());
+    bind('menu-shortcuts', showShortcuts);
+    bind('menu-help', showHelp);
+    bind('menu-report', showReport);
+    document.getElementById('menu-manage')?.addEventListener('click', (e) => {
+        window.open(e.currentTarget.dataset.href, '_blank', 'noopener');
+        toggleMoreMenu(false);
+    });
+}
+
+function showShortcuts() {
+    infoDialog('کلیدهای میان‌بر', `
+        <ul class="shortcut-list">
+            <li><kbd>M</kbd> قطع/وصل میکروفون</li>
+            <li><kbd>V</kbd> قطع/وصل دوربین</li>
+            <li><kbd>C</kbd> باز/بستن گفتگو</li>
+            <li><kbd>P</kbd> باز/بستن شرکت‌کنندگان</li>
+            <li><kbd>S</kbd> شروع/پایان اشتراک صفحه</li>
+        </ul>
+        <p class="muted small">هنگام تایپ در فیلدهای متنی، میان‌برها غیرفعال‌اند.</p>`);
+}
+
+function showHelp() {
+    infoDialog('راهنمای کلاس', `
+        <ul class="shortcut-list">
+            <li>🎤📹 از نوار پایین میکروفون و دوربین را کنترل کنید.</li>
+            <li>✋ با «دست بالا» از میزبان اجازهٔ صحبت بگیرید.</li>
+            <li>▦ چیدمان صحنه را از دکمه‌های بالای ویدیوها تغییر دهید؛ انتخاب شما ذخیره می‌شود.</li>
+            <li>⋯ منوی «بیشتر»: دستگاه‌ها، پوسته، تنظیمات و گزارش مشکل.</li>
+            <li>🔒 دسترسی‌ها (میکروفون، دوربین، تخته، گفتگو) توسط میزبان مدیریت می‌شود.</li>
+        </ul>`);
+}
+
+function showReport() {
+    const wrap = document.createElement('div');
+    wrap.innerHTML = `
+        <p class="muted">مشکل را کوتاه توضیح دهید تا میزبان در جریان قرار گیرد.</p>
+        <div class="field"><textarea id="report-text" rows="4" maxlength="500" placeholder="مثلاً: صدای من قطع می‌شود…"></textarea></div>`;
+    infoDialog('گزارش مشکل', wrap, 'ارسال').then(() => {
+        const text = (wrap.querySelector('#report-text')?.value || '').trim();
+        if (text) {
+            ChatClient.send(`🚩 گزارش مشکل: ${text.slice(0, 300)}`);
+            toast('گزارش شما ارسال شد.', 'success');
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Devices dialog — change devices mid-class, no rejoin
+// ---------------------------------------------------------------------------
+async function openDevicesDialog() {
+    const dialog = document.getElementById('devices-dialog');
+    const camSel = document.getElementById('dev-camera');
+    const micSel = document.getElementById('dev-mic');
+    const spkSel = document.getElementById('dev-speaker');
+    const feedback = document.getElementById('dev-feedback');
+
+    const devices = await Media.listDevices();
+    const fill = (sel, kind, fallback) => {
+        const current = sel.value;
+        sel.innerHTML = '';
+        const items = devices.filter((d) => d.kind === kind);
+        items.forEach((d, i) => {
+            const opt = document.createElement('option');
+            opt.value = d.deviceId;
+            opt.textContent = d.label || `${fallback} ${i + 1}`;
+            sel.appendChild(opt);
+        });
+        if (!items.length) {
+            const opt = document.createElement('option');
+            opt.textContent = `بدون ${fallback}`;
+            sel.appendChild(opt);
+        }
+        if (current) sel.value = current;
+    };
+    fill(camSel, 'videoinput', 'دوربین');
+    fill(micSel, 'audioinput', 'میکروفون');
+    fill(spkSel, 'audiooutput', 'بلندگو');
+    if (!('setSinkId' in HTMLAudioElement.prototype)) {
+        spkSel.disabled = true;
+        spkSel.title = 'انتخاب بلندگو در این مرورگر پشتیبانی نمی‌شود';
+    }
+    feedback.textContent = '';
+    dialog.showModal();
+}
+
+function initDevicesDialog() {
+    const dialog = document.getElementById('devices-dialog');
+    document.getElementById('devices-close').addEventListener('click', () => dialog.close());
+    document.getElementById('devices-apply').addEventListener('click', async () => {
+        const feedback = document.getElementById('dev-feedback');
+        feedback.textContent = 'در حال اعمال…';
+        try {
+            const cam = document.getElementById('dev-camera').value;
+            const mic = document.getElementById('dev-mic').value;
+            const spk = document.getElementById('dev-speaker').value;
+            if (cam) await Media.setCameraDevice(cam);
+            if (mic) await Media.setMicDevice(mic);
+            if (spk) await Media.setOutputDevice(spk);
+            feedback.textContent = '✅ دستگاه‌ها اعمال شد.';
+            setTimeout(() => dialog.close(), 700);
+        } catch (err) {
+            feedback.textContent = `اعمال ناموفق بود: ${err.message || ''}`;
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Keyboard shortcuts — disabled while typing
+// ---------------------------------------------------------------------------
+function initShortcuts() {
+    document.addEventListener('keydown', (e) => {
+        if (e.ctrlKey || e.metaKey || e.altKey) return;
+        const t = e.target;
+        if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+        const key = e.key.toLowerCase();
+        if (key === 'm') { e.preventDefault(); Media.toggleMicrophone(); }
+        else if (key === 'v') { e.preventDefault(); Media.toggleCamera(); }
+        else if (key === 'c') { e.preventDefault(); document.getElementById('btn-chat')?.click(); }
+        else if (key === 'p') { e.preventDefault(); document.getElementById('btn-people')?.click(); }
+        else if (key === 's') { e.preventDefault(); Media.toggleScreenShare(); }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Connection quality pill (real metrics: LiveKit stats + WS RTT)
+// ---------------------------------------------------------------------------
+function onQualityChange(quality) {
+    const el = document.getElementById('conn-quality');
+    if (!el) return;
+    if (!quality || quality === 'unknown') {
+        el.classList.add('hidden');
+        return;
+    }
+    el.classList.remove('hidden');
+    const icons = { excellent: '📶', good: '📶', poor: '📵', lost: '❌', reconnecting: '🔄' };
+    el.textContent = `${icons[quality] || '📶'} ${qualityLabel(quality)}`;
+    el.className = `conn-quality q-${quality}`;
+    presence._updateTitle();
+}
+
+// ---------------------------------------------------------------------------
 // Settings modal (host)
 // ---------------------------------------------------------------------------
 function initSettingsModal() {
     const dialog = document.getElementById('settings-dialog');
-    document.getElementById('btn-settings')?.addEventListener('click', () => dialog.showModal());
+    document.getElementById('settings-x')?.addEventListener('click', () => dialog.close());
     document.getElementById('settings-cancel').addEventListener('click', () => dialog.close());
     document.getElementById('settings-save').addEventListener('click', async () => {
         const form = document.getElementById('settings-form');
@@ -664,24 +908,32 @@ function initClock() {
 // Boot
 // ---------------------------------------------------------------------------
 presence.connect();
-ChatClient.connect(ROOM_CODE, USER_ID, PRIVILEGED);
-Whiteboard.init({ roomCode: ROOM_CODE, userId: USER_ID, canDraw: PERMISSIONS.can_use_whiteboard });
+ChatClient.connect(ROOM_CODE, IDENTITY, PRIVILEGED);
+Whiteboard.init({ roomCode: ROOM_CODE, identity: IDENTITY, canDraw: PERMISSIONS.can_use_whiteboard });
 await Media.init({
     roomCode: ROOM_CODE,
-    currentUserId: USER_ID,
+    currentIdentity: IDENTITY,
     permissions: PERMISSIONS,
     mediaUrl: MEDIA_URL,
     mediaEnabled: MEDIA_ENABLED,
     onStateChange: (state) => presence.send({ action: 'media_state', ...state }),
+    onQualityChange,
 });
 initTabs();
+initLayouts();
 initControls();
+initMoreMenu();
+initDevicesDialog();
+initShortcuts();
 initFiles();
 initRosterTools();
 initClock();
 refreshControlStates();
 if (!PERMISSIONS.can_send_messages) {
     ChatClient.setSendEnabled(false, 'شما اجازهٔ ارسال پیام ندارید.');
+}
+if (SHOW_CHAT) {
+    activateTab('chat');
 }
 
 // Periodic keepalive so idle proxies don't drop the presence socket.

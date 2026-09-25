@@ -37,10 +37,10 @@ from .models import Classroom, ClassroomMember
 from .services import (
     attendance_join,
     attendance_leave,
-    get_active_member,
+    member_group,
     participant_payload,
+    resolve_scope_member,
     set_hand_raised,
-    user_group,
 )
 
 logger = logging.getLogger(__name__)
@@ -56,18 +56,18 @@ class ClassroomConsumer(AsyncJsonWebsocketConsumer):
         self.classroom = None
         self.user = self.scope.get("user")
 
-        if self.user is None or not self.user.is_authenticated:
-            await self.close(code=4401)  # unauthorized
-            return
-
-        # Server-side authorisation: only active members may connect.
+        # Server-side authorisation: only active members (registered or
+        # session-bound guests) may connect.
         self.classroom, self.member = await self._load_membership()
         if self.member is None:
-            await self.close(code=4403)  # forbidden
+            code = 4403
+            if self.user is None or not getattr(self.user, "is_authenticated", False):
+                code = 4401 if not self.scope.get("session") else 4403
+            await self.close(code=code)
             return
 
         await self.channel_layer.group_add(self.group_name, self.channel_name)
-        await self.channel_layer.group_add(user_group(self.room_code, self.user.id), self.channel_name)
+        await self.channel_layer.group_add(member_group(self.room_code, self.member.id), self.channel_name)
         await self.accept()
 
         await self._start_attendance()
@@ -93,7 +93,7 @@ class ClassroomConsumer(AsyncJsonWebsocketConsumer):
             {"type": "presence.user_left", "participant": await self._self_payload()},
         )
         await self.channel_layer.group_discard(self.group_name, self.channel_name)
-        await self.channel_layer.group_discard(user_group(self.room_code, self.user.id), self.channel_name)
+        await self.channel_layer.group_discard(member_group(self.room_code, self.member.id), self.channel_name)
 
     # ------------------------------------------------------------------
     # Client → server
@@ -155,10 +155,7 @@ class ClassroomConsumer(AsyncJsonWebsocketConsumer):
     # ------------------------------------------------------------------
     @database_sync_to_async
     def _load_membership(self):
-        classroom = Classroom.objects.filter(room_code=self.room_code, is_active=True).first()
-        if classroom is None:
-            return None, None
-        return classroom, get_active_member(classroom, self.user)
+        return resolve_scope_member(self.scope, self.room_code)
 
     @database_sync_to_async
     def _participant_snapshot(self) -> list[dict]:
@@ -184,17 +181,15 @@ class ClassroomConsumer(AsyncJsonWebsocketConsumer):
 
     @database_sync_to_async
     def _self_payload(self) -> dict:
-        member = ClassroomMember.objects.filter(
-            classroom__room_code=self.room_code, user=self.user
-        ).select_related("user").first()
-        return participant_payload(member) if member else {"user_id": self.user.id, "name": self.user.name}
+        member = ClassroomMember.objects.filter(id=self.member.id).select_related("user").first()
+        return participant_payload(member) if member else {"identity": "", "name": ""}
 
     @database_sync_to_async
     def _effective_permissions(self) -> dict:
         from .permissions import effective_permissions
 
         classroom = Classroom.objects.filter(room_code=self.room_code).first()
-        member = ClassroomMember.objects.filter(classroom=classroom, user=self.user).first()
+        member = ClassroomMember.objects.filter(id=self.member.id).first()
         if classroom is None:
             return {}
         return effective_permissions(member, classroom)
@@ -205,9 +200,11 @@ class ClassroomConsumer(AsyncJsonWebsocketConsumer):
 
     @database_sync_to_async
     def _start_attendance(self) -> None:
-        if not self.member.in_waiting_room:
-            attendance_join(self.classroom, self.user)
+        member = ClassroomMember.objects.filter(id=self.member.id).first()
+        if member and not member.in_waiting_room:
+            attendance_join(self.classroom, member)
 
     @database_sync_to_async
     def _stop_attendance(self) -> None:
-        attendance_leave(self.classroom, self.user)
+        member = ClassroomMember.objects.filter(id=self.member.id).first()
+        attendance_leave(self.classroom, member)

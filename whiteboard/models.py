@@ -42,10 +42,12 @@ class WhiteboardEvent(models.Model):
     actor = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         null=True,
+        blank=True,
         on_delete=models.SET_NULL,
         related_name="whiteboard_events",
         verbose_name="کاربر",
     )
+    actor_identity = models.CharField(max_length=48, default="", verbose_name="شناسهٔ کاربر")
     operation = models.JSONField(verbose_name="عملیات")
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="زمان")
 

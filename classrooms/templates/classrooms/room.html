@@ -3,6 +3,16 @@
 {% block title %}{{ classroom.title }}{% endblock %}
 {% block extra_css %}
 <link rel="stylesheet" href="{% static 'css/room.css' %}">
+<style>
+  {% if classroom.accent_color %}
+  #classroom-root {
+    --accent: {{ classroom.accent_color }};
+    --accent-hover: {{ classroom.accent_color }};
+    --accent-contrast: #fff;
+    --accent-soft: color-mix(in srgb, {{ classroom.accent_color }} 16%, transparent);
+  }
+  {% endif %}
+</style>
 {% endblock %}
 
 {% block content %}
@@ -10,29 +20,33 @@
 {{ permissions|json_script:"member-permissions" }}
 <div class="room" id="classroom-root"
      data-room-code="{{ classroom.room_code }}"
-     data-user-id="{{ user.id }}"
+     data-identity="{{ member.identity }}"
      data-member-id="{{ member.id }}"
-     data-user-name="{{ user.name }}"
+     data-participant-name="{{ member.participant_name }}"
+     data-is-guest="{{ member.is_guest|yesno:'1,0' }}"
      data-privileged="{{ is_privileged|yesno:'1,0' }}"
      data-live-session="{{ live_session.id|default:'' }}"
      data-media-url="{{ media.url }}"
-     data-media-enabled="{{ media.enabled|yesno:'1,0' }}">
+     data-media-enabled="{{ media.enabled|yesno:'1,0' }}"
+     data-show-chat="{{ classroom.show_chat_default|yesno:'1,0' }}">
 
     <header class="room-header">
         <div class="room-title">
+            {% if classroom.logo %}<img class="room-logo" src="{{ classroom.logo.url }}" alt="">{% endif %}
             <h1>{{ classroom.title }}</h1>
             <span class="badge badge-info" id="role-badge">{{ member.get_role_display }}</span>
             {% if live_session %}<span class="live-dot" title="جلسه در حال برگزاری">● LIVE</span>{% endif %}
             {% if classroom.is_locked %}<span class="badge badge-warn" id="lock-badge">🔒 قفل</span>{% endif %}
         </div>
         <div class="room-header-actions">
-            <span class="conn-pill" id="conn-status" role="status" aria-live="polite">
+            <span class="conn-pill" id="conn-status" role="status" aria-live="polite" title="وضعیت اتصال">
                 <span class="conn-dot"></span><span class="conn-text">در حال اتصال…</span>
+                <span class="conn-quality hidden" id="conn-quality" aria-label="کیفیت اتصال"></span>
             </span>
             <span class="room-clock" id="room-clock" aria-label="ساعت">--:--</span>
-            <form method="post" action="{% url 'room:leave' classroom.room_code %}">
+            <form method="post" action="{% url 'room:leave' classroom.room_code %}" hidden>
                 {% csrf_token %}
-                <button type="submit" class="btn btn-danger btn-sm">خروج از کلاس</button>
+                <button type="submit" id="leave-submit">خروج از کلاس</button>
             </form>
         </div>
     </header>
@@ -42,9 +56,15 @@
             <!-- ===== stage: media grid / screen share / whiteboard / presentation ===== -->
             <div class="stage" id="stage">
                 <div class="stage-view" id="view-media">
+                    <div class="stage-toolbar" role="group" aria-label="چیدمان نمایش">
+                        <button type="button" class="layout-btn active" data-layout="grid" aria-pressed="true" title="چیدمان شبکه‌ای">▦ شبکه</button>
+                        <button type="button" class="layout-btn" data-layout="speaker" aria-pressed="false" title="سخنران">🎙 سخنران</button>
+                        <button type="button" class="layout-btn" data-layout="focus" aria-pressed="false" title="تمرکز (فقط سخنران)">◎ تمرکز</button>
+                        <button type="button" class="layout-btn" data-layout="presentation" aria-pressed="false" title="ارائه">📽 ارائه</button>
+                    </div>
                     <div class="tiles" id="tiles" data-count="1"></div>
                     <div class="stage-empty" id="stage-empty">
-                        <div class="self-avatar">{{ user.name|first }}</div>
+                        <div class="self-avatar">{{ member.participant_name|first }}</div>
                         <p id="stage-empty-text">در حال اتصال به سرور رسانه…</p>
                     </div>
                 </div>
@@ -118,6 +138,9 @@
                         <button class="chip" data-filter="MODERATOR">مدیر</button>
                     </div>
                 </div>
+                <div class="skeleton-list" id="roster-skeleton" aria-hidden="true">
+                    <div class="skeleton-row"></div><div class="skeleton-row"></div><div class="skeleton-row"></div>
+                </div>
                 <ul class="participant-list" id="participant-list" aria-live="polite"></ul>
             </section>
 
@@ -136,7 +159,7 @@
                     <label class="btn btn-ghost btn-sm btn-block" for="file-input">📎 بارگذاری فایل</label>
                     <input type="file" id="file-input" class="hidden"
                            accept=".pdf,.png,.jpg,.jpeg,.docx,.pptx,.xlsx,.zip" aria-label="انتخاب فایل">
-                    <small class="muted">PDF، PNG، JPG، DOCX، PPTX، XLSX، ZIP — حداکثر {{ 25 }}MB</small>
+                    <small class="muted">PDF، PNG، JPG، DOCX، PPTX، XLSX، ZIP — حداکثر ۲۵ مگابایت</small>
                     <div class="upload-progress hidden" id="upload-progress"></div>
                 </form>
                 <ul class="file-list" id="file-list" aria-label="فایل‌های کلاس">
@@ -147,7 +170,7 @@
                                 <small class="muted">{{ f.uploader.name }} · {{ f.size_display }} · {{ f.uploaded_at|date:"m/d H:i" }}</small>
                             </div>
                             <div class="file-actions">
-                                <a class="btn btn-sm btn-ghost" href="{% url 'room:file_download' classroom.room_code f.id %}" download>⬇</a>
+                                <a class="btn btn-sm btn-ghost" href="{% url 'room:file_download' classroom.room_code f.id %}}" download>⬇</a>
                                 <button type="button" class="btn btn-sm btn-ghost present-btn hidden" data-present="{{ f.id }}" title="ارائه این فایل">📽</button>
                             </div>
                         </li>
@@ -158,37 +181,106 @@
     </div>
 
     <footer class="room-controls">
-        <button type="button" class="ctrl-btn" id="btn-mic" title="میکروفون" aria-label="میکروفون">🎤</button>
-        <button type="button" class="ctrl-btn" id="btn-camera" title="دوربین" aria-label="دوربین">📹</button>
-        <button type="button" class="ctrl-btn" id="btn-screen" title="اشتراک صفحه" aria-label="اشتراک صفحه">🖥️</button>
-        <button type="button" class="ctrl-btn" id="btn-whiteboard" title="تخته سفید" aria-label="تخته سفید">🧑‍🏫</button>
-        <button type="button" class="ctrl-btn" id="btn-hand" title="بالا بردن دست" aria-label="بالا بردن دست">✋</button>
-        <button type="button" class="ctrl-btn side-toggle" id="btn-chat" title="گفتگو" aria-label="گفتگو">💬</button>
-        <button type="button" class="ctrl-btn side-toggle" id="btn-people" title="شرکت‌کنندگان" aria-label="شرکت‌کنندگان">👥</button>
+        <button type="button" class="ctrl-btn" id="btn-mic" title="میکروفون (M)" aria-label="میکروفون" aria-pressed="false">
+            <span class="ctrl-icon" aria-hidden="true">🎤</span><span class="ctrl-label">صدا</span>
+        </button>
+        <button type="button" class="ctrl-btn" id="btn-camera" title="دوربین (V)" aria-label="دوربین" aria-pressed="false">
+            <span class="ctrl-icon" aria-hidden="true">📹</span><span class="ctrl-label">تصویر</span>
+        </button>
+        <button type="button" class="ctrl-btn" id="btn-screen" title="اشتراک صفحه (S)" aria-label="اشتراک صفحه">
+            <span class="ctrl-icon" aria-hidden="true">🖥️</span><span class="ctrl-label">صفحه</span>
+        </button>
+        <button type="button" class="ctrl-btn" id="btn-whiteboard" title="تخته سفید" aria-label="تخته سفید">
+            <span class="ctrl-icon" aria-hidden="true">🧑‍🏫</span><span class="ctrl-label">تخته</span>
+        </button>
+        <button type="button" class="ctrl-btn" id="btn-hand" title="بالا بردن دست" aria-label="بالا بردن دست" aria-pressed="false">
+            <span class="ctrl-icon" aria-hidden="true">✋</span><span class="ctrl-label">دست</span>
+        </button>
+        <button type="button" class="ctrl-btn side-toggle" id="btn-chat" title="گفتگو (C)" aria-label="گفتگو">
+            <span class="ctrl-icon" aria-hidden="true">💬</span><span class="ctrl-label">گفتگو</span>
+        </button>
+        <button type="button" class="ctrl-btn side-toggle" id="btn-people" title="شرکت‌کنندگان (P)" aria-label="شرکت‌کنندگان">
+            <span class="ctrl-icon" aria-hidden="true">👥</span><span class="ctrl-label">افراد</span>
+        </button>
         {% if is_privileged %}
-            <button type="button" class="ctrl-btn host-only" id="btn-mute-all" title="بی‌صدا کردن همه" aria-label="بی‌صدا کردن همه">🔇</button>
-            <button type="button" class="ctrl-btn host-only" id="btn-lock" title="قفل کلاس" aria-label="قفل کلاس">🔒</button>
-            <button type="button" class="ctrl-btn host-only" id="btn-settings" title="تنظیمات کلاس" aria-label="تنظیمات کلاس">⚙️</button>
-            <button type="button" class="ctrl-btn host-only" id="btn-session" title="شروع/پایان جلسه" aria-label="مدیریت جلسه">⏺️</button>
+            <button type="button" class="ctrl-btn host-only" id="btn-mute-all" title="بی‌صدا کردن همه" aria-label="بی‌صدا کردن همه">
+                <span class="ctrl-icon" aria-hidden="true">🔇</span><span class="ctrl-label">سکوت همه</span>
+            </button>
+            <button type="button" class="ctrl-btn host-only" id="btn-lock" title="قفل کلاس" aria-label="قفل کلاس">
+                <span class="ctrl-icon" aria-hidden="true">🔒</span><span class="ctrl-label">قفل</span>
+            </button>
+            <button type="button" class="ctrl-btn host-only" id="btn-session" title="شروع/پایان جلسه" aria-label="مدیریت جلسه">
+                <span class="ctrl-icon" aria-hidden="true">⏺️</span><span class="ctrl-label">جلسه</span>
+            </button>
         {% endif %}
-        <button type="button" class="ctrl-btn ctrl-exit" id="btn-exit" title="خروج" aria-label="خروج">📞</button>
+        <button type="button" class="ctrl-btn" id="btn-more" title="بیشتر" aria-label="منوی بیشتر" aria-haspopup="true" aria-expanded="false">
+            <span class="ctrl-icon" aria-hidden="true">⋯</span><span class="ctrl-label">بیشتر</span>
+        </button>
+        <button type="button" class="ctrl-btn ctrl-exit" id="btn-exit" title="خروج از کلاس" aria-label="خروج از کلاس">
+            <span class="ctrl-icon" aria-hidden="true">📞</span><span class="ctrl-label">خروج</span>
+        </button>
+
+        <!-- ===== more menu ===== -->
+        <div class="more-menu hidden" id="more-menu" role="menu" aria-label="منوی بیشتر">
+            <button type="button" role="menuitem" id="menu-devices">⚙️ تنظیمات دستگاه‌ها</button>
+            <button type="button" role="menuitem" id="menu-theme">🌓 تغییر پوسته</button>
+            {% if is_privileged %}
+                <button type="button" role="menuitem" id="menu-settings">🛠 تنظیمات کلاس</button>
+                <button type="button" role="menuitem" id="menu-manage" data-href="{% url 'classrooms:detail' classroom.room_code %}">🗂 صفحهٔ مدیریت کلاس</button>
+            {% endif %}
+            <button type="button" role="menuitem" id="menu-shortcuts">⌨️ کلیدهای میان‌بر</button>
+            <button type="button" role="menuitem" id="menu-help">❓ راهنما</button>
+            <button type="button" role="menuitem" id="menu-report">🚩 گزارش مشکل</button>
+        </div>
     </footer>
 </div>
 
+<!-- ===== devices dialog ===== -->
+<dialog class="app-dialog" id="devices-dialog" aria-label="تنظیمات دستگاه‌ها">
+    <div class="app-dialog-head">
+        <h2 class="app-dialog-title">تنظیمات دستگاه‌ها</h2>
+        <button type="button" class="app-dialog-x" id="devices-close" aria-label="بستن">✕</button>
+    </div>
+    <div class="app-dialog-body">
+        <p class="muted small">تغییر دستگاه‌ها بدون خروج از کلاس انجام می‌شود.</p>
+        <div class="field">
+            <label for="dev-camera">دوربین</label>
+            <select id="dev-camera"></select>
+        </div>
+        <div class="field">
+            <label for="dev-mic">میکروفون</label>
+            <select id="dev-mic"></select>
+        </div>
+        <div class="field">
+            <label for="dev-speaker">بلندگو</label>
+            <select id="dev-speaker"></select>
+        </div>
+        <p id="dev-feedback" class="field-help" role="status"></p>
+    </div>
+    <div class="app-dialog-actions">
+        <button type="button" class="btn btn-primary" id="devices-apply">اعمال</button>
+    </div>
+</dialog>
+
 <!-- ===== settings modal (host) ===== -->
-<dialog class="settings-dialog" id="settings-dialog" aria-label="تنظیمات کلاس">
+<dialog class="app-dialog settings-dialog" id="settings-dialog" aria-label="تنظیمات کلاس">
     <form method="dialog" class="settings-form" id="settings-form">
-        <h2>تنظیمات کلاس</h2>
-        <label class="switch-row"><input type="checkbox" name="enable_waiting_room" {% if classroom.enable_waiting_room %}checked{% endif %}> اتاق انتظار (تأیید ورود توسط میزبان)</label>
-        <label class="switch-row"><input type="checkbox" name="allow_student_mic" {% if classroom.allow_student_mic %}checked{% endif %}> میکروفون دانش‌آموزان</label>
-        <label class="switch-row"><input type="checkbox" name="allow_student_camera" {% if classroom.allow_student_camera %}checked{% endif %}> دوربین دانش‌آموزان</label>
-        <label class="switch-row"><input type="checkbox" name="allow_student_chat" {% if classroom.allow_student_chat %}checked{% endif %}> گفتگوی دانش‌آموزان</label>
-        <label class="switch-row"><input type="checkbox" name="allow_student_screen_share" {% if classroom.allow_student_screen_share %}checked{% endif %}> اشتراک صفحهٔ دانش‌آموزان</label>
-        <label class="switch-row"><input type="checkbox" name="allow_student_whiteboard" {% if classroom.allow_student_whiteboard %}checked{% endif %}> تختهٔ دانش‌آموزان</label>
-        <label class="switch-row"><input type="checkbox" name="allow_file_upload" {% if classroom.allow_file_upload %}checked{% endif %}> بارگذاری فایل توسط غیرمالک</label>
-        <label class="switch-row"><input type="checkbox" name="chat_disabled" {% if classroom.chat_disabled %}checked{% endif %}> قطع کامل گفتگو</label>
-        <label class="switch-row"><input type="checkbox" name="is_locked" {% if classroom.is_locked %}checked{% endif %}> 🔒 قفل کردن کلاس (ورود اعضای جدید مسدود)</label>
-        <div class="settings-actions">
+        <div class="app-dialog-head">
+            <h2 class="app-dialog-title">تنظیمات کلاس</h2>
+            <button type="button" class="app-dialog-x" id="settings-x" aria-label="بستن">✕</button>
+        </div>
+        <div class="app-dialog-body">
+            <label class="switch-row"><input type="checkbox" name="enable_waiting_room" {% if classroom.enable_waiting_room %}checked{% endif %}> اتاق انتظار (تأیید ورود توسط میزبان)</label>
+            <label class="switch-row"><input type="checkbox" name="allow_student_mic" {% if classroom.allow_student_mic %}checked{% endif %}> میکروفون دانش‌آموزان</label>
+            <label class="switch-row"><input type="checkbox" name="allow_student_camera" {% if classroom.allow_student_camera %}checked{% endif %}> دوربین دانش‌آموزان</label>
+            <label class="switch-row"><input type="checkbox" name="allow_student_chat" {% if classroom.allow_student_chat %}checked{% endif %}> گفتگوی دانش‌آموزان</label>
+            <label class="switch-row"><input type="checkbox" name="allow_student_screen_share" {% if classroom.allow_student_screen_share %}checked{% endif %}> اشتراک صفحهٔ دانش‌آموزان</label>
+            <label class="switch-row"><input type="checkbox" name="allow_student_whiteboard" {% if classroom.allow_student_whiteboard %}checked{% endif %}> تختهٔ دانش‌آموزان</label>
+            <label class="switch-row"><input type="checkbox" name="allow_file_upload" {% if classroom.allow_file_upload %}checked{% endif %}> بارگذاری فایل توسط غیرمالک</label>
+            <label class="switch-row"><input type="checkbox" name="chat_disabled" {% if classroom.chat_disabled %}checked{% endif %}> قطع کامل گفتگو</label>
+            <label class="switch-row"><input type="checkbox" name="is_locked" {% if classroom.is_locked %}checked{% endif %}> 🔒 قفل کردن کلاس (ورود اعضای جدید مسدود)</label>
+        </div>
+        <div class="app-dialog-actions">
             <button type="button" class="btn btn-ghost" id="settings-cancel">انصراف</button>
             <button type="button" class="btn btn-primary" id="settings-save">ذخیره</button>
         </div>

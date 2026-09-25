@@ -8,12 +8,14 @@ authorisation check, persists the change and then broadcasts an event.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import timedelta
 
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
+from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.utils import timezone
 
@@ -36,9 +38,9 @@ def classroom_group(room_code: str) -> str:
     return f"classroom_{room_code}"
 
 
-def user_group(room_code: str, user_id: int) -> str:
-    """Per-user group inside a classroom, for targeted notifications."""
-    return f"classroom_{room_code}_user_{user_id}"
+def member_group(room_code: str, member_id: int) -> str:
+    """Per-participant group inside a classroom, for targeted notifications."""
+    return f"classroom_{room_code}_member_{member_id}"
 
 
 class ClassroomAccessError(Exception):
@@ -72,24 +74,25 @@ PASSWORD_MAX_ATTEMPTS = 5
 PASSWORD_LOCK_SECONDS = 120
 
 
-def _attempts_key(classroom: Classroom, user: User) -> str:
-    return f"classpw:{classroom.id}:{user.id}"
+def _attempts_key(classroom: Classroom, who) -> str:
+    """Rate-limit key — works for User objects and guest name strings."""
+    return f"classpw:{classroom.id}:{getattr(who, 'id', who)}"
 
 
-def register_failed_password(classroom: Classroom, user: User) -> None:
-    key = _attempts_key(classroom, user)
+def register_failed_password(classroom: Classroom, who) -> None:
+    key = _attempts_key(classroom, who)
     try:
         cache.incr(key)
     except ValueError:
         cache.set(key, 1, PASSWORD_LOCK_SECONDS)
 
 
-def password_attempts_blocked(classroom: Classroom, user: User) -> bool:
-    return (cache.get(_attempts_key(classroom, user)) or 0) >= PASSWORD_MAX_ATTEMPTS
+def password_attempts_blocked(classroom: Classroom, who) -> bool:
+    return (cache.get(_attempts_key(classroom, who)) or 0) >= PASSWORD_MAX_ATTEMPTS
 
 
-def reset_password_attempts(classroom: Classroom, user: User) -> None:
-    cache.delete(_attempts_key(classroom, user))
+def reset_password_attempts(classroom: Classroom, who) -> None:
+    cache.delete(_attempts_key(classroom, who))
 
 
 # ---------------------------------------------------------------------------
@@ -113,15 +116,141 @@ def create_classroom(
 
 
 def get_member(classroom: Classroom, user: User) -> ClassroomMember | None:
-    return ClassroomMember.objects.filter(classroom=classroom, user=user).first()
+    return ClassroomMember.objects.filter(classroom=classroom, user=user).select_related("user").first()
 
 
 def get_active_member(classroom: Classroom, user: User) -> ClassroomMember | None:
-    return ClassroomMember.objects.filter(classroom=classroom, user=user, is_active=True).first()
+    # select_related keeps participant_name usable from async consumers
+    return (
+        ClassroomMember.objects.filter(classroom=classroom, user=user, is_active=True)
+        .select_related("user")
+        .first()
+    )
+
+
+def get_guest_member(classroom: Classroom, guest_uid: str) -> ClassroomMember | None:
+    """Resolve a guest by the uid stored in THEIR session (never trusted
+    from any other source)."""
+    if not guest_uid:
+        return None
+    return ClassroomMember.objects.filter(
+        classroom=classroom, guest_uid=guest_uid, is_guest=True, is_active=True
+    ).first()
+
+
+def resolve_member(request, classroom: Classroom) -> ClassroomMember | None:
+    """The participant behind an HTTP request: registered user or session guest."""
+    user = getattr(request, "user", None)
+    if user is not None and user.is_authenticated:
+        return get_active_member(classroom, user)
+    return get_guest_member(classroom, request.session.get(guest_session_key(classroom)))
+
+
+def guest_session_key(classroom: Classroom) -> str:
+    return f"guest_member_{classroom.room_code}"
+
+
+def resolve_scope_member(scope, room_code: str):
+    """Resolve (classroom, member) from a WebSocket scope.
+
+    Registered users come from ``scope['user']`` (session cookie via
+    AuthMiddlewareStack); guests from the guest uid stored in THEIR
+    Django session (SessionMiddlewareStack).  Nothing from the message
+    payload is ever trusted.
+    """
+    classroom = Classroom.objects.filter(room_code=room_code, is_active=True).first()
+    if classroom is None:
+        return None, None
+    user = scope.get("user")
+    if user is not None and getattr(user, "is_authenticated", False):
+        return classroom, get_active_member(classroom, user)
+    session = scope.get("session")
+    guest_uid = session.get(guest_session_key(classroom)) if session else None
+    return classroom, get_guest_member(classroom, guest_uid)
 
 
 def is_banned(member: ClassroomMember | None) -> bool:
     return bool(member and member.banned_until and member.banned_until > timezone.now())
+
+
+# ---------------------------------------------------------------------------
+# Guest display names
+# ---------------------------------------------------------------------------
+GUEST_NAME_MIN = 2
+GUEST_NAME_MAX = 40
+
+
+def validate_display_name(raw: str) -> str:
+    """Trim + length rules; strip anything that looks like markup.
+
+    Names are escaped at every render point (Django autoescape / JS
+    textContent), and angle brackets are additionally removed here so a
+    stored name can never smuggle HTML into any consumer of the data.
+    """
+    name = re.sub(r"[<>]", "", str(raw or "")).strip()
+    name = re.sub(r"\s+", " ", name)
+    if len(name) < GUEST_NAME_MIN:
+        raise ValidationError(f"نام باید حداقل {GUEST_NAME_MIN} نویسه باشد.")
+    if len(name) > GUEST_NAME_MAX:
+        raise ValidationError(f"نام نمی‌تواند بیشتر از {GUEST_NAME_MAX} نویسه باشد.")
+    return name
+
+
+def unique_display_name(classroom: Classroom, name: str) -> str:
+    """«Ali», then «Ali (2)», «Ali (3)» … within the classroom."""
+    members = ClassroomMember.objects.filter(classroom=classroom).select_related("user")
+    existing = {m.participant_name for m in members}
+    if name not in existing:
+        return name
+    i = 2
+    while f"{name} ({i})" in existing:
+        i += 1
+    return f"{name} ({i})"
+
+
+@transaction.atomic
+def join_classroom_guest(classroom: Classroom, raw_name: str, raw_password: str = "") -> ClassroomMember:
+    """Join as a guest — no Django account is created.
+
+    Same gates as registered joins: active classroom → guests allowed →
+    not locked → password (rate-limited, keyed by name+room) → optional
+    waiting room.
+    """
+    if not classroom.is_active:
+        raise ClassroomAccessError("این کلاس غیرفعال است.")
+    if not classroom.allow_guests:
+        raise ClassroomAccessError("ورود به این کلاس فقط برای کاربران ثبت‌نام‌شده ممکن است.")
+    if classroom.is_locked:
+        raise ClassroomLocked("کلاس توسط میزبان قفل شده است.")
+
+    name = validate_display_name(raw_name)
+
+    if classroom.is_password_protected:
+        if password_attempts_blocked(classroom, name):  # type: ignore[arg-type]
+            raise TooManyAttempts("تلاش‌های ناموفق بیش از حد مجاز است؛ کمی بعد دوباره تلاش کنید.")
+        if not classroom.check_password(raw_password):
+            register_failed_password(classroom, name)  # type: ignore[arg-type]
+            raise WrongClassroomPassword("رمز کلاس اشتباه است.")
+        reset_password_attempts(classroom, name)  # type: ignore[arg-type]
+
+    member = ClassroomMember.objects.create(
+        classroom=classroom,
+        user=None,
+        role=Role.GUEST,
+        is_guest=True,
+        display_name=unique_display_name(classroom, name),
+        is_active=True,
+        in_waiting_room=classroom.enable_waiting_room,
+    )
+    broadcast(classroom.room_code, {
+        "type": "waiting_room_entry" if member.in_waiting_room else "user_joined",
+        "participant": participant_payload(member),
+    })
+    logger.info(
+        "guest_joined",
+        extra={"room_code": classroom.room_code, "guest": member.guest_uid, "waiting": member.in_waiting_room},
+    )
+    return member
 
 
 def _password_already_verified(classroom: Classroom, user: User) -> bool:
@@ -209,20 +338,27 @@ def broadcast(room_code: str, payload: dict) -> None:
     )
 
 
-def notify_user(room_code: str, user_id: int, payload: dict) -> None:
-    """Send a targeted notification to a single participant."""
+def notify_member(room_code: str, member: ClassroomMember, payload: dict) -> None:
+    """Send a targeted notification to a single participant (user or guest)."""
     payload = {**payload, "type": payload.get("type", "notification")}
     async_to_sync(get_channel_layer().group_send)(
-        user_group(room_code, user_id), {"type": "classroom.notification", "payload": payload}
+        member_group(room_code, member.id), {"type": "classroom.notification", "payload": payload}
     )
 
 
 def participant_payload(member: ClassroomMember) -> dict:
-    """Public participant data — no sensitive fields are ever exposed."""
+    """Public participant data — no sensitive fields are ever exposed.
+
+    ``identity`` is the client-side key (``u:<id>`` / ``g:<uid>``); the
+    database pk only appears as ``member_id`` for host-control endpoints,
+    which re-validate everything server-side.
+    """
     return {
         "member_id": member.id,
+        "identity": member.identity,
         "user_id": member.user_id,
-        "name": member.user.name,
+        "is_guest": member.is_guest,
+        "name": member.participant_name,
         "role": member.role,
         "role_label": member.get_role_display(),
         "muted": member.muted,
@@ -281,7 +417,7 @@ def set_member_permission(classroom: Classroom, operator: User, member_id: int, 
         target.camera_disabled = False
     target.save()
     perms = effective_permissions(target, classroom)
-    notify_user(classroom.room_code, target.user_id, {
+    notify_member(classroom.room_code, target, {
         "type": "notification",
         "text": f"دسترسی «{permission}» شما {'فعال' if perms[permission] else 'غیرفعال'} شد.",
         "level": "info",
@@ -289,6 +425,7 @@ def set_member_permission(classroom: Classroom, operator: User, member_id: int, 
     broadcast(classroom.room_code, {
         "type": "permission_changed",
         "member_id": target.id,
+        "identity": target.identity,
         "user_id": target.user_id,
         "permission": permission,
         "value": bool(value),
@@ -307,7 +444,7 @@ def set_member_role(classroom: Classroom, owner: User, member_id: int, role: str
     target.role = role
     apply_role_defaults(target)
     target.save()
-    notify_user(classroom.room_code, target.user_id, {
+    notify_member(classroom.room_code, target, {
         "type": "notification",
         "text": f"نقش شما به «{target.get_role_display()}» تغییر کرد.",
         "level": "success",
@@ -316,6 +453,7 @@ def set_member_role(classroom: Classroom, owner: User, member_id: int, role: str
     broadcast(classroom.room_code, {
         "type": "role_changed",
         "member_id": target.id,
+        "identity": target.identity,
         "user_id": target.user_id,
         "role": role,
         "role_label": target.get_role_display(),
@@ -331,12 +469,13 @@ def set_member_muted(classroom: Classroom, operator: User, member_id: int, muted
     target.muted = bool(muted)
     target.save(update_fields=["muted"])
     if muted:
-        notify_user(classroom.room_code, target.user_id, {
+        notify_member(classroom.room_code, target, {
             "type": "notification", "text": "میکروفون شما توسط مدیر بی‌صدا شد.",
             "level": "warning", "event": "muted",
         })
     broadcast(classroom.room_code, {
-        "type": "participant_muted", "member_id": target.id, "user_id": target.user_id, "muted": bool(muted),
+        "type": "participant_muted", "member_id": target.id, "identity": target.identity,
+        "user_id": target.user_id, "muted": bool(muted),
     })
 
 
@@ -344,7 +483,7 @@ def request_unmute(classroom: Classroom, operator: User, member_id: int) -> None
     """Ask a muted participant to unmute (notification only)."""
     _require_privileged(classroom, operator)
     target = _target_member(classroom, member_id)
-    notify_user(classroom.room_code, target.user_id, {
+    notify_member(classroom.room_code, target, {
         "type": "notification", "text": "میزبان از شما خواست میکروفون را روشن کنید.",
         "level": "info", "event": "unmute_requested",
     })
@@ -355,7 +494,7 @@ def mute_all(classroom: Classroom, operator: User) -> int:
     targets = ClassroomMember.objects.filter(classroom=classroom, is_active=True).exclude(id=actor.id)
     count = targets.update(muted=True)
     for member in targets.select_related("user"):
-        notify_user(classroom.room_code, member.user_id, {
+        notify_member(classroom.room_code, member, {
             "type": "notification", "text": "همهٔ شرکت‌کنندگان توسط میزبان بی‌صدا شدند.",
             "level": "warning", "event": "muted",
         })
@@ -375,11 +514,12 @@ def remove_member(classroom: Classroom, operator: User, member_id: int, ban_minu
     if ban_minutes > 0:
         target.banned_until = timezone.now() + timedelta(minutes=ban_minutes)
     target.save(update_fields=["is_active", "in_waiting_room", "hand_raised_at", "banned_until"])
-    notify_user(classroom.room_code, target.user_id, {
+    notify_member(classroom.room_code, target, {
         "type": "notification", "text": "شما از کلاس خارج شدید.", "level": "error", "event": "removed",
     })
     broadcast(classroom.room_code, {
-        "type": "participant_removed", "member_id": target.id, "user_id": target.user_id,
+        "type": "participant_removed", "member_id": target.id, "identity": target.identity,
+        "user_id": target.user_id,
     })
     logger.info("participant_removed", extra={"room_code": classroom.room_code, "target": target.user_id})
 
@@ -391,7 +531,7 @@ def approve_waiting_room(classroom: Classroom, operator: User, member_id: int) -
         raise PermissionDenied()
     target.in_waiting_room = False
     target.save(update_fields=["in_waiting_room"])
-    notify_user(classroom.room_code, target.user_id, {
+    notify_member(classroom.room_code, target, {
         "type": "notification", "text": "ورود شما تأیید شد؛ در حال ورود به کلاس…",
         "level": "success", "event": "waiting_room_approved",
     })
@@ -405,7 +545,7 @@ def deny_waiting_room(classroom: Classroom, operator: User, member_id: int) -> N
     target.is_active = False
     target.in_waiting_room = False
     target.save(update_fields=["is_active", "in_waiting_room"])
-    notify_user(classroom.room_code, target.user_id, {
+    notify_member(classroom.room_code, target, {
         "type": "notification", "text": "درخواست ورود شما رد شد.", "level": "error", "event": "waiting_room_denied",
     })
 
@@ -513,38 +653,39 @@ def end_session(session: ClassroomSession, host: User) -> ClassroomSession:
     return session
 
 
-def attendance_join(classroom: Classroom, user: User) -> AttendanceRecord | None:
-    """Open an attendance interval if a session is live."""
+def attendance_join(classroom: Classroom, member: ClassroomMember) -> AttendanceRecord | None:
+    """Open an attendance interval if a session is live (guests included)."""
     session = get_live_session(classroom)
-    member = get_active_member(classroom, user)
     if session is None or member is None or member.in_waiting_room:
         return None
-    return AttendanceRecord.objects.create(session=session, member=member, user=user)
+    return AttendanceRecord.objects.create(session=session, member=member, user=member.user)
 
 
-def attendance_leave(classroom: Classroom, user: User) -> None:
-    """Close this user's open attendance intervals for the live session."""
+def attendance_leave(classroom: Classroom, member: ClassroomMember) -> None:
+    """Close this participant's open attendance intervals for the live session."""
     session = get_live_session(classroom)
-    if session is None:
+    if session is None or member is None:
         return
-    AttendanceRecord.objects.filter(session=session, user=user, left_at__isnull=True).update(
+    AttendanceRecord.objects.filter(session=session, member=member, left_at__isnull=True).update(
         left_at=timezone.now()
     )
 
 
 def attendance_summary(session: ClassroomSession) -> list[dict]:
-    """Per-user totals for a session (multiple intervals aggregated)."""
+    """Per-participant totals for a session (multiple intervals aggregated)."""
     from django.db.models import Count
 
     rows = (
-        session.attendance.values("user_id", "user__username")
+        session.attendance.select_related("member", "member__user")
+        .values("member_id")
         .annotate(joins=Count("id"))
-        .order_by("user_id")
+        .order_by("member_id")
     )
     result = []
     for row in rows:
+        member = ClassroomMember.objects.filter(id=row["member_id"]).select_related("user").first()
         intervals = list(
-            AttendanceRecord.objects.filter(session=session, user_id=row["user_id"]).values_list(
+            AttendanceRecord.objects.filter(session=session, member_id=row["member_id"]).values_list(
                 "joined_at", "left_at"
             )
         )
@@ -553,8 +694,8 @@ def attendance_summary(session: ClassroomSession) -> list[dict]:
             end = left or timezone.now()
             total += int((end - joined).total_seconds())
         result.append({
-            "user_id": row["user_id"],
-            "username": row["user__username"],
+            "member_id": row["member_id"],
+            "username": member.participant_name if member else "—",
             "joins": row["joins"],
             "total_seconds": total,
         })
