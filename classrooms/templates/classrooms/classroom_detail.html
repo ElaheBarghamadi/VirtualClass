@@ -17,6 +17,7 @@
     <dl class="meta-list wide">
         <div><dt>وضعیت</dt><dd>{% if classroom.is_active %}فعال{% else %}غیرفعال{% endif %}</dd></div>
         <div><dt>محافظت با رمز</dt><dd>{% if classroom.is_password_protected %}بله{% else %}خیر{% endif %}</dd></div>
+        <div><dt>قفل کلاس</dt><dd>{% if classroom.is_locked %}🔒 قفل{% else %}باز{% endif %}</dd></div>
         <div><dt>توضیحات</dt><dd>{{ classroom.description|default:"—" }}</dd></div>
     </dl>
     <div class="card-actions">
@@ -31,26 +32,79 @@
     </div>
 </div>
 
-<h2 class="section-title">شرکت‌کنندگان ({{ members|length }})</h2>
-<div class="card">
-    <table class="data-table">
-        <thead>
-            <tr><th>کاربر</th><th>نقش</th><th>زمان عضویت</th></tr>
-        </thead>
-        <tbody>
-            {% for m in members %}
-                <tr>
-                    <td>{{ m.user.name }}</td>
-                    <td><span class="badge badge-info">{{ m.get_role_display }}</span></td>
-                    <td>{{ m.joined_at|date:"Y/m/d H:i" }}</td>
-                </tr>
-            {% empty %}
-                <tr><td colspan="3" class="muted">هنوز کسی عضو نشده است.</td></tr>
-            {% endfor %}
-        </tbody>
-    </table>
-    <p class="muted small">
-        مدیریت سطح دسترسی شرکت‌کنندگان (میکروفون، دوربین، تخته و…) از معماری آماده‌شده در نسخه‌های بعدی در همین صفحه فعال می‌شود.
-    </p>
+<div class="two-col">
+    <div>
+        <h2 class="section-title">تنظیمات کلاس</h2>
+        <div class="card form-card">
+            <form method="post">
+                {% csrf_token %}
+                {% for field in settings_form %}
+                    <label class="switch-row">
+                        {{ field }} <span>{{ field.label }}</span>
+                    </label>
+                {% endfor %}
+                <button type="submit" name="save_settings" class="btn btn-primary">ذخیرهٔ تنظیمات</button>
+            </form>
+        </div>
+
+        <h2 class="section-title">زمان‌بندی جلسهٔ جدید</h2>
+        <div class="card form-card">
+            <form method="post" novalidate>
+                {% csrf_token %}
+                {% for field in schedule_form %}
+                    <div class="field">
+                        <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+                        {{ field }}
+                        {% if field.errors %}<p class="field-error">{{ field.errors.0 }}</p>{% endif %}
+                    </div>
+                {% endfor %}
+                <button type="submit" name="schedule_session" class="btn btn-primary">زمان‌بندی جلسه</button>
+            </form>
+        </div>
+    </div>
+
+    <div>
+        <h2 class="section-title">جلسات</h2>
+        <div class="card">
+            <table class="data-table">
+                <thead><tr><th>عنوان</th><th>وضعیت</th><th>شروع</th><th>حضور</th></tr></thead>
+                <tbody>
+                    {% for s in sessions %}
+                        <tr>
+                            <td>{{ s.title|default:"—" }}</td>
+                            <td><span class="badge {% if s.status == 'LIVE' %}badge-success{% elif s.status == 'ENDED' %}badge-muted{% else %}badge-info{% endif %}">{{ s.get_status_display }}</span></td>
+                            <td>{{ s.scheduled_start|date:"m/d H:i"|default:s.started_at|date:"m/d H:i" }}</td>
+                            <td>
+                                {% if s.status == 'ENDED' %}
+                                    <a class="btn btn-sm btn-ghost" href="{% url 'room:attendance' classroom.room_code s.id %}">گزارش</a>
+                                {% else %}—{% endif %}
+                            </td>
+                        </tr>
+                    {% empty %}
+                        <tr><td colspan="4" class="muted">جلسه‌ای ثبت نشده است.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <h2 class="section-title">شرکت‌کنندگان ({{ members|length }})</h2>
+        <div class="card">
+            <table class="data-table">
+                <thead><tr><th>کاربر</th><th>نقش</th><th>زمان عضویت</th></tr></thead>
+                <tbody>
+                    {% for m in members %}
+                        <tr>
+                            <td>{{ m.user.name }}</td>
+                            <td><span class="badge badge-info">{{ m.get_role_display }}</span></td>
+                            <td>{{ m.joined_at|date:"Y/m/d H:i" }}</td>
+                        </tr>
+                    {% empty %}
+                        <tr><td colspan="3" class="muted">هنوز کسی عضو نشده است.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            <p class="muted small">مدیریت زندهٔ نقش‌ها، بی‌صدا کردن، اتاق انتظار و سطح دسترسی شرکت‌کنندگان از داخل صفحهٔ کلاس (پنل میزبان) انجام می‌شود.</p>
+        </div>
+    </div>
 </div>
 {% endblock %}

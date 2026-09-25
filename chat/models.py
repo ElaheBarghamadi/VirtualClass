@@ -24,6 +24,9 @@ class ChatMessage(models.Model):
     )
     message = models.TextField(verbose_name="متن پیام")
     created_at = models.DateTimeField(auto_now_add=True, db_index=True, verbose_name="زمان ارسال")
+    # Moderation: privileged users can soft-delete a message; the row is
+    # kept so the audit trail (and future automated moderation) survives.
+    is_deleted = models.BooleanField(default=False, verbose_name="حذف‌شده توسط مدیر")
 
     class Meta:
         verbose_name = "پیام گفتگو"
@@ -42,6 +45,7 @@ class ChatMessage(models.Model):
             "id": self.id,
             "sender_id": self.sender_id,
             "sender_name": self.sender.name,
-            "message": self.message,
+            "message": "" if self.is_deleted else self.message,
+            "is_deleted": self.is_deleted,
             "created_at": self.created_at.isoformat(),
         }

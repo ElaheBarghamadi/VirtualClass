@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% load static %}
+{% block title %}اتاق انتظار — {{ classroom.title }}{% endblock %}
+{% block content %}
+<div class="lobby-wrapper" id="waiting-root" data-room-code="{{ classroom.room_code }}">
+    <div class="card lobby-card">
+        <h1 class="lobby-title">اتاق انتظار</h1>
+        <p class="muted">{{ classroom.title }}</p>
+        <div class="waiting-spinner" aria-hidden="true"></div>
+        <p>میزبان هنوز ورود شما را تأیید نکرده است.<br>لطفاً منتظر بمانید…</p>
+        <p class="muted small" id="waiting-status">متصل به کلاس…</p>
+        <a class="btn btn-ghost btn-block" href="{% url 'dashboard' %}">بازگشت به داشبورد</a>
+    </div>
+</div>
+{% endblock %}
+{% block extra_js %}
+<script>
+    // Wait for the host's approval notification, then enter the room.
+    (function () {
+        const root = document.getElementById('waiting-root');
+        const code = root.dataset.roomCode;
+        const status = document.getElementById('waiting-status');
+        let retry = 1000;
+
+        function connect() {
+            const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+            const ws = new WebSocket(`${proto}://${location.host}/ws/classroom/${code}/`);
+            ws.onopen = () => { status.textContent = 'در انتظار تأیید میزبان…'; retry = 1000; };
+            ws.onmessage = (evt) => {
+                const data = JSON.parse(evt.data);
+                if (data.type === 'notification' && data.event === 'waiting_room_approved') {
+                    status.textContent = 'ورود تأیید شد…';
+                    location.href = `/class/${code}/room/`;
+                } else if (data.type === 'notification' && data.event === 'waiting_room_denied') {
+                    status.textContent = 'درخواست شما رد شد.';
+                }
+            };
+            ws.onclose = () => setTimeout(connect, retry = Math.min(retry * 2, 15000));
+        }
+        connect();
+    })();
+</script>
+{% endblock %}

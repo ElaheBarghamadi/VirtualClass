@@ -1,17 +1,44 @@
 """Business logic for classrooms — shared by views, consumers and API.
 
 Keeping this layer separate means HTTP views stay thin and WebSocket
-consumers reuse exactly the same rules (membership, passwords, roles).
+consumers reuse exactly the same rules (membership, passwords, roles,
+locks, bans, waiting room).  Every host action lives here, performs its
+authorisation check, persists the change and then broadcasts an event.
 """
 from __future__ import annotations
 
-from django.contrib.auth import get_user_model
-from django.db import transaction
+import logging
+from datetime import timedelta
 
-from .models import Classroom, ClassroomMember
-from .permissions import Role
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
+from django.contrib.auth import get_user_model
+from django.core.cache import cache
+from django.db import transaction
+from django.utils import timezone
+
+from .models import AttendanceRecord, Classroom, ClassroomMember, ClassroomSession
+from .permissions import (
+    PRIVILEGED_ROLES,
+    Role,
+    apply_role_defaults,
+    effective_permissions,
+    is_privileged,
+    permission_fields,
+)
+
+logger = logging.getLogger("classrooms.services")
 
 User = get_user_model()
+
+# Broadcast channel group names ------------------------------------------------
+def classroom_group(room_code: str) -> str:
+    return f"classroom_{room_code}"
+
+
+def user_group(room_code: str, user_id: int) -> str:
+    """Per-user group inside a classroom, for targeted notifications."""
+    return f"classroom_{room_code}_user_{user_id}"
 
 
 class ClassroomAccessError(Exception):
@@ -22,6 +49,52 @@ class WrongClassroomPassword(ClassroomAccessError):
     """Raised when the supplied classroom password is incorrect."""
 
 
+class ClassroomLocked(ClassroomAccessError):
+    """Raised when the classroom is locked by its owner."""
+
+
+class UserBanned(ClassroomAccessError):
+    """Raised when the user is temporarily banned from this classroom."""
+
+
+class TooManyAttempts(ClassroomAccessError):
+    """Raised when password guessing is rate-limited."""
+
+
+class PermissionDenied(Exception):
+    """Raised when the acting user may not perform a host action."""
+
+
+# ---------------------------------------------------------------------------
+# Rate limiting for classroom passwords (cache backed: Redis in production)
+# ---------------------------------------------------------------------------
+PASSWORD_MAX_ATTEMPTS = 5
+PASSWORD_LOCK_SECONDS = 120
+
+
+def _attempts_key(classroom: Classroom, user: User) -> str:
+    return f"classpw:{classroom.id}:{user.id}"
+
+
+def register_failed_password(classroom: Classroom, user: User) -> None:
+    key = _attempts_key(classroom, user)
+    try:
+        cache.incr(key)
+    except ValueError:
+        cache.set(key, 1, PASSWORD_LOCK_SECONDS)
+
+
+def password_attempts_blocked(classroom: Classroom, user: User) -> bool:
+    return (cache.get(_attempts_key(classroom, user)) or 0) >= PASSWORD_MAX_ATTEMPTS
+
+
+def reset_password_attempts(classroom: Classroom, user: User) -> None:
+    cache.delete(_attempts_key(classroom, user))
+
+
+# ---------------------------------------------------------------------------
+# Classroom lifecycle
+# ---------------------------------------------------------------------------
 @transaction.atomic
 def create_classroom(
     owner: User,
@@ -34,54 +107,455 @@ def create_classroom(
     classroom = Classroom(owner=owner, title=title, description=description)
     classroom.set_password(password if is_password_protected else None)
     classroom.save()
-    ClassroomMember.objects.create(
-        classroom=classroom, user=owner, role=Role.OWNER, is_active=True
-    )
+    ClassroomMember.objects.create(classroom=classroom, user=owner, role=Role.OWNER, is_active=True)
+    logger.info("classroom_created", extra={"room_code": classroom.room_code, "owner_id": owner.id})
     return classroom
 
 
 def get_member(classroom: Classroom, user: User) -> ClassroomMember | None:
-    """Return the membership row for a user (active or not), or ``None``."""
     return ClassroomMember.objects.filter(classroom=classroom, user=user).first()
 
 
 def get_active_member(classroom: Classroom, user: User) -> ClassroomMember | None:
-    """Return only an *active* membership, or ``None``."""
-    return ClassroomMember.objects.filter(
-        classroom=classroom, user=user, is_active=True
-    ).first()
+    return ClassroomMember.objects.filter(classroom=classroom, user=user, is_active=True).first()
+
+
+def is_banned(member: ClassroomMember | None) -> bool:
+    return bool(member and member.banned_until and member.banned_until > timezone.now())
+
+
+def _password_already_verified(classroom: Classroom, user: User) -> bool:
+    """An active member passed the password gate when they first joined."""
+    if not classroom.is_password_protected:
+        return True
+    return bool(
+        ClassroomMember.objects.filter(classroom=classroom, user=user, is_active=True).exists()
+    )
 
 
 @transaction.atomic
 def join_classroom(classroom: Classroom, user: User, raw_password: str = "") -> ClassroomMember:
     """Join (or re-activate membership in) a classroom.
 
-    Raises ``WrongClassroomPassword`` when the classroom requires a
-    password and the supplied one is wrong.  Password verification is
-    always performed server-side.
+    Server-side checks, in order: active classroom → not banned → not
+    locked (existing members may re-enter) → password (rate-limited).
+    New students go to the waiting room when the owner enabled it.
     """
     if not classroom.is_active:
         raise ClassroomAccessError("این کلاس غیرفعال است.")
-    if classroom.is_password_protected and not classroom.check_password(raw_password):
-        raise WrongClassroomPassword("رمز کلاس اشتباه است.")
 
-    member, _created = ClassroomMember.objects.update_or_create(
-        classroom=classroom,
-        user=user,
-        defaults={"is_active": True},
-    )
+    existing = get_member(classroom, user)
+    returning_member = existing is not None and existing.is_active
+
+    if is_banned(existing):
+        raise UserBanned("ورود شما به این کلاس موقتاً مسدود است.")
+
+    if classroom.is_locked and not returning_member:
+        raise ClassroomLocked("کلاس توسط میزبان قفل شده است.")
+
+    if not _password_already_verified(classroom, user):
+        if password_attempts_blocked(classroom, user):
+            raise TooManyAttempts("تلاش‌های ناموفق بیش از حد مجاز است؛ کمی بعد دوباره تلاش کنید.")
+        if not classroom.check_password(raw_password):
+            register_failed_password(classroom, user)
+            raise WrongClassroomPassword("رمز کلاس اشتباه است.")
+        reset_password_attempts(classroom, user)
+
+    if existing is None:
+        waiting = classroom.enable_waiting_room
+        member = ClassroomMember.objects.create(
+            classroom=classroom,
+            user=user,
+            role=Role.STUDENT,
+            is_active=True,
+            in_waiting_room=waiting,
+        )
+        broadcast(classroom.room_code, {
+            "type": "waiting_room_entry" if waiting else "user_joined",
+            "participant": participant_payload(member),
+        })
+        logger.info(
+            "participant_joined",
+            extra={"room_code": classroom.room_code, "user_id": user.id, "waiting": waiting},
+        )
+    else:
+        member = existing
+        member.is_active = True
+        member.banned_until = None
+        member.save(update_fields=["is_active", "banned_until"])
     return member
 
 
 def leave_classroom(classroom: Classroom, user: User) -> None:
-    """Mark a membership inactive (history is preserved)."""
     ClassroomMember.objects.filter(classroom=classroom, user=user).update(is_active=False)
 
 
 def active_members(classroom: Classroom) -> list[ClassroomMember]:
-    """All active members, ordered by role."""
     return list(
         ClassroomMember.objects.filter(classroom=classroom, is_active=True)
         .select_related("user")
         .order_by("role", "joined_at")
     )
+
+
+# ---------------------------------------------------------------------------
+# Broadcasting helpers
+# ---------------------------------------------------------------------------
+def broadcast(room_code: str, payload: dict) -> None:
+    """Send an event to everyone connected to the classroom."""
+    payload = {**payload, "type": payload.get("type", "event")}
+    async_to_sync(get_channel_layer().group_send)(
+        classroom_group(room_code), {"type": "classroom.event", "payload": payload}
+    )
+
+
+def notify_user(room_code: str, user_id: int, payload: dict) -> None:
+    """Send a targeted notification to a single participant."""
+    payload = {**payload, "type": payload.get("type", "notification")}
+    async_to_sync(get_channel_layer().group_send)(
+        user_group(room_code, user_id), {"type": "classroom.notification", "payload": payload}
+    )
+
+
+def participant_payload(member: ClassroomMember) -> dict:
+    """Public participant data — no sensitive fields are ever exposed."""
+    return {
+        "member_id": member.id,
+        "user_id": member.user_id,
+        "name": member.user.name,
+        "role": member.role,
+        "role_label": member.get_role_display(),
+        "muted": member.muted,
+        "camera_disabled": member.camera_disabled,
+        "hand_raised": member.hand_raised_at is not None,
+        "hand_raised_at": member.hand_raised_at.isoformat() if member.hand_raised_at else None,
+        "in_waiting_room": member.in_waiting_room,
+        "joined_at": member.joined_at.isoformat(),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Host actions — each validates the operator, mutates, then broadcasts
+# ---------------------------------------------------------------------------
+def _require_privileged(classroom: Classroom, operator: User) -> ClassroomMember:
+    member = get_active_member(classroom, operator)
+    if not is_privileged(member):
+        raise PermissionDenied("شما اجازهٔ این عملیات را ندارید.")
+    return member
+
+
+def _require_owner(classroom: Classroom, operator: User) -> ClassroomMember:
+    member = get_active_member(classroom, operator)
+    if member is None or member.role != Role.OWNER:
+        raise PermissionDenied("این عملیات فقط برای مالک کلاس مجاز است.")
+    return member
+
+
+def _target_member(classroom: Classroom, member_id: int) -> ClassroomMember:
+    member = ClassroomMember.objects.filter(id=member_id, classroom=classroom).select_related("user").first()
+    if member is None:
+        raise ClassroomAccessError("عضو مورد نظر یافت نشد.")
+    return member
+
+
+def _can_manage(actor: ClassroomMember, target: ClassroomMember) -> bool:
+    """Owner manages everyone (except themselves); moderators manage non-privileged."""
+    if actor.id == target.id:
+        return False
+    if actor.role == Role.OWNER:
+        return True
+    return target.role not in PRIVILEGED_ROLES
+
+
+def set_member_permission(classroom: Classroom, operator: User, member_id: int, permission: str, value: bool) -> None:
+    actor = _require_privileged(classroom, operator)
+    if permission not in permission_fields():
+        raise ValueError(f"Unknown permission: {permission!r}")
+    target = _target_member(classroom, member_id)
+    if not _can_manage(actor, target):
+        raise PermissionDenied("اجازهٔ مدیریت این عضو را ندارید.")
+    setattr(target, permission, bool(value))
+    if permission == "can_use_microphone" and value:
+        target.muted = False  # granting mic rights lifts a moderator mute
+    if permission == "can_use_camera" and value:
+        target.camera_disabled = False
+    target.save()
+    perms = effective_permissions(target, classroom)
+    notify_user(classroom.room_code, target.user_id, {
+        "type": "notification",
+        "text": f"دسترسی «{permission}» شما {'فعال' if perms[permission] else 'غیرفعال'} شد.",
+        "level": "info",
+    })
+    broadcast(classroom.room_code, {
+        "type": "permission_changed",
+        "member_id": target.id,
+        "user_id": target.user_id,
+        "permission": permission,
+        "value": bool(value),
+    })
+    logger.info("permission_changed", extra={"room_code": classroom.room_code, "target": target.user_id, "permission": permission})
+
+
+def set_member_role(classroom: Classroom, owner: User, member_id: int, role: str) -> None:
+    """Role assignment is OWNER-only (spec: owner assigns MODERATOR/PRESENTER)."""
+    _require_owner(classroom, owner)
+    if role not in Role.values or role == Role.OWNER:
+        raise ValueError("نقش نامعتبر است.")
+    target = _target_member(classroom, member_id)
+    if target.role == Role.OWNER:
+        raise PermissionDenied("نقش مالک قابل تغییر نیست.")
+    target.role = role
+    apply_role_defaults(target)
+    target.save()
+    notify_user(classroom.room_code, target.user_id, {
+        "type": "notification",
+        "text": f"نقش شما به «{target.get_role_display()}» تغییر کرد.",
+        "level": "success",
+        "event": "role_changed",
+    })
+    broadcast(classroom.room_code, {
+        "type": "role_changed",
+        "member_id": target.id,
+        "user_id": target.user_id,
+        "role": role,
+        "role_label": target.get_role_display(),
+    })
+    logger.info("role_changed", extra={"room_code": classroom.room_code, "target": target.user_id, "role": role})
+
+
+def set_member_muted(classroom: Classroom, operator: User, member_id: int, muted: bool) -> None:
+    actor = _require_privileged(classroom, operator)
+    target = _target_member(classroom, member_id)
+    if not _can_manage(actor, target):
+        raise PermissionDenied("اجازهٔ مدیریت این عضو را ندارید.")
+    target.muted = bool(muted)
+    target.save(update_fields=["muted"])
+    if muted:
+        notify_user(classroom.room_code, target.user_id, {
+            "type": "notification", "text": "میکروفون شما توسط مدیر بی‌صدا شد.",
+            "level": "warning", "event": "muted",
+        })
+    broadcast(classroom.room_code, {
+        "type": "participant_muted", "member_id": target.id, "user_id": target.user_id, "muted": bool(muted),
+    })
+
+
+def request_unmute(classroom: Classroom, operator: User, member_id: int) -> None:
+    """Ask a muted participant to unmute (notification only)."""
+    _require_privileged(classroom, operator)
+    target = _target_member(classroom, member_id)
+    notify_user(classroom.room_code, target.user_id, {
+        "type": "notification", "text": "میزبان از شما خواست میکروفون را روشن کنید.",
+        "level": "info", "event": "unmute_requested",
+    })
+
+
+def mute_all(classroom: Classroom, operator: User) -> int:
+    actor = _require_privileged(classroom, operator)
+    targets = ClassroomMember.objects.filter(classroom=classroom, is_active=True).exclude(id=actor.id)
+    count = targets.update(muted=True)
+    for member in targets.select_related("user"):
+        notify_user(classroom.room_code, member.user_id, {
+            "type": "notification", "text": "همهٔ شرکت‌کنندگان توسط میزبان بی‌صدا شدند.",
+            "level": "warning", "event": "muted",
+        })
+    broadcast(classroom.room_code, {"type": "mute_all", "except_member_id": actor.id})
+    return count
+
+
+def remove_member(classroom: Classroom, operator: User, member_id: int, ban_minutes: int = 0) -> None:
+    """Remove a participant; optionally ban re-entry for N minutes."""
+    actor = _require_privileged(classroom, operator)
+    target = _target_member(classroom, member_id)
+    if not _can_manage(actor, target):
+        raise PermissionDenied("اجازهٔ مدیریت این عضو را ندارید.")
+    target.is_active = False
+    target.in_waiting_room = False
+    target.hand_raised_at = None
+    if ban_minutes > 0:
+        target.banned_until = timezone.now() + timedelta(minutes=ban_minutes)
+    target.save(update_fields=["is_active", "in_waiting_room", "hand_raised_at", "banned_until"])
+    notify_user(classroom.room_code, target.user_id, {
+        "type": "notification", "text": "شما از کلاس خارج شدید.", "level": "error", "event": "removed",
+    })
+    broadcast(classroom.room_code, {
+        "type": "participant_removed", "member_id": target.id, "user_id": target.user_id,
+    })
+    logger.info("participant_removed", extra={"room_code": classroom.room_code, "target": target.user_id})
+
+
+def approve_waiting_room(classroom: Classroom, operator: User, member_id: int) -> None:
+    actor = _require_privileged(classroom, operator)
+    target = _target_member(classroom, member_id)
+    if not _can_manage(actor, target) and actor.role != Role.OWNER:
+        raise PermissionDenied()
+    target.in_waiting_room = False
+    target.save(update_fields=["in_waiting_room"])
+    notify_user(classroom.room_code, target.user_id, {
+        "type": "notification", "text": "ورود شما تأیید شد؛ در حال ورود به کلاس…",
+        "level": "success", "event": "waiting_room_approved",
+    })
+
+
+def deny_waiting_room(classroom: Classroom, operator: User, member_id: int) -> None:
+    actor = _require_privileged(classroom, operator)
+    target = _target_member(classroom, member_id)
+    if not _can_manage(actor, target) and actor.role != Role.OWNER:
+        raise PermissionDenied()
+    target.is_active = False
+    target.in_waiting_room = False
+    target.save(update_fields=["is_active", "in_waiting_room"])
+    notify_user(classroom.room_code, target.user_id, {
+        "type": "notification", "text": "درخواست ورود شما رد شد.", "level": "error", "event": "waiting_room_denied",
+    })
+
+
+def set_classroom_locked(classroom: Classroom, owner: User, locked: bool) -> None:
+    _require_owner(classroom, owner)
+    classroom.is_locked = bool(locked)
+    classroom.save(update_fields=["is_locked", "updated_at"])
+    broadcast(classroom.room_code, {
+        "type": "classroom_locked" if locked else "classroom_unlocked",
+        "text": "کلاس قفل شد؛ ورود اعضای جدید مسدود است." if locked else "قفل کلاس باز شد.",
+    })
+
+
+SETTING_FIELDS = (
+    "enable_waiting_room",
+    "allow_student_chat",
+    "allow_student_mic",
+    "allow_student_camera",
+    "allow_student_screen_share",
+    "allow_student_whiteboard",
+    "allow_file_upload",
+    "chat_disabled",
+)
+
+
+def update_settings(classroom: Classroom, owner: User, values: dict) -> None:
+    _require_owner(classroom, owner)
+    applied = {k: bool(v) for k, v in values.items() if k in SETTING_FIELDS}
+    for field, value in applied.items():
+        setattr(classroom, field, value)
+    classroom.save(update_fields=[*applied.keys(), "updated_at"])
+    broadcast(classroom.room_code, {"type": "settings_changed", "settings": applied})
+
+
+def set_presentation(classroom: Classroom, operator: User, file_id: int | None, page: int) -> None:
+    """Presenter picks the shared material and page; state syncs to all."""
+    actor = get_active_member(classroom, operator)
+    if actor is None or not actor.can_present or not effective_permissions(actor, classroom)["can_present"]:
+        raise PermissionDenied("شما اجازهٔ ارائه ندارید.")
+    if file_id:
+        shared = classroom.files.filter(id=file_id).first()
+        if shared is None:
+            raise ClassroomAccessError("فایل انتخاب‌شده متعلق به این کلاس نیست.")
+        classroom.current_file = shared
+    else:
+        classroom.current_file = None
+    classroom.current_page = max(1, int(page or 1))
+    classroom.save(update_fields=["current_file", "current_page", "updated_at"])
+    broadcast(classroom.room_code, {
+        "type": "presentation_changed",
+        "file_id": classroom.current_file_id,
+        "file_name": classroom.current_file.original_name if classroom.current_file else None,
+        "page": classroom.current_page,
+    })
+
+
+def set_hand_raised(classroom: Classroom, member: ClassroomMember, raised: bool) -> None:
+    member.hand_raised_at = timezone.now() if raised else None
+    member.save(update_fields=["hand_raised_at"])
+    payload = participant_payload(member)
+    broadcast(classroom.room_code, {
+        "type": "raise_hand" if raised else "lower_hand",
+        "participant": payload,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Sessions & attendance
+# ---------------------------------------------------------------------------
+def get_live_session(classroom: Classroom) -> ClassroomSession | None:
+    return ClassroomSession.objects.filter(classroom=classroom, status=ClassroomSession.Status.LIVE).first()
+
+
+@transaction.atomic
+def start_session(classroom: Classroom, host: User, session: ClassroomSession | None = None) -> ClassroomSession:
+    """Start a scheduled session, or create an ad-hoc live one."""
+    _require_privileged(classroom, host)
+    live = get_live_session(classroom)
+    if live is not None:
+        return live
+    if session is None:
+        session = ClassroomSession(classroom=classroom, host=host, title="جلسهٔ جاری")
+    elif session.classroom_id != classroom.id:
+        raise ClassroomAccessError("جلسه متعلق به این کلاس نیست.")
+    session.status = ClassroomSession.Status.LIVE
+    session.started_at = timezone.now()
+    session.ended_at = None
+    session.save()
+    broadcast(classroom.room_code, {"type": "session_started", "session_id": session.id})
+    logger.info("session_started", extra={"room_code": classroom.room_code, "session_id": session.id})
+    return session
+
+
+def end_session(session: ClassroomSession, host: User) -> ClassroomSession:
+    _require_privileged(session.classroom, host)
+    if session.status == ClassroomSession.Status.LIVE:
+        session.status = ClassroomSession.Status.ENDED
+        session.ended_at = timezone.now()
+        session.save(update_fields=["status", "ended_at"])
+        # Close any still-open attendance intervals.
+        AttendanceRecord.objects.filter(session=session, left_at__isnull=True).update(left_at=session.ended_at)
+        broadcast(session.classroom.room_code, {"type": "session_ended", "session_id": session.id})
+        logger.info("session_ended", extra={"room_code": session.classroom.room_code, "session_id": session.id})
+    return session
+
+
+def attendance_join(classroom: Classroom, user: User) -> AttendanceRecord | None:
+    """Open an attendance interval if a session is live."""
+    session = get_live_session(classroom)
+    member = get_active_member(classroom, user)
+    if session is None or member is None or member.in_waiting_room:
+        return None
+    return AttendanceRecord.objects.create(session=session, member=member, user=user)
+
+
+def attendance_leave(classroom: Classroom, user: User) -> None:
+    """Close this user's open attendance intervals for the live session."""
+    session = get_live_session(classroom)
+    if session is None:
+        return
+    AttendanceRecord.objects.filter(session=session, user=user, left_at__isnull=True).update(
+        left_at=timezone.now()
+    )
+
+
+def attendance_summary(session: ClassroomSession) -> list[dict]:
+    """Per-user totals for a session (multiple intervals aggregated)."""
+    from django.db.models import Count
+
+    rows = (
+        session.attendance.values("user_id", "user__username")
+        .annotate(joins=Count("id"))
+        .order_by("user_id")
+    )
+    result = []
+    for row in rows:
+        intervals = list(
+            AttendanceRecord.objects.filter(session=session, user_id=row["user_id"]).values_list(
+                "joined_at", "left_at"
+            )
+        )
+        total = 0
+        for joined, left in intervals:
+            end = left or timezone.now()
+            total += int((end - joined).total_seconds())
+        result.append({
+            "user_id": row["user_id"],
+            "username": row["user__username"],
+            "joins": row["joins"],
+            "total_seconds": total,
+        })
+    return result

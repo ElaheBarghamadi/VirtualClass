@@ -4,9 +4,13 @@ Endpoint: ``/ws/classroom/<room_code>/chat/``
 
 Flow:  browser WebSocket → Channels → this consumer → DB + group broadcast.
 
-Permissions (e.g. ``can_send_messages``) are enforced **server-side**
-against the member's stored capabilities — a modified client script can
-never grant extra rights.
+Authorization notes
+-------------------
+* membership + ``can_send_messages`` are re-evaluated **per message**
+  against the database — classroom settings (e.g. ``chat_disabled``) or
+  per-member flags changed mid-session take effect immediately;
+* ``delete_message`` is restricted to OWNER/MODERATOR and soft-deletes;
+* a modified client script can never grant extra rights.
 """
 from __future__ import annotations
 
@@ -15,20 +19,20 @@ import logging
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 
-from classrooms.models import Classroom
-from classrooms.permissions import member_can
+from classrooms.models import Classroom, ClassroomMember
+from classrooms.permissions import effective_permissions, is_privileged
 from classrooms.services import get_active_member
 
 from .models import ChatMessage
 
 logger = logging.getLogger(__name__)
 
-HISTORY_LIMIT = 50
+HISTORY_LIMIT = 100
 MAX_MESSAGE_LENGTH = 1000
 
 
 class ChatConsumer(AsyncJsonWebsocketConsumer):
-    """Real-time classroom chat with persistent history."""
+    """Real-time classroom chat with persistent history and moderation."""
 
     async def connect(self) -> None:
         self.room_code: str = self.scope["url_route"]["kwargs"]["room_code"]
@@ -42,7 +46,7 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
             return
 
         self.classroom, self.member = await self._load_membership()
-        if self.member is None:
+        if self.member is None or self.member.in_waiting_room:
             await self.close(code=4403)
             return
 
@@ -56,13 +60,20 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
 
     async def receive_json(self, content: dict, **kwargs) -> None:
         action = content.get("action")
-        if action != "send_message":
-            logger.info("Ignoring unknown chat action: %r", action)
-            return
 
-        # Server-side capability check — never trust the client.
-        if not member_can(self.member, "can_send_messages"):
-            await self.send_json({"type": "error", "message": "شما اجازه ارسال پیام ندارید."})
+        if action == "send_message":
+            await self._handle_send(content)
+        elif action == "delete_message":
+            await self._handle_delete(content)
+        else:
+            logger.info("Ignoring unknown chat action: %r", action)
+
+    # ------------------------------------------------------------------
+    async def _handle_send(self, content: dict) -> None:
+        # Re-check permissions live: settings may have changed mid-session.
+        allowed = await self._can_send_now()
+        if not allowed:
+            await self.send_json({"type": "error", "message": "شما اجازهٔ ارسال پیام ندارید."})
             return
 
         message = str(content.get("message", "")).strip()
@@ -75,17 +86,49 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
             self.group_name, {"type": "chat.message", "message": payload}
         )
 
-    # -- group handlers ---------------------------------------------------------
+    async def _handle_delete(self, content: dict) -> None:
+        privileged = await self._is_privileged_now()
+        if not privileged:
+            await self.send_json({"type": "error", "message": "فقط مدیر می‌تواند پیام حذف کند."})
+            return
+        try:
+            message_id = int(content.get("message_id"))
+        except (TypeError, ValueError):
+            return
+        deleted = await self._soft_delete(message_id)
+        if deleted:
+            await self.channel_layer.group_send(
+                self.group_name, {"type": "chat.deleted", "message_id": message_id}
+            )
+            logger.info("chat_message_deleted", extra={"room_code": self.room_code, "message_id": message_id})
+
+    # -- group handlers --------------------------------------------------
     async def chat_message(self, event: dict) -> None:
         await self.send_json({"type": "chat_message", "message": event["message"]})
 
-    # -- helpers ------------------------------------------------------------------
+    async def chat_deleted(self, event: dict) -> None:
+        await self.send_json({"type": "chat_deleted", "message_id": event["message_id"]})
+
+    # -- helpers -----------------------------------------------------------
     @database_sync_to_async
     def _load_membership(self):
         classroom = Classroom.objects.filter(room_code=self.room_code, is_active=True).first()
         if classroom is None:
             return None, None
         return classroom, get_active_member(classroom, self.user)
+
+    @database_sync_to_async
+    def _can_send_now(self) -> bool:
+        classroom = Classroom.objects.filter(room_code=self.room_code).first()
+        member = ClassroomMember.objects.filter(classroom=classroom, user=self.user).first()
+        if classroom is None:
+            return False
+        return effective_permissions(member, classroom)["can_send_messages"]
+
+    @database_sync_to_async
+    def _is_privileged_now(self) -> bool:
+        member = ClassroomMember.objects.filter(classroom__room_code=self.room_code, user=self.user).first()
+        return is_privileged(member)
 
     @database_sync_to_async
     def _load_history(self) -> list[dict]:
@@ -97,3 +140,9 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         return ChatMessage.objects.create(
             classroom=self.classroom, sender=self.user, message=message
         ).to_dict()
+
+    @database_sync_to_async
+    def _soft_delete(self, message_id: int) -> bool:
+        return ChatMessage.objects.filter(
+            id=message_id, classroom=self.classroom
+        ).update(is_deleted=True) > 0

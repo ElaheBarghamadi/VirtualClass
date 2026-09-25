@@ -8,5 +8,11 @@ channels-redis>=4.2,<5
 redis>=5.0,<6
 daphne>=4.1,<5          # ASGI server used by `runserver` for WebSockets
 
+# Media server (LiveKit SFU) — server-side token generation only
+livekit-api>=1.0,<2
+
 # Configuration
 python-dotenv>=1.0,<2
+
+# Production database driver (uncomment for PostgreSQL deployments)
+# psycopg[binary]>=3.1,<4

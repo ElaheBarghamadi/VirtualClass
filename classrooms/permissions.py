@@ -1,13 +1,18 @@
 """Central permission architecture for classrooms.
 
 Everything role/capability related lives here so that views, consumers and
-APIs never hard-code permission logic.  Adding a new capability later means:
+APIs never hard-code permission logic.
 
-1. add a BooleanField to ``ClassroomMember``;
-2. add its default to the role matrix below.
+Two layers
+----------
+1. **Member flags** (``ClassroomMember.can_*``) — per-participant grants,
+   editable by the owner/moderator, seeded from the role matrix below.
+2. **Classroom settings** — room-wide switches owned by the host
+   (``Classroom.allow_student_*`` etc.).
 
-The rest of the codebase reads capabilities through ``member.permissions_dict()``
-or the helper functions in this module.
+``effective_permissions()`` combines both layers and is the ONLY source of
+truth used by consumers, media-token generation and the API.  The browser
+never decides anything: it only receives the effective result.
 """
 from __future__ import annotations
 
@@ -17,7 +22,7 @@ from typing import TYPE_CHECKING
 from django.db.models import TextChoices
 
 if TYPE_CHECKING:
-    from .models import ClassroomMember
+    from .models import Classroom, ClassroomMember
 
 
 class Role(TextChoices):
@@ -27,6 +32,9 @@ class Role(TextChoices):
     MODERATOR = "MODERATOR", "مدیر جلسه"
     PRESENTER = "PRESENTER", "ارائه‌دهنده"
     STUDENT = "STUDENT", "دانش‌آموز"
+
+
+PRIVILEGED_ROLES = {Role.OWNER, Role.MODERATOR}
 
 
 @dataclass(frozen=True)
@@ -40,6 +48,7 @@ class PermissionDefaults:
     can_send_messages: bool
     can_upload_files: bool
     can_raise_hand: bool
+    can_present: bool
 
 
 # Role → default capabilities.  OWNER gets everything; STUDENT gets a
@@ -53,6 +62,7 @@ ROLE_DEFAULTS: dict[str, PermissionDefaults] = {
         can_send_messages=True,
         can_upload_files=True,
         can_raise_hand=True,
+        can_present=True,
     ),
     Role.MODERATOR: PermissionDefaults(
         can_use_microphone=True,
@@ -62,6 +72,7 @@ ROLE_DEFAULTS: dict[str, PermissionDefaults] = {
         can_send_messages=True,
         can_upload_files=True,
         can_raise_hand=True,
+        can_present=True,
     ),
     Role.PRESENTER: PermissionDefaults(
         can_use_microphone=True,
@@ -71,6 +82,7 @@ ROLE_DEFAULTS: dict[str, PermissionDefaults] = {
         can_send_messages=True,
         can_upload_files=False,
         can_raise_hand=True,
+        can_present=True,
     ),
     Role.STUDENT: PermissionDefaults(
         can_use_microphone=True,
@@ -80,6 +92,7 @@ ROLE_DEFAULTS: dict[str, PermissionDefaults] = {
         can_send_messages=True,
         can_upload_files=False,
         can_raise_hand=True,
+        can_present=False,
     ),
 }
 
@@ -101,10 +114,9 @@ def apply_role_defaults(member: "ClassroomMember") -> None:
 
 
 def member_can(member: "ClassroomMember" | None, capability: str) -> bool:
-    """Server-side capability check used by consumers and API.
+    """Simple stored-flag check (role independent of classroom settings).
 
-    Returns ``False`` for missing/inactive memberships — never trust the
-    client for any of these decisions.
+    Prefer :func:`effective_permissions` for anything enforcement related.
     """
     if member is None or not member.is_active:
         return False
@@ -115,4 +127,46 @@ def member_can(member: "ClassroomMember" | None, capability: str) -> bool:
 
 def is_privileged(member: "ClassroomMember" | None) -> bool:
     """True for OWNER/MODERATOR — participants who may manage the session."""
-    return member is not None and member.is_active and member.role in {Role.OWNER, Role.MODERATOR}
+    return member is not None and member.is_active and member.role in PRIVILEGED_ROLES
+
+
+def effective_permissions(member: "ClassroomMember" | None, classroom: "Classroom") -> dict[str, bool]:
+    """Combine member flags with classroom-wide settings.
+
+    This is the authoritative capability map — used for:
+      * WebSocket authorization (chat / whiteboard / raise-hand)
+      * LiveKit media-token grants (publish rights)
+      * the payload rendered into the room page
+
+    Rules:
+      * inactive/missing membership → everything False
+      * ``allow_student_*`` classroom switches only restrict STUDENTs
+      * ``allow_file_upload`` restricts everyone except the OWNER
+      * moderator actions (``muted`` / ``camera_disabled``) always win
+      * ``chat_disabled`` silences everyone except OWNER/MODERATOR
+    """
+    if member is None or not member.is_active:
+        return {name: False for name in permission_fields()}
+
+    perms = member.permissions_dict()
+
+    if member.role == Role.STUDENT:
+        perms["can_send_messages"] &= classroom.allow_student_chat
+        perms["can_share_screen"] &= classroom.allow_student_screen_share
+        perms["can_use_whiteboard"] &= classroom.allow_student_whiteboard
+        perms["can_use_microphone"] &= classroom.allow_student_mic
+        perms["can_use_camera"] &= classroom.allow_student_camera
+
+    if member.role != Role.OWNER:
+        perms["can_upload_files"] &= classroom.allow_file_upload
+
+    if classroom.chat_disabled and member.role not in PRIVILEGED_ROLES:
+        perms["can_send_messages"] = False
+
+    # Moderator enforcement always wins over grants.
+    if member.muted:
+        perms["can_use_microphone"] = False
+    if member.camera_disabled:
+        perms["can_use_camera"] = False
+
+    return perms

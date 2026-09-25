@@ -1,26 +1,58 @@
-"""HTTP views for dashboard, classroom management, lobby and room.
+"""HTTP views: dashboard, classroom management, lobby, room, host actions.
 
-Business rules live in :mod:`classrooms.services` — these views only
-handle requests/responses and authorisation redirects.
+Business rules live in :mod:`classrooms.services` — these views handle
+requests/responses and authorisation redirects only.  Host-control
+endpoints are JSON POSTs (CSRF-protected) whose effects are broadcast to
+connected clients over the classroom WebSocket.
 """
 from __future__ import annotations
 
+import json
+import logging
+
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.db.models import Count, Q
+from django.http import FileResponse, Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_http_methods, require_POST
 
-from .forms import ClassroomForm, ClassroomJoinForm
-from .models import Classroom
+from .file_validation import validate_upload
+from .forms import ClassroomForm, ClassroomJoinForm, SessionScheduleForm, ClassroomSettingsForm
+from .media import generate_media_token, media_config_payload, media_enabled
+from .models import Classroom, ClassroomSession, SharedFile
+from .permissions import PRIVILEGED_ROLES, Role, effective_permissions, is_privileged
 from .services import (
+    ClassroomAccessError,
+    ClassroomLocked,
+    PermissionDenied,
+    TooManyAttempts,
+    UserBanned,
     WrongClassroomPassword,
     active_members,
+    approve_waiting_room,
+    attendance_summary,
     create_classroom,
+    deny_waiting_room,
+    end_session,
     get_active_member,
+    get_live_session,
     join_classroom,
     leave_classroom,
+    mute_all,
+    remove_member,
+    request_unmute,
+    set_classroom_locked,
+    set_member_muted,
+    set_member_permission,
+    set_member_role,
+    set_presentation,
+    start_session,
+    update_settings,
 )
+
+logger = logging.getLogger("classrooms.views")
 
 
 # ---------------------------------------------------------------------------
@@ -29,19 +61,24 @@ from .services import (
 @login_required
 @require_http_methods(["GET"])
 def dashboard_view(request):
-    """User dashboard: owned classrooms + membership summary."""
+    """User dashboard: owned classrooms, membership summary, upcoming sessions."""
     owned = (
         request.user.owned_classrooms.annotate(
-            participant_count=Count(
-                "members", filter=Q(members__is_active=True), distinct=True
-            )
+            participant_count=Count("members", filter=Q(members__is_active=True), distinct=True)
         ).order_by("-created_at")
     )
     joined_count = request.user.classroom_memberships.filter(is_active=True).count()
+    upcoming = (
+        ClassroomSession.objects.filter(
+            classroom__owner=request.user, status=ClassroomSession.Status.SCHEDULED
+        )
+        .select_related("classroom")
+        .order_by("scheduled_start")[:10]
+    )
     return render(
         request,
         "classrooms/dashboard.html",
-        {"owned_classrooms": owned, "joined_count": joined_count},
+        {"owned_classrooms": owned, "joined_count": joined_count, "upcoming_sessions": upcoming},
     )
 
 
@@ -51,7 +88,6 @@ def dashboard_view(request):
 @login_required
 @require_http_methods(["GET", "POST"])
 def classroom_create_view(request):
-    """Create a new classroom (optionally password protected)."""
     form = ClassroomForm(request.POST or None)
     if request.method == "POST" and form.is_valid():
         classroom = create_classroom(
@@ -69,14 +105,13 @@ def classroom_create_view(request):
 @login_required
 @require_http_methods(["GET"])
 def classroom_list_view(request):
-    """List of classrooms the user owns or participates in."""
     owned = request.user.owned_classrooms.annotate(
         participant_count=Count("members", filter=Q(members__is_active=True), distinct=True)
     ).order_by("-created_at")
     memberships = (
         request.user.classroom_memberships.filter(is_active=True)
         .select_related("classroom")
-        .exclude(role="OWNER")
+        .exclude(role=Role.OWNER)
         .order_by("-joined_at")
     )
     return render(
@@ -87,24 +122,55 @@ def classroom_list_view(request):
 
 
 @login_required
-@require_http_methods(["GET"])
+@require_http_methods(["GET", "POST"])
 def classroom_detail_view(request, room_code: str):
-    """Owner-facing management page for a single classroom."""
+    """Owner-facing management page (settings, scheduling, sessions)."""
     classroom = get_object_or_404(
         Classroom.objects.select_related("owner"), room_code=room_code, owner=request.user
     )
+    schedule_form = SessionScheduleForm(request.POST or None, prefix="sched")
+    settings_form = ClassroomSettingsForm(instance=classroom)
+    if request.method == "POST" and "schedule_session" in request.POST:
+        if schedule_form.is_valid():
+            session = schedule_form.save(commit=False)
+            session.classroom = classroom
+            session.host = request.user
+            session.timezone_name = settings.TIME_ZONE
+            session.save()
+            messages.success(request, "جلسه زمان‌بندی شد.")
+            return redirect("classrooms:detail", room_code=room_code)
+    if request.method == "POST" and "save_settings" in request.POST:
+        settings_form = ClassroomSettingsForm(request.POST, instance=classroom)
+        if settings_form.is_valid():
+            changed = list(settings_form.changed_data)
+            settings_form.save()
+            from .services import broadcast
+
+            if changed:
+                broadcast(classroom.room_code, {"type": "settings_changed", "settings": {
+                    f: bool(getattr(classroom, f)) for f in changed
+                }})
+            messages.success(request, "تنظیمات کلاس ذخیره شد.")
+            return redirect("classrooms:detail", room_code=room_code)
+
     members = active_members(classroom)
+    sessions = classroom.sessions.all()[:20]
     return render(
         request,
         "classrooms/classroom_detail.html",
-        {"classroom": classroom, "members": members},
+        {
+            "classroom": classroom,
+            "members": members,
+            "sessions": sessions,
+            "schedule_form": schedule_form,
+            "settings_form": settings_form,
+        },
     )
 
 
 @login_required
 @require_POST
 def classroom_delete_view(request, room_code: str):
-    """Deactivate a classroom (soft delete keeps chat history intact)."""
     classroom = get_object_or_404(Classroom, room_code=room_code, owner=request.user)
     classroom.is_active = False
     classroom.save(update_fields=["is_active", "updated_at"])
@@ -118,7 +184,7 @@ def classroom_delete_view(request, room_code: str):
 @login_required
 @require_http_methods(["GET", "POST"])
 def lobby_view(request, room_code: str):
-    """Classroom lobby: shows info and (if needed) asks for the password."""
+    """Classroom lobby: info + password gate (never in the URL)."""
     classroom = get_object_or_404(
         Classroom.objects.select_related("owner"), room_code=room_code, is_active=True
     )
@@ -129,65 +195,351 @@ def lobby_view(request, room_code: str):
         if classroom.is_password_protected:
             join_form = ClassroomJoinForm(request.POST)
             if not join_form.is_valid():
-                return render(
-                    request,
-                    "classrooms/lobby.html",
-                    {"classroom": classroom, "join_form": join_form},
-                )
+                return render(request, "classrooms/lobby.html", {"classroom": classroom, "join_form": join_form})
             raw_password = join_form.cleaned_data["password"]
         try:
-            join_classroom(classroom, request.user, raw_password)
-        except WrongClassroomPassword:
-            join_form.add_error("password", "رمز کلاس اشتباه است.")
+            member = join_classroom(classroom, request.user, raw_password)
+        except (WrongClassroomPassword, ClassroomLocked, UserBanned, TooManyAttempts, ClassroomAccessError) as exc:
+            error = str(exc)
+            if join_form is not None and isinstance(exc, WrongClassroomPassword):
+                join_form.add_error("password", error)
+            else:
+                messages.error(request, error)
             return render(
                 request,
                 "classrooms/lobby.html",
                 {"classroom": classroom, "join_form": join_form},
             )
+        if member.in_waiting_room:
+            return redirect("room:waiting", room_code=classroom.room_code)
         return redirect("room:room", room_code=classroom.room_code)
 
-    # Already an active member → straight to the room.
-    if get_active_member(classroom, request.user):
+    existing = get_active_member(classroom, request.user)
+    if existing and not existing.in_waiting_room:
         return redirect("room:room", room_code=classroom.room_code)
+    if existing and existing.in_waiting_room:
+        return redirect("room:waiting", room_code=classroom.room_code)
 
-    return render(
-        request,
-        "classrooms/lobby.html",
-        {"classroom": classroom, "join_form": join_form},
-    )
+    return render(request, "classrooms/lobby.html", {"classroom": classroom, "join_form": join_form})
+
+
+@login_required
+@require_http_methods(["GET"])
+def waiting_view(request, room_code: str):
+    """Waiting room — held here until the host approves entry."""
+    classroom = get_object_or_404(Classroom, room_code=room_code, is_active=True)
+    member = get_active_member(classroom, request.user)
+    if member is None:
+        return redirect("room:lobby", room_code=room_code)
+    if not member.in_waiting_room:
+        return redirect("room:room", room_code=room_code)
+    return render(request, "classrooms/waiting_room.html", {"classroom": classroom})
+
+
+def _room_context(request, classroom: Classroom, member) -> dict:
+    perms = effective_permissions(member, classroom)
+    session = get_live_session(classroom)
+    files = list(classroom.files.select_related("uploader")[:50])
+    files_json = [
+        {
+            "id": f.id,
+            "name": f.original_name,
+            "size": f.size_display,
+            "uploader": f.uploader.name,
+            "url": f"/class/{classroom.room_code}/files/{f.id}/download/",
+        }
+        for f in files
+    ]
+    return {
+        "classroom": classroom,
+        "member": member,
+        "members": [m for m in active_members(classroom)],
+        "permissions": perms,
+        "is_privileged": is_privileged(member),
+        "live_session": session,
+        "files": files,
+        "files_json": files_json,
+        "media": media_config_payload(),
+        "waiting_room_count": classroom.members.filter(is_active=True, in_waiting_room=True).count(),
+    }
 
 
 @login_required
 @require_http_methods(["GET"])
 def room_view(request, room_code: str):
-    """The live classroom interface.
-
-    Access requires an **active membership** (verified server-side);
-    the client only receives its own effective permissions.
-    """
+    """The live classroom interface.  Requires an active membership."""
     classroom = get_object_or_404(Classroom, room_code=room_code, is_active=True)
     member = get_active_member(classroom, request.user)
     if member is None:
         messages.info(request, "برای ورود به کلاس ابتدا باید عضو شوید.")
         return redirect("room:lobby", room_code=room_code)
-
-    return render(
-        request,
-        "classrooms/room.html",
-        {
-            "classroom": classroom,
-            "member": member,
-            "members": active_members(classroom),
-            "permissions": member.permissions_dict(),
-        },
-    )
+    if member.in_waiting_room:
+        return redirect("room:waiting", room_code=room_code)
+    return render(request, "classrooms/room.html", _room_context(request, classroom, member))
 
 
 @login_required
 @require_POST
 def leave_view(request, room_code: str):
-    """Leave a classroom (ownership can't be 'left' — deactivates anyway)."""
     classroom = get_object_or_404(Classroom, room_code=room_code)
     leave_classroom(classroom, request.user)
     messages.success(request, "از کلاس خارج شدید.")
     return redirect("dashboard")
+
+
+# ---------------------------------------------------------------------------
+# Media token (LiveKit) — short-lived, scoped to effective permissions
+# ---------------------------------------------------------------------------
+@login_required
+@require_http_methods(["GET"])
+def media_token_view(request, room_code: str):
+    if not media_enabled():
+        return JsonResponse({"detail": "سرور رسانه پیکربندی نشده است."}, status=503)
+    classroom = get_object_or_404(Classroom, room_code=room_code, is_active=True)
+    member = get_active_member(classroom, request.user)
+    if member is None or member.in_waiting_room:
+        return JsonResponse({"detail": "دسترسی غیرمجاز."}, status=403)
+    perms = effective_permissions(member, classroom)
+    token = generate_media_token(request.user, classroom, perms, role=member.role)
+    return JsonResponse({"token": token, "url": settings.LIVEKIT_URL})
+
+
+# ---------------------------------------------------------------------------
+# Host actions (JSON, CSRF-protected, broadcast over WebSocket)
+# ---------------------------------------------------------------------------
+def _json_error(exc: Exception, status: int = 403) -> JsonResponse:
+    return JsonResponse({"detail": str(exc)}, status=status)
+
+
+@login_required
+@require_POST
+def member_permission_view(request, room_code: str, member_id: int):
+    """Toggle one capability flag of a participant."""
+    classroom = get_object_or_404(Classroom, room_code=room_code)
+    try:
+        body = json.loads(request.body or "{}")
+        set_member_permission(
+            classroom, request.user, member_id, body.get("permission", ""), bool(body.get("value"))
+        )
+    except PermissionDenied as exc:
+        return _json_error(exc)
+    except ValueError as exc:
+        return _json_error(exc, status=400)
+    return JsonResponse({"ok": True})
+
+
+@login_required
+@require_POST
+def member_role_view(request, room_code: str, member_id: int):
+    """Assign MODERATOR/PRESENTER/STUDENT (OWNER-only)."""
+    classroom = get_object_or_404(Classroom, room_code=room_code)
+    try:
+        body = json.loads(request.body or "{}")
+        set_member_role(classroom, request.user, member_id, body.get("role", ""))
+    except PermissionDenied as exc:
+        return _json_error(exc)
+    except ValueError as exc:
+        return _json_error(exc, status=400)
+    return JsonResponse({"ok": True})
+
+
+@login_required
+@require_POST
+def member_mute_view(request, room_code: str, member_id: int):
+    classroom = get_object_or_404(Classroom, room_code=room_code)
+    body = json.loads(request.body or "{}")
+    try:
+        if body.get("request_unmute"):
+            request_unmute(classroom, request.user, member_id)
+        else:
+            set_member_muted(classroom, request.user, member_id, bool(body.get("muted", True)))
+    except PermissionDenied as exc:
+        return _json_error(exc)
+    return JsonResponse({"ok": True})
+
+
+@login_required
+@require_POST
+def mute_all_view(request, room_code: str):
+    classroom = get_object_or_404(Classroom, room_code=room_code)
+    try:
+        count = mute_all(classroom, request.user)
+    except PermissionDenied as exc:
+        return _json_error(exc)
+    return JsonResponse({"ok": True, "muted": count})
+
+
+@login_required
+@require_POST
+def member_remove_view(request, room_code: str, member_id: int):
+    classroom = get_object_or_404(Classroom, room_code=room_code)
+    body = json.loads(request.body or "{}")
+    try:
+        ban_minutes = int(body.get("ban_minutes") or 0)
+        remove_member(classroom, request.user, member_id, ban_minutes=ban_minutes)
+    except PermissionDenied as exc:
+        return _json_error(exc)
+    except ValueError:
+        return JsonResponse({"detail": "ban_minutes نامعتبر است."}, status=400)
+    return JsonResponse({"ok": True})
+
+
+@login_required
+@require_POST
+def waiting_room_action_view(request, room_code: str, member_id: int):
+    classroom = get_object_or_404(Classroom, room_code=room_code)
+    body = json.loads(request.body or "{}")
+    try:
+        if body.get("approve"):
+            approve_waiting_room(classroom, request.user, member_id)
+        else:
+            deny_waiting_room(classroom, request.user, member_id)
+    except PermissionDenied as exc:
+        return _json_error(exc)
+    return JsonResponse({"ok": True})
+
+
+@login_required
+@require_POST
+def lock_view(request, room_code: str):
+    classroom = get_object_or_404(Classroom, room_code=room_code)
+    body = json.loads(request.body or "{}")
+    try:
+        set_classroom_locked(classroom, request.user, bool(body.get("locked", True)))
+    except PermissionDenied as exc:
+        return _json_error(exc)
+    return JsonResponse({"ok": True})
+
+
+@login_required
+@require_POST
+def settings_view(request, room_code: str):
+    classroom = get_object_or_404(Classroom, room_code=room_code)
+    body = json.loads(request.body or "{}")
+    values = body.get("settings") if isinstance(body.get("settings"), dict) else body
+    try:
+        update_settings(classroom, request.user, values)
+    except PermissionDenied as exc:
+        return _json_error(exc)
+    return JsonResponse({"ok": True})
+
+
+@login_required
+@require_POST
+def presentation_view(request, room_code: str):
+    classroom = get_object_or_404(Classroom, room_code=room_code)
+    body = json.loads(request.body or "{}")
+    try:
+        set_presentation(classroom, request.user, body.get("file_id"), int(body.get("page") or 1))
+    except PermissionDenied as exc:
+        return _json_error(exc)
+    except ClassroomAccessError as exc:
+        return _json_error(exc, status=404)
+    except ValueError:
+        return JsonResponse({"detail": "page نامعتبر است."}, status=400)
+    return JsonResponse({"ok": True})
+
+
+# ---------------------------------------------------------------------------
+# Sessions
+# ---------------------------------------------------------------------------
+@login_required
+@require_POST
+def session_start_view(request, room_code: str):
+    classroom = get_object_or_404(Classroom, room_code=room_code)
+    body = json.loads(request.body or "{}")
+    session = None
+    if body.get("session_id"):
+        session = get_object_or_404(ClassroomSession, id=body["session_id"], classroom=classroom)
+    try:
+        live = start_session(classroom, request.user, session)
+    except PermissionDenied as exc:
+        return _json_error(exc)
+    except ClassroomAccessError as exc:
+        return _json_error(exc, status=404)
+    return JsonResponse({"ok": True, "session_id": live.id})
+
+
+@login_required
+@require_POST
+def session_end_view(request, room_code: str, session_id: int):
+    classroom = get_object_or_404(Classroom, room_code=room_code)
+    session = get_object_or_404(ClassroomSession, id=session_id, classroom=classroom)
+    try:
+        end_session(session, request.user)
+    except PermissionDenied as exc:
+        return _json_error(exc)
+    return JsonResponse({"ok": True})
+
+
+@login_required
+@require_http_methods(["GET"])
+def attendance_view(request, room_code: str, session_id: int):
+    """Post-session attendance report (owner/moderator only)."""
+    classroom = get_object_or_404(Classroom, room_code=room_code)
+    member = get_active_member(classroom, request.user)
+    if not is_privileged(member):
+        raise Http404
+    session = get_object_or_404(ClassroomSession, id=session_id, classroom=classroom)
+    return render(
+        request,
+        "classrooms/attendance.html",
+        {"classroom": classroom, "session": session, "summary": attendance_summary(session)},
+    )
+
+
+# ---------------------------------------------------------------------------
+# File sharing
+# ---------------------------------------------------------------------------
+@login_required
+@require_POST
+def file_upload_view(request, room_code: str):
+    classroom = get_object_or_404(Classroom, room_code=room_code)
+    member = get_active_member(classroom, request.user)
+    perms = effective_permissions(member, classroom) if member else {}
+    if not perms.get("can_upload_files"):
+        return JsonResponse({"detail": "شما اجازهٔ بارگذاری فایل ندارید."}, status=403)
+
+    upload = request.FILES.get("file")
+    if upload is None:
+        return JsonResponse({"detail": "فایلی ارسال نشد."}, status=400)
+    try:
+        safe_name = validate_upload(upload, settings.MAX_UPLOAD_MB * 1024 * 1024)
+    except Exception as exc:  # ValidationError from the validator
+        return JsonResponse({"detail": getattr(exc, "message", str(exc))}, status=400)
+
+    shared = SharedFile.objects.create(
+        classroom=classroom,
+        session=get_live_session(classroom),
+        uploader=request.user,
+        file=upload,
+        original_name=safe_name,
+        size=upload.size,
+        content_type=(upload.content_type or "application/octet-stream")[:128],
+    )
+    from .services import broadcast
+
+    broadcast(classroom.room_code, {
+        "type": "file_uploaded",
+        "file": {
+            "id": shared.id,
+            "name": shared.original_name,
+            "size": shared.size_display,
+            "uploader": request.user.name,
+            "url": f"/class/{classroom.room_code}/files/{shared.id}/download/",
+        },
+    })
+    return JsonResponse({"ok": True, "id": shared.id, "name": shared.original_name})
+
+
+@login_required
+@require_http_methods(["GET"])
+def file_download_view(request, room_code: str, file_id: int):
+    """Download — membership-gated; filename comes from our safe copy."""
+    classroom = get_object_or_404(Classroom, room_code=room_code)
+    member = get_active_member(classroom, request.user)
+    if member is None:
+        raise Http404
+    shared = get_object_or_404(SharedFile, id=file_id, classroom=classroom)
+    response = FileResponse(shared.file.open("rb"), as_attachment=True, filename=shared.original_name)
+    return response

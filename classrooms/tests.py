@@ -213,8 +213,8 @@ class ApiTests(TestCase):
 
         response = self.client.get(reverse("api_classroom_participants", args=[room_code]))
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data["count"], 1)  # the owner
-        self.assertEqual(response.data["results"][0]["role"], Role.OWNER)
+        self.assertEqual(len(response.data), 1)  # the owner
+        self.assertEqual(response.data[0]["role"], Role.OWNER)
 
     def test_api_requires_auth(self):
         response = self.client.get(reverse("api_classroom_list"))

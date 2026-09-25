@@ -1,19 +1,32 @@
 {% extends "base.html" %}
+{% load static %}
 {% block title %}ورود به {{ classroom.title }}{% endblock %}
 {% block content %}
 <div class="lobby-wrapper">
-    <div class="card lobby-card">
+    <div class="card lobby-card wide">
         <h1 class="lobby-title">{{ classroom.title }}</h1>
-        {% if classroom.description %}
-            <p class="muted">{{ classroom.description }}</p>
-        {% endif %}
+        {% if classroom.description %}<p class="muted">{{ classroom.description }}</p>{% endif %}
         <dl class="lobby-meta">
             <div><dt>معلم</dt><dd>{{ classroom.owner.name }}</dd></div>
             <div><dt>شرکت‌کنندگان</dt><dd>{{ classroom.active_member_count }} نفر</dd></div>
-            {% if classroom.is_password_protected %}
-                <div><dt>دسترسی</dt><dd>🔒 محافظت‌شده با رمز</dd></div>
-            {% endif %}
+            {% if classroom.is_password_protected %}<div><dt>دسترسی</dt><dd>🔒 محافظت‌شده با رمز</dd></div>{% endif %}
+            {% if classroom.is_locked %}<div><dt>وضعیت</dt><dd>🔒 قفل — ورود اعضای جدید مسدود است</dd></div>{% endif %}
+            {% if classroom.enable_waiting_room %}<div><dt>اتاق انتظار</dt><dd>فعال — ورود با تأیید میزبان</dd></div>{% endif %}
         </dl>
+
+        <div class="lobby-preview">
+            <video id="lobby-video" autoplay playsinline muted aria-label="پیش‌نمایش دوربین"></video>
+            <div class="lobby-devices">
+                <label>دوربین
+                    <select id="device-camera" aria-label="انتخاب دوربین"><option>پیش‌فرض</option></select>
+                </label>
+                <label>میکروفون
+                    <select id="device-mic" aria-label="انتخاب میکروفون"><option>پیش‌فرض</option></select>
+                </label>
+                <div class="mic-meter" aria-hidden="true"><div id="mic-level"></div></div>
+                <button type="button" class="btn btn-sm btn-ghost" id="btn-preview-toggle">📹 روشن کردن پیش‌نمایش</button>
+            </div>
+        </div>
 
         <form method="post" novalidate>
             {% csrf_token %}
@@ -21,14 +34,17 @@
                 <div class="field">
                     <label for="{{ join_form.password.id_for_label }}">رمز کلاس</label>
                     {{ join_form.password }}
-                    {% if join_form.password.errors %}
-                        <p class="field-error">{{ join_form.password.errors.0 }}</p>
-                    {% endif %}
+                    {% if join_form.password.errors %}<p class="field-error">{{ join_form.password.errors.0 }}</p>{% endif %}
                 </div>
             {% endif %}
-            <button type="submit" class="btn btn-primary btn-block btn-lg">ورود به کلاس</button>
+            <button type="submit" class="btn btn-primary btn-block btn-lg" {% if classroom.is_locked %}disabled{% endif %}>
+                ورود به کلاس
+            </button>
         </form>
         <a class="btn btn-ghost btn-block" href="{% url 'dashboard' %}">بازگشت به داشبورد</a>
     </div>
 </div>
+{% endblock %}
+{% block extra_js %}
+<script type="module" src="{% static 'js/lobby.js' %}"></script>
 {% endblock %}

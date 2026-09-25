@@ -1,0 +1,44 @@
+# Development/staging stack: web (Django+Daphne) + PostgreSQL + Redis.
+#
+# The LiveKit media server is intentionally NOT bundled here — deploy it
+# separately (see README §"Media server setup"):
+#   docker run -d --name livekit -p 7880:7880 -p 7881:7881 -p 7882:7882/udp \
+#     livekit/livekit-server --dev --bind 0.0.0.0
+services:
+  web:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://classroom:classroom@postgres:5432/classroom
+      REDIS_URL: redis://redis:6379/0
+      DEBUG: "false"
+    ports:
+      - "8000:8000"
+    volumes:
+      - media_data:/app/media
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: classroom
+      POSTGRES_USER: classroom
+      POSTGRES_PASSWORD: classroom
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U classroom"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+
+volumes:
+  pg_data:
+  media_data:

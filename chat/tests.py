@@ -106,6 +106,44 @@ class PresenceConsumerTests(TransactionTestCase):
         async_to_sync(scenario)()
 
 
+class RaiseHandTests(TransactionTestCase):
+    def test_raise_and_lower_hand_broadcast(self):
+        owner = User.objects.create_user(username="rh_owner", password="x")
+        student = User.objects.create_user(username="rh_student", password="x")
+        classroom = create_classroom(owner, title="Hands")
+        join_classroom(classroom, student)
+
+        async def scenario():
+            owner_ws = WebsocketCommunicator(
+                app_with_user(owner, classroom_routes), f"/ws/classroom/{classroom.room_code}/"
+            )
+            await owner_ws.connect()
+            await owner_ws.receive_json_from()  # snapshot
+            await owner_ws.receive_json_from()  # own join
+
+            student_ws = WebsocketCommunicator(
+                app_with_user(student, classroom_routes), f"/ws/classroom/{classroom.room_code}/"
+            )
+            await student_ws.connect()
+            await owner_ws.receive_json_from()  # student joined
+
+            await student_ws.send_json_to({"action": "raise_hand", "raised": True})
+            msg = await owner_ws.receive_json_from()
+            assert msg["type"] == "raise_hand" and msg["participant"]["user_id"] == student.id
+
+            await student_ws.send_json_to({"action": "raise_hand", "raised": False})
+            msg = await owner_ws.receive_json_from()
+            assert msg["type"] == "lower_hand"
+
+            await student_ws.disconnect()
+            await owner_ws.disconnect()
+
+        async_to_sync(scenario)()
+
+        member = classroom.members.get(user=student)
+        self.assertIsNone(member.hand_raised_at)
+
+
 class ChatConsumerTests(TransactionTestCase):
     def test_send_message_persists_and_broadcasts(self):
         owner = User.objects.create_user(username="c_owner", password="x")

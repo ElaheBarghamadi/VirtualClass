@@ -21,7 +21,25 @@
 <section class="stat-row">
     <div class="stat-card"><span class="stat-value">{{ owned_classrooms|length }}</span><span class="stat-label">کلاس‌های من</span></div>
     <div class="stat-card"><span class="stat-value">{{ joined_count }}</span><span class="stat-label">عضویت فعال</span></div>
+    <div class="stat-card"><span class="stat-value">{{ upcoming_sessions|length }}</span><span class="stat-label">جلسهٔ پیش‌رو</span></div>
 </section>
+
+{% if upcoming_sessions %}
+    <h2 class="section-title">جلسات زمان‌بندی‌شده</h2>
+    <div class="card">
+        <ul class="session-list">
+            {% for s in upcoming_sessions %}
+                <li>
+                    <span class="badge badge-info">زمان‌بندی‌شده</span>
+                    <strong>{{ s.title|default:s.classroom.title }}</strong>
+                    <span class="muted">{{ s.classroom.title }}</span>
+                    <span>{{ s.scheduled_start|date:"Y/m/d H:i" }}</span>
+                    <a class="btn btn-sm btn-ghost" href="{% url 'room:lobby' s.classroom.room_code %}">ورود</a>
+                </li>
+            {% endfor %}
+        </ul>
+    </div>
+{% endif %}
 
 <h2 class="section-title">کلاس‌های من</h2>
 {% if owned_classrooms %}

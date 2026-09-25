@@ -11,15 +11,25 @@
 <div class="room" id="classroom-root"
      data-room-code="{{ classroom.room_code }}"
      data-user-id="{{ user.id }}"
-     data-user-name="{{ user.name }}">
+     data-member-id="{{ member.id }}"
+     data-user-name="{{ user.name }}"
+     data-privileged="{{ is_privileged|yesno:'1,0' }}"
+     data-live-session="{{ live_session.id|default:'' }}"
+     data-media-url="{{ media.url }}"
+     data-media-enabled="{{ media.enabled|yesno:'1,0' }}">
 
     <header class="room-header">
         <div class="room-title">
             <h1>{{ classroom.title }}</h1>
-            <span class="badge badge-info">{{ member.get_role_display }}</span>
+            <span class="badge badge-info" id="role-badge">{{ member.get_role_display }}</span>
+            {% if live_session %}<span class="live-dot" title="جلسه در حال برگزاری">● LIVE</span>{% endif %}
+            {% if classroom.is_locked %}<span class="badge badge-warn" id="lock-badge">🔒 قفل</span>{% endif %}
         </div>
         <div class="room-header-actions">
-            <span class="room-clock" id="room-clock">--:--</span>
+            <span class="conn-pill" id="conn-status" role="status" aria-live="polite">
+                <span class="conn-dot"></span><span class="conn-text">در حال اتصال…</span>
+            </span>
+            <span class="room-clock" id="room-clock" aria-label="ساعت">--:--</span>
             <form method="post" action="{% url 'room:leave' classroom.room_code %}">
                 {% csrf_token %}
                 <button type="submit" class="btn btn-danger btn-sm">خروج از کلاس</button>
@@ -29,77 +39,173 @@
 
     <div class="room-body">
         <main class="room-main">
+            <!-- ===== stage: media grid / screen share / whiteboard / presentation ===== -->
             <div class="stage" id="stage">
-                <div class="stage-placeholder" id="video-stage">
-                    <div class="self-avatar">{{ user.name|first }}</div>
-                    <p>ناحیه ویدیو — در فاز بعدی با WebRTC فعال می‌شود</p>
+                <div class="stage-view" id="view-media">
+                    <div class="tiles" id="tiles" data-count="1"></div>
+                    <div class="stage-empty" id="stage-empty">
+                        <div class="self-avatar">{{ user.name|first }}</div>
+                        <p id="stage-empty-text">در حال اتصال به سرور رسانه…</p>
+                    </div>
                 </div>
-                <div class="stage-whiteboard hidden" id="whiteboard-stage">
+
+                <div class="stage-view hidden" id="view-screen">
+                    <div class="screen-header">
+                        <span id="screen-owner">اشتراک صفحه</span>
+                        <button type="button" class="btn btn-sm btn-ghost" id="btn-exit-screen">بازگشت به ویدیوها</button>
+                    </div>
+                    <div class="screen-holder" id="screen-holder"></div>
+                </div>
+
+                <div class="stage-view hidden" id="view-presentation">
+                    <div class="screen-header">
+                        <span id="presentation-title">ارائه</span>
+                        <button type="button" class="btn btn-sm btn-ghost" id="btn-exit-presentation">بازگشت</button>
+                    </div>
+                    <div class="presentation-holder" id="presentation-holder"></div>
+                </div>
+
+                <div class="stage-view hidden" id="view-whiteboard">
                     <div class="wb-toolbar" role="toolbar" aria-label="ابزار تخته سفید">
-                        <button type="button" class="wb-tool active" data-tool="pen" title="قلم">✏️</button>
-                        <button type="button" class="wb-tool" data-tool="eraser" title="پاک‌کن">🧽</button>
-                        <button type="button" class="wb-tool" data-tool="text" title="متن">🔤</button>
+                        <button type="button" class="wb-tool active" data-tool="pen" title="قلم" aria-label="قلم">✏️</button>
+                        <button type="button" class="wb-tool" data-tool="highlighter" title="هایلایت" aria-label="هایلایت">🖍️</button>
+                        <button type="button" class="wb-tool" data-tool="eraser" title="پاک‌کن" aria-label="پاک‌کن">🧽</button>
+                        <button type="button" class="wb-tool" data-tool="line" title="خط" aria-label="خط">📏</button>
+                        <button type="button" class="wb-tool" data-tool="arrow" title="فلش" aria-label="فلش">↗️</button>
+                        <button type="button" class="wb-tool" data-tool="rectangle" title="مستطیل" aria-label="مستطیل">▭</button>
+                        <button type="button" class="wb-tool" data-tool="circle" title="دایره" aria-label="دایره">◯</button>
+                        <button type="button" class="wb-tool" data-tool="text" title="متن" aria-label="متن">🔤</button>
                         <span class="wb-sep"></span>
-                        <button type="button" class="wb-action" data-action="undo" title="بازگشت">↩️</button>
-                        <button type="button" class="wb-action" data-action="redo" title="جلو">↪️</button>
-                        <button type="button" class="wb-action" data-action="clear" title="پاک کردن همه">🗑️</button>
+                        <button type="button" class="wb-action" data-action="undo" title="بازگشت" aria-label="بازگشت">↩️</button>
+                        <button type="button" class="wb-action" data-action="redo" title="جلو" aria-label="جلو">↪️</button>
+                        <button type="button" class="wb-action" data-action="clear" title="پاک کردن همه" aria-label="پاک کردن همه">🗑️</button>
                         <span class="wb-sep"></span>
                         <label class="wb-color"><input type="color" id="wb-color" value="#2563eb" aria-label="رنگ قلم"></label>
+                        <label class="wb-width"><input type="range" id="wb-width" min="1" max="24" value="3" aria-label="ضخامت قلم"></label>
                     </div>
-                    <canvas id="whiteboard-canvas" aria-label="تخته سفید"></canvas>
+                    <div class="wb-canvas-wrap"><canvas id="whiteboard-canvas" aria-label="تخته سفید"></canvas></div>
                 </div>
             </div>
         </main>
 
-        <aside class="room-side">
-            <section class="side-panel participants-panel">
-                <h2>شرکت‌کنندگان <span class="count-pill" id="participant-count">0</span></h2>
-                <ul class="participant-list" id="participant-list">
-                    {% for m in members %}
-                        <li class="participant" data-user-id="{{ m.user_id }}">
-                            <span class="participant-avatar">{{ m.user.name|first }}</span>
-                            <span class="participant-name">{{ m.user.name }}</span>
-                            <span class="participant-role">{{ m.get_role_display }}</span>
-                            <span class="participant-states" aria-hidden="true">
-                                <i data-state="mic" title="میکروفون">🎤</i>
-                                <i data-state="camera" title="دوربین">📹</i>
-                                <i data-state="hand" title="دست بالا">✋</i>
-                            </span>
+        <aside class="room-side" id="room-side" aria-label="پنل کناری">
+            <div class="side-tabs" role="tablist">
+                <button class="side-tab active" data-tab="participants" role="tab" aria-selected="true">
+                    شرکت‌کنندگان <span class="count-pill" id="participant-count">0</span>
+                    <span class="hand-pill hidden" id="hand-pill">✋ <span id="hand-count">0</span></span>
+                </button>
+                <button class="side-tab" data-tab="chat" role="tab" aria-selected="false">
+                    گفتگو <span class="ws-dot" id="chat-status" title="وضعیت اتصال">●</span>
+                    <span class="unread-pill hidden" id="chat-unread">0</span>
+                </button>
+                <button class="side-tab" data-tab="files" role="tab" aria-selected="false">فایل‌ها</button>
+            </div>
+
+            <!-- ===== participants ===== -->
+            <section class="side-panel active" id="panel-participants" role="tabpanel">
+                <div class="waiting-section hidden" id="waiting-section">
+                    <h3>در انتظار تأیید <span class="count-pill" id="waiting-count">0</span></h3>
+                    <ul id="waiting-list" class="participant-list compact"></ul>
+                </div>
+                <div class="participant-filters">
+                    <input type="search" id="participant-search" placeholder="جستجوی شرکت‌کننده…" aria-label="جستجوی شرکت‌کننده">
+                    <div class="filter-chips" role="group" aria-label="فیلتر نقش">
+                        <button class="chip active" data-filter="ALL">همه</button>
+                        <button class="chip" data-filter="HAND">✋ دست بالا</button>
+                        <button class="chip" data-filter="MUTED">🔇 بی‌صدا</button>
+                        <button class="chip" data-filter="STUDENT">دانش‌آموز</button>
+                        <button class="chip" data-filter="PRESENTER">ارائه‌دهنده</button>
+                        <button class="chip" data-filter="MODERATOR">مدیر</button>
+                    </div>
+                </div>
+                <ul class="participant-list" id="participant-list" aria-live="polite"></ul>
+            </section>
+
+            <!-- ===== chat ===== -->
+            <section class="side-panel" id="panel-chat" role="tabpanel">
+                <div class="chat-messages" id="chat-messages" aria-live="polite" aria-label="پیام‌های گفتگو"></div>
+                <form class="chat-form" id="chat-form" autocomplete="off">
+                    <input type="text" id="chat-input" placeholder="پیام خود را بنویسید…" maxlength="1000" aria-label="متن پیام">
+                    <button type="submit" class="btn btn-primary btn-sm" id="chat-send">ارسال</button>
+                </form>
+            </section>
+
+            <!-- ===== files ===== -->
+            <section class="side-panel" id="panel-files" role="tabpanel">
+                <form class="upload-form hidden" id="upload-form">
+                    <label class="btn btn-ghost btn-sm btn-block" for="file-input">📎 بارگذاری فایل</label>
+                    <input type="file" id="file-input" class="hidden"
+                           accept=".pdf,.png,.jpg,.jpeg,.docx,.pptx,.xlsx,.zip" aria-label="انتخاب فایل">
+                    <small class="muted">PDF، PNG، JPG، DOCX، PPTX، XLSX، ZIP — حداکثر {{ 25 }}MB</small>
+                    <div class="upload-progress hidden" id="upload-progress"></div>
+                </form>
+                <ul class="file-list" id="file-list" aria-label="فایل‌های کلاس">
+                    {% for f in files %}
+                        <li class="file-item" data-file-id="{{ f.id }}">
+                            <div class="file-info">
+                                <span class="file-name">{{ f.original_name }}</span>
+                                <small class="muted">{{ f.uploader.name }} · {{ f.size_display }} · {{ f.uploaded_at|date:"m/d H:i" }}</small>
+                            </div>
+                            <div class="file-actions">
+                                <a class="btn btn-sm btn-ghost" href="{% url 'room:file_download' classroom.room_code f.id %}" download>⬇</a>
+                                <button type="button" class="btn btn-sm btn-ghost present-btn hidden" data-present="{{ f.id }}" title="ارائه این فایل">📽</button>
+                            </div>
                         </li>
                     {% endfor %}
                 </ul>
-            </section>
-
-            <section class="side-panel chat-panel">
-                <h2>گفتگو <span class="ws-dot" id="chat-status" title="وضعیت اتصال">●</span></h2>
-                <div class="chat-messages" id="chat-messages" aria-live="polite"></div>
-                <form class="chat-form" id="chat-form" autocomplete="off">
-                    <input type="text" id="chat-input" placeholder="پیام خود را بنویسید…"
-                           maxlength="1000" aria-label="متن پیام">
-                    <button type="submit" class="btn btn-primary btn-sm">ارسال</button>
-                </form>
             </section>
         </aside>
     </div>
 
     <footer class="room-controls">
-        <button type="button" class="ctrl-btn" id="btn-mic" title="میکروفون (به‌زودی)">🎤</button>
-        <button type="button" class="ctrl-btn" id="btn-camera" title="دوربین (به‌زودی)">📹</button>
-        <button type="button" class="ctrl-btn" id="btn-screen" title="اشتراک صفحه (به‌زودی)">🖥️</button>
-        <button type="button" class="ctrl-btn" id="btn-whiteboard" title="تخته سفید">🧑‍🏫</button>
-        <button type="button" class="ctrl-btn" id="btn-hand" title="بالا بردن دست (به‌زودی)">✋</button>
-        <button type="button" class="ctrl-btn" id="btn-chat" title="گفتگو">💬</button>
-        <button type="button" class="ctrl-btn ctrl-exit" id="btn-exit" title="خروج">📞</button>
+        <button type="button" class="ctrl-btn" id="btn-mic" title="میکروفون" aria-label="میکروفون">🎤</button>
+        <button type="button" class="ctrl-btn" id="btn-camera" title="دوربین" aria-label="دوربین">📹</button>
+        <button type="button" class="ctrl-btn" id="btn-screen" title="اشتراک صفحه" aria-label="اشتراک صفحه">🖥️</button>
+        <button type="button" class="ctrl-btn" id="btn-whiteboard" title="تخته سفید" aria-label="تخته سفید">🧑‍🏫</button>
+        <button type="button" class="ctrl-btn" id="btn-hand" title="بالا بردن دست" aria-label="بالا بردن دست">✋</button>
+        <button type="button" class="ctrl-btn side-toggle" id="btn-chat" title="گفتگو" aria-label="گفتگو">💬</button>
+        <button type="button" class="ctrl-btn side-toggle" id="btn-people" title="شرکت‌کنندگان" aria-label="شرکت‌کنندگان">👥</button>
+        {% if is_privileged %}
+            <button type="button" class="ctrl-btn host-only" id="btn-mute-all" title="بی‌صدا کردن همه" aria-label="بی‌صدا کردن همه">🔇</button>
+            <button type="button" class="ctrl-btn host-only" id="btn-lock" title="قفل کلاس" aria-label="قفل کلاس">🔒</button>
+            <button type="button" class="ctrl-btn host-only" id="btn-settings" title="تنظیمات کلاس" aria-label="تنظیمات کلاس">⚙️</button>
+            <button type="button" class="ctrl-btn host-only" id="btn-session" title="شروع/پایان جلسه" aria-label="مدیریت جلسه">⏺️</button>
+        {% endif %}
+        <button type="button" class="ctrl-btn ctrl-exit" id="btn-exit" title="خروج" aria-label="خروج">📞</button>
     </footer>
 </div>
+
+<!-- ===== settings modal (host) ===== -->
+<dialog class="settings-dialog" id="settings-dialog" aria-label="تنظیمات کلاس">
+    <form method="dialog" class="settings-form" id="settings-form">
+        <h2>تنظیمات کلاس</h2>
+        <label class="switch-row"><input type="checkbox" name="enable_waiting_room" {% if classroom.enable_waiting_room %}checked{% endif %}> اتاق انتظار (تأیید ورود توسط میزبان)</label>
+        <label class="switch-row"><input type="checkbox" name="allow_student_mic" {% if classroom.allow_student_mic %}checked{% endif %}> میکروفون دانش‌آموزان</label>
+        <label class="switch-row"><input type="checkbox" name="allow_student_camera" {% if classroom.allow_student_camera %}checked{% endif %}> دوربین دانش‌آموزان</label>
+        <label class="switch-row"><input type="checkbox" name="allow_student_chat" {% if classroom.allow_student_chat %}checked{% endif %}> گفتگوی دانش‌آموزان</label>
+        <label class="switch-row"><input type="checkbox" name="allow_student_screen_share" {% if classroom.allow_student_screen_share %}checked{% endif %}> اشتراک صفحهٔ دانش‌آموزان</label>
+        <label class="switch-row"><input type="checkbox" name="allow_student_whiteboard" {% if classroom.allow_student_whiteboard %}checked{% endif %}> تختهٔ دانش‌آموزان</label>
+        <label class="switch-row"><input type="checkbox" name="allow_file_upload" {% if classroom.allow_file_upload %}checked{% endif %}> بارگذاری فایل توسط غیرمالک</label>
+        <label class="switch-row"><input type="checkbox" name="chat_disabled" {% if classroom.chat_disabled %}checked{% endif %}> قطع کامل گفتگو</label>
+        <label class="switch-row"><input type="checkbox" name="is_locked" {% if classroom.is_locked %}checked{% endif %}> 🔒 قفل کردن کلاس (ورود اعضای جدید مسدود)</label>
+        <div class="settings-actions">
+            <button type="button" class="btn btn-ghost" id="settings-cancel">انصراف</button>
+            <button type="button" class="btn btn-primary" id="settings-save">ذخیره</button>
+        </div>
+    </form>
+</dialog>
+
+<!-- ===== initial file list for JS ===== -->
+{{ files_json|json_script:"initial-files" }}
 {% endblock %}
 
 {% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/livekit-client@2.15.6/dist/livekit-client.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/fabric@6.6.6/dist/fabric.min.js"></script>
 <script>
-    // Module bootstrap — ES modules, no bundler needed (vanilla JS by design).
-    const script = document.createElement('script');
-    script.type = 'module';
-    script.src = "{% static 'js/room.js' %}";
-    document.body.appendChild(script);
+    const s = document.createElement('script');
+    s.type = 'module';
+    s.src = "{% static 'js/room.js' %}";
+    document.body.appendChild(s);
 </script>
 {% endblock %}

@@ -55,6 +55,7 @@ INSTALLED_APPS = [
     "accounts.apps.AccountsConfig",
     "classrooms.apps.ClassroomsConfig",
     "chat.apps.ChatConfig",
+    "whiteboard.apps.WhiteboardConfig",
 ]
 
 MIDDLEWARE = [
@@ -153,6 +154,41 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 
 # ---------------------------------------------------------------------------
+# Media server (LiveKit SFU)
+# ---------------------------------------------------------------------------
+# Django NEVER proxies media.  It only issues short-lived scoped JWTs
+# (see classrooms/media.py); the browser connects to the SFU directly.
+# Leave empty to run without media (chat/whiteboard still work).
+LIVEKIT_URL = os.environ.get("MEDIA_SERVER_URL", "")
+LIVEKIT_API_KEY = os.environ.get("MEDIA_SERVER_API_KEY", "")
+LIVEKIT_API_SECRET = os.environ.get("MEDIA_SERVER_API_SECRET", "")
+LIVEKIT_TOKEN_TTL_MINUTES = int(os.environ.get("MEDIA_TOKEN_TTL_MINUTES", "360"))
+
+# ---------------------------------------------------------------------------
+# Uploads
+# ---------------------------------------------------------------------------
+MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "25"))
+FILE_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024  # larger uploads stream to disk
+
+# ---------------------------------------------------------------------------
+# Cache — Redis in production, local-memory fallback in development.
+# Used for classroom password rate limiting and other ephemeral state.
+# ---------------------------------------------------------------------------
+if REDIS_URL:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "LOCATION": REDIS_URL,
+        }
+    }
+else:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        }
+    }
+
+# ---------------------------------------------------------------------------
 # Django REST Framework
 # ---------------------------------------------------------------------------
 REST_FRAMEWORK = {
@@ -182,12 +218,16 @@ STATIC_URL = "static/"
 STATICFILES_DIRS = [BASE_DIR / "static"]
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
+MEDIA_URL = "media/"
+MEDIA_ROOT = BASE_DIR / "media"
+
 # ---------------------------------------------------------------------------
 # Security (tightened automatically when DEBUG is off)
 # ---------------------------------------------------------------------------
 CSRF_COOKIE_HTTPONLY = False  # must remain readable by JS templates (Django default)
 SESSION_COOKIE_SAMESITE = "Lax"
 CSRF_COOKIE_SAMESITE = "Lax"
+CSRF_TRUSTED_ORIGINS = env_list("CSRF_TRUSTED_ORIGINS", "")
 if not DEBUG:
     SESSION_COOKIE_SECURE = env_bool("SESSION_COOKIE_SECURE", "true")
     CSRF_COOKIE_SECURE = env_bool("CSRF_COOKIE_SECURE", "true")
@@ -196,13 +236,25 @@ if not DEBUG:
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     X_FRAME_OPTIONS = "DENY"
 
-# Logging for WebSocket/consumer debugging.
+# Structured application logging.  Sensitive data (passwords, tokens,
+# credentials) is never logged — loggers receive identifiers only.
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
-    "handlers": {"console": {"class": "logging.StreamHandler"}},
+    "formatters": {
+        "structured": {
+            "format": "{levelname} {asctime} {name} {message}",
+            "style": "{",
+        },
+    },
+    "handlers": {
+        "console": {"class": "logging.StreamHandler", "formatter": "structured"},
+    },
     "loggers": {
         "classrooms.consumers": {"handlers": ["console"], "level": "INFO"},
+        "classrooms.services": {"handlers": ["console"], "level": "INFO"},
+        "classrooms.views": {"handlers": ["console"], "level": "INFO"},
         "chat.consumers": {"handlers": ["console"], "level": "INFO"},
+        "whiteboard.consumers": {"handlers": ["console"], "level": "INFO"},
     },
 }
