@@ -603,6 +603,7 @@ function initControls() {
     });
     bind('btn-exit-screen', () => switchView('media'));
     bind('btn-exit-presentation', () => switchView('media'));
+    bind('cam-pip-close', () => Media.closePip());
     bind('btn-exit', async () => {
         if (await confirmDialog('خروج از کلاس', 'از کلاس خارج شوید؟ برای ورود مجدد باید دوباره به کلاس بپیوندید.', { danger: true, okLabel: 'خروج' })) {
             document.getElementById('leave-submit').form.submit();
@@ -641,8 +642,12 @@ function switchView(view) {
         document.getElementById(`view-${id}`).classList.toggle('hidden', id !== view);
     }
     if (view === 'whiteboard') setTimeout(() => Whiteboard.resize(), 60);
+    // picture-in-picture camera for the full-stage views (whiteboard/
+    // presentation/screen) — the media engine decides what to show.
+    Media.updatePip(view);
 }
 window.__switchView = switchView; // used by presentation module below
+window.__media = Media;           // debugging + automated smoke tests
 
 function refreshControlStates() {
     const micBtn = document.getElementById('btn-mic');
@@ -910,13 +915,15 @@ function addFileItem(file) {
 }
 
 function applyPresentation(data) {
-    if (!data.file_id) {
+    if (!data || !data.file_id) {
         Presentation.hide();
         switchView('media');
         return;
     }
-    Presentation.show({ file_id: data.file_id, file_name: data.file_name, page: data.page || 1 });
+    // switch FIRST: the renderer measures its holder, and a hidden
+    // holder measures 0×0 (which now aborts the render entirely).
     switchView('presentation');
+    Presentation.show({ file_id: data.file_id, file_name: data.file_name, page: data.page || 1 });
 }
 
 // ---------------------------------------------------------------------------

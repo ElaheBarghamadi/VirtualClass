@@ -12,6 +12,7 @@
  */
 import { toast } from './toast.js';
 import { MeshMedia } from './mesh.js';
+import { analyserLevel, createAnalyser, disposeAnalyser } from './meter.js';
 
 const LivekitClient = window.LivekitClient;
 
@@ -42,6 +43,12 @@ class LivekitMedia {
         this.quality = 'unknown';        // from LiveKit's real stats
         this.onStateChange = () => {};   // room.js hook → presence media_state
         this.onQualityChange = () => {}; // room.js hook → connection pill
+        this.currentView = 'media';
+        this._pipView = null;
+        this._pipClosed = false;
+        this._pipTrack = null;
+        this._localAnalyser = null;
+        this._localLevelRaf = null;
     }
 
     async init(opts) {
@@ -249,6 +256,96 @@ class LivekitMedia {
             tile.classList.toggle('speaking', identity === this.activeSpeaker);
         });
         this._layout();
+        this.updatePip(this.currentView); // pip follows the speaker
+    }
+
+    // ------------------------------------------------- picture-in-picture
+    /** Floating camera for full-stage views — see mesh.js updatePip. */
+    updatePip(view) {
+        if (view) this.currentView = view;
+        const pip = document.getElementById('cam-pip');
+        const vid = document.getElementById('cam-pip-video');
+        const label = document.getElementById('cam-pip-label');
+        if (!pip || !vid) return;
+        if (this.currentView !== this._pipView) {
+            this._pipView = this.currentView;
+            this._pipClosed = false;
+        }
+        const pipViews = ['whiteboard', 'presentation', 'screen'];
+        if (!pipViews.includes(this.currentView) || this._pipClosed || !this.room) {
+            pip.classList.add('hidden');
+            vid.srcObject = null;
+            this._pipTrack = null;
+            return;
+        }
+        let track = null;
+        let name = '';
+        const myPub = this.localParticipant
+            && this.localParticipant.getTrackPublication(LivekitClient.Track.Source.Camera);
+        if (this.cameraOn && myPub && myPub.track) {
+            track = myPub.track.mediaStreamTrack;
+            name = `${this.localParticipant.name || ''} (شما)`;
+            vid.muted = true;
+        } else if (this.activeSpeaker && this.activeSpeaker !== (this.localParticipant && this.localParticipant.identity)) {
+            const p = this.room.remoteParticipants.get(this.activeSpeaker);
+            const pub = p && p.getTrackPublication(LivekitClient.Track.Source.Camera);
+            if (pub && pub.track) {
+                track = pub.track.mediaStreamTrack;
+                name = p.name || '';
+                vid.muted = false;
+            }
+        }
+        if (!track) {
+            pip.classList.add('hidden');
+            vid.srcObject = null;
+            this._pipTrack = null;
+            return;
+        }
+        if (this._pipTrack !== track) {
+            vid.srcObject = new MediaStream([track]);
+            this._pipTrack = track;
+        }
+        if (label) label.textContent = name;
+        pip.classList.remove('hidden');
+        vid.play().catch(() => {});
+    }
+
+    closePip() {
+        this._pipClosed = true;
+        this.updatePip(this.currentView);
+    }
+
+    // ------------------------------------------------- local mic meter
+    _startLocalLevel() {
+        this._stopLocalLevel();
+        const pub = this.localParticipant
+            && this.localParticipant.getTrackPublication(LivekitClient.Track.Source.Microphone);
+        const track = pub && pub.track && pub.track.mediaStreamTrack;
+        if (!track) return;
+        this._localAnalyser = createAnalyser(new MediaStream([track]));
+        if (!this._localAnalyser) return;
+        const tick = () => {
+            if (!this.micOn) return;
+            const level = analyserLevel(this._localAnalyser);
+            const btn = document.getElementById('btn-mic');
+            if (btn) btn.style.setProperty('--mic-level', level.toFixed(3));
+            const tile = this.localParticipant && this.tiles.get(this.localParticipant.identity);
+            if (tile) {
+                tile.style.setProperty('--lvl', level.toFixed(3));
+                tile.classList.toggle('speaking', level > 0.06);
+            }
+            this._localLevelRaf = requestAnimationFrame(tick);
+        };
+        this._localLevelRaf = requestAnimationFrame(tick);
+    }
+
+    _stopLocalLevel() {
+        if (this._localLevelRaf) cancelAnimationFrame(this._localLevelRaf);
+        this._localLevelRaf = null;
+        disposeAnalyser(this._localAnalyser);
+        this._localAnalyser = null;
+        const btn = document.getElementById('btn-mic');
+        if (btn) btn.style.setProperty('--mic-level', '0');
     }
 
     togglePin(identity) {
@@ -414,6 +511,9 @@ class LivekitMedia {
             camBtn.classList.toggle('active', this.cameraOn);
             camBtn.setAttribute('aria-pressed', String(this.cameraOn));
         }
+        // keep the live mic meter in sync with the real publish state
+        if (this.micOn && !this._localLevelRaf) this._startLocalLevel();
+        if (!this.micOn) this._stopLocalLevel();
     }
 
     /** Called by room.js when the roster reports our forced states. */
@@ -468,6 +568,8 @@ class MediaFacade {
     handleSignal(msg) { if (this.impl && this.impl.handleSignal) this.impl.handleSignal(msg); }
 
     setLayout(mode) { if (this.impl) this.impl.setLayout(mode); }
+    updatePip(view) { if (this.impl && this.impl.updatePip) this.impl.updatePip(view); }
+    closePip() { if (this.impl && this.impl.closePip) this.impl.closePip(); }
     async toggleMicrophone() { return this.impl ? this.impl.toggleMicrophone() : false; }
     async toggleCamera() { return this.impl ? this.impl.toggleCamera() : false; }
     async toggleScreenShare() { return this.impl ? this.impl.toggleScreenShare() : false; }

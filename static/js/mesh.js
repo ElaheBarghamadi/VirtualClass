@@ -20,6 +20,7 @@
  * - Fine for small classrooms; large rooms should configure LiveKit.
  */
 import { toast } from './toast.js';
+import { analyserLevel, createAnalyser, disposeAnalyser } from './meter.js';
 
 const ICE_SERVERS = [
     { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
@@ -140,11 +141,16 @@ class MeshMedia {
         this.emptyEl = document.getElementById('stage-empty');
         this.tiles = new Map();          // identity → tile element
         this.audioCtx = null;
-        this.levels = new Map();         // identity → current audio level
+        this.levels = new Map();         // identity → analyser
         this._audioEls = new Map();
         this._screenVideo = null;
         this._statsTimer = null;
         this._speakerTimer = null;
+        this._localAnalyser = null;
+        this._localLevelRaf = null;
+        this.currentView = 'media';
+        this._pipView = null;
+        this._pipClosed = false;
     }
 
     async init({ roomCode, self, permissions, signal, onStateChange, onQualityChange }) {
@@ -205,7 +211,9 @@ class MeshMedia {
         const audio = this._audioEls.get(identity);
         if (audio) { audio.srcObject = null; audio.remove(); }
         this._audioEls.delete(identity);
+        disposeAnalyser(this.levels.get(identity));
         this.levels.delete(identity);
+        if (this.activeSpeaker === identity) this.activeSpeaker = null;
         this._layout();
     }
 
@@ -215,23 +223,68 @@ class MeshMedia {
     }
 
     // ------------------------------------------------------------ local
-    async _ensureLocalStream() {
-        const constraints = {
-            audio: this.permissions.can_use_microphone !== false,
-            video: this.permissions.can_use_camera !== false,
-        };
-        if (!constraints.audio && !constraints.video) return null;
+    /**
+     * Device handling philosophy: "off" means OFF.  The track is fully
+     * stopped (the browser's recording indicator goes dark and the OS
+     * device is released) — not merely `enabled = false`.  Turning a
+     * device back on re-acquires it with a fresh getUserMedia call.
+     */
+    _deviceError(err) {
+        const name = err && err.name;
+        if (name === 'NotAllowedError') toast('دسترسی به دوربین/میکروفون توسط مرورگر مسدود شده است.', 'error');
+        else if (name === 'NotFoundError') toast('دوربین یا میکروفونی پیدا نشد.', 'error');
+        else toast(`خطای دستگاه: ${name || 'نامشخص'}`, 'error');
+    }
+
+    /** Put a fresh track into the shared local stream (replacing its kind). */
+    _mergeLocalTrack(track) {
+        if (!this.localStream) this.localStream = new MediaStream();
+        for (const old of this.localStream.getTracks()) {
+            if (old.kind === track.kind) {
+                this.localStream.removeTrack(old);
+                if (old.readyState === 'live') old.stop();
+            }
+        }
+        this.localStream.addTrack(track);
+    }
+
+    /** Drop a track kind from the local stream and stop the device. */
+    _dropLocalTrack(kind) {
+        if (!this.localStream) return;
+        for (const t of this.localStream.getTracks()) {
+            if (t.kind === kind) {
+                this.localStream.removeTrack(t);
+                t.stop();
+            }
+        }
+        if (!this.localStream.getTracks().length) this.localStream = null;
+    }
+
+    /**
+     * Sync every peer connection with the current local stream:
+     * ended senders get replaceTrack (no renegotiation needed for the
+     * same kind), brand-new kinds are added (triggers negotiation).
+     */
+    _republishLocal() {
+        for (const link of this.links.values()) {
+            for (const sender of link.pc.getSenders()) {
+                const kind = sender.track && sender.track.kind;
+                if (!kind || sender.track.readyState !== 'ended') continue;
+                const fresh = this.localStream
+                    && this.localStream.getTracks().find((t) => t.kind === kind && t.readyState === 'live');
+                sender.replaceTrack(fresh || null).catch(() => {});
+            }
+            link.addLocalTracks(this.localStream);
+        }
+    }
+
+    async _acquire(constraints) {
         try {
-            this.localStream = await navigator.mediaDevices.getUserMedia(constraints);
+            return await navigator.mediaDevices.getUserMedia(constraints);
         } catch (err) {
-            const name = err && err.name;
-            if (name === 'NotAllowedError') toast('دسترسی به دوربین/میکروفون توسط مرورگر مسدود شده است.', 'error');
-            else if (name === 'NotFoundError') toast('دوربین یا میکروفونی پیدا نشد.', 'error');
-            else toast(`خطای دستگاه: ${name || 'نامشخص'}`, 'error');
+            this._deviceError(err);
             return null;
         }
-        this._renderLocalTile();
-        return this.localStream;
     }
 
     async toggleMicrophone() {
@@ -239,21 +292,24 @@ class MeshMedia {
             toast('شما اجازهٔ استفاده از میکروفون را ندارید.', 'warning');
             return false;
         }
-        if (!this.localStream) {
-            if (!(await this._ensureLocalStream())) return false;
-        }
-        const track = this.localStream && this.localStream.getAudioTracks()[0];
-        if (!track) { toast('میکروفونی یافت نشد.', 'warning'); return false; }
         if (this.micOn) {
-            track.enabled = false;
+            this._stopLocalLevel();
+            this._dropLocalTrack('audio');
             this.micOn = false;
-        } else {
-            // make sure every peer connection carries this track
-            for (const link of this.links.values()) link.addLocalTracks(this.localStream);
-            track.enabled = true;
-            this.micOn = true;
+            this._republishLocal();
+            this._afterLocalChange();
+            return true;
         }
-        this._syncLocalUI();
+        const stream = await this._acquire({
+            audio: this._micDeviceId ? { deviceId: { exact: this._micDeviceId } } : true,
+        });
+        const track = stream && stream.getAudioTracks()[0];
+        if (!track) { if (stream) stream.getTracks().forEach((t) => t.stop()); toast('میکروفونی یافت نشد.', 'warning'); return false; }
+        this._mergeLocalTrack(track);
+        this.micOn = true;
+        this._republishLocal();
+        this._startLocalLevel();
+        this._afterLocalChange();
         return true;
     }
 
@@ -262,21 +318,65 @@ class MeshMedia {
             toast('شما اجازهٔ استفاده از دوربین را ندارید.', 'warning');
             return false;
         }
-        if (!this.localStream) {
-            if (!(await this._ensureLocalStream())) return false;
-        }
-        const track = this.localStream && this.localStream.getVideoTracks()[0];
-        if (!track) { toast('دوربینی یافت نشد.', 'warning'); return false; }
         if (this.cameraOn) {
-            track.enabled = false;
+            this._dropLocalTrack('video');
             this.cameraOn = false;
-        } else {
-            for (const link of this.links.values()) link.addLocalTracks(this.localStream);
-            track.enabled = true;
-            this.cameraOn = true;
+            this._republishLocal();
+            this._afterLocalChange();
+            return true;
         }
-        this._syncLocalUI();
+        const videoConstraints = { width: { ideal: 1280 }, height: { ideal: 720 } };
+        if (this._camDeviceId) videoConstraints.deviceId = { exact: this._camDeviceId };
+        const stream = await this._acquire({ video: videoConstraints });
+        const track = stream && stream.getVideoTracks()[0];
+        if (!track) { if (stream) stream.getTracks().forEach((t) => t.stop()); toast('دوربینی یافت نشد.', 'warning'); return false; }
+        this._mergeLocalTrack(track);
+        this.cameraOn = true;
+        this._republishLocal();
+        this._afterLocalChange();
         return true;
+    }
+
+    /** Re-render tile/UI/pip after any local device change. */
+    _afterLocalChange() {
+        if (this.localStream) this._renderLocalTile();
+        else this._renderLocalTileEmpty();
+        this._syncLocalUI();
+        this.updatePip(this.currentView);
+    }
+
+    // ------------------------------------------------- local mic meter
+    /** Live volume bar on the mic button + our tile, from REAL samples. */
+    _startLocalLevel() {
+        this._stopLocalLevel();
+        const track = this.localStream && this.localStream.getAudioTracks()[0];
+        if (!track) return;
+        this._localAnalyser = createAnalyser(new MediaStream([track]));
+        if (!this._localAnalyser) return;
+        const tick = () => {
+            if (!this.micOn) return;
+            const level = analyserLevel(this._localAnalyser);
+            const btn = document.getElementById('btn-mic');
+            if (btn) btn.style.setProperty('--mic-level', level.toFixed(3));
+            const tile = this.tiles.get(this.self.identity);
+            if (tile) {
+                tile.style.setProperty('--lvl', level.toFixed(3));
+                tile.classList.toggle('speaking', level > 0.06);
+            }
+            this._localLevelRaf = requestAnimationFrame(tick);
+        };
+        this._localLevelRaf = requestAnimationFrame(tick);
+    }
+
+    _stopLocalLevel() {
+        if (this._localLevelRaf) cancelAnimationFrame(this._localLevelRaf);
+        this._localLevelRaf = null;
+        disposeAnalyser(this._localAnalyser);
+        this._localAnalyser = null;
+        const btn = document.getElementById('btn-mic');
+        if (btn) btn.style.setProperty('--mic-level', '0');
+        const tile = this.tiles.get(this.self.identity);
+        if (tile) { tile.style.setProperty('--lvl', '0'); tile.classList.remove('speaking'); }
     }
 
     async toggleScreenShare() {
@@ -331,46 +431,48 @@ class MeshMedia {
     }
 
     async forceMute() {
-        const track = this.localStream && this.localStream.getAudioTracks()[0];
-        if (track) track.enabled = false;
+        // host revoked the mic — release the device completely
+        this._stopLocalLevel();
+        this._dropLocalTrack('audio');
         this.micOn = false;
-        this._syncLocalUI();
+        this._republishLocal();
+        this._afterLocalChange();
     }
 
     async forceCameraOff() {
-        const track = this.localStream && this.localStream.getVideoTracks()[0];
-        if (track) track.enabled = false;
+        this._dropLocalTrack('video');
         this.cameraOn = false;
-        this._syncLocalUI();
+        this._republishLocal();
+        this._afterLocalChange();
     }
 
     async setMicDevice(deviceId) {
-        if (!this.localStream) return;
-        const fresh = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: deviceId } } });
-        const newTrack = fresh.getAudioTracks()[0];
+        this._micDeviceId = deviceId; // remembered for the next acquisition
+        if (!this.micOn || !this.localStream) return;
+        const fresh = await this._acquire({ audio: { deviceId: { exact: deviceId } } });
+        const newTrack = fresh && fresh.getAudioTracks()[0];
+        if (!newTrack) return;
         for (const pc of this._allPcs()) {
             const sender = pc.getSenders().find((s) => s.track && s.track.kind === 'audio');
-            if (sender) await sender.replaceTrack(newTrack);
+            if (sender) { try { await sender.replaceTrack(newTrack); } catch (e) { /* noop */ } }
         }
-        this.localStream.getAudioTracks().forEach((t) => t.stop());
-        this.localStream.removeTrack(this.localStream.getAudioTracks()[0]);
-        this.localStream.addTrack(newTrack);
-        newTrack.enabled = this.micOn;
+        this._mergeLocalTrack(newTrack);
+        this._startLocalLevel(); // re-point the meter at the new track
     }
 
     async setCameraDevice(deviceId) {
-        if (!this.localStream) return;
-        const fresh = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: deviceId } } });
-        const newTrack = fresh.getVideoTracks()[0];
+        this._camDeviceId = deviceId;
+        if (!this.cameraOn || !this.localStream) return;
+        const fresh = await this._acquire({ video: { deviceId: { exact: deviceId } } });
+        const newTrack = fresh && fresh.getVideoTracks()[0];
+        if (!newTrack) return;
         for (const pc of this._allPcs()) {
             const sender = pc.getSenders().find((s) => s.track && s.track.kind === 'video');
-            if (sender) await sender.replaceTrack(newTrack);
+            if (sender) { try { await sender.replaceTrack(newTrack); } catch (e) { /* noop */ } }
         }
-        this.localStream.getVideoTracks().forEach((t) => t.stop());
-        this.localStream.removeTrack(this.localStream.getVideoTracks()[0]);
-        this.localStream.addTrack(newTrack);
-        newTrack.enabled = this.cameraOn;
+        this._mergeLocalTrack(newTrack);
         this._renderLocalTile();
+        this.updatePip(this.currentView);
     }
 
     async setOutputDevice(deviceId) {
@@ -519,7 +621,10 @@ class MeshMedia {
         const placeholder = document.createElement('div');
         placeholder.className = 'tile-placeholder';
         placeholder.textContent = (peer.name || '?').charAt(0);
-        tile.append(video, placeholder, overlay);
+        const level = document.createElement('i');
+        level.className = 'tile-level';
+        level.setAttribute('aria-hidden', 'true');
+        tile.append(video, placeholder, overlay, level);
         overlay.querySelector('.tile-name').textContent = peer.name || peer.identity;
         this.tiles.set(peer.identity, tile);
         this.tilesEl.appendChild(tile);
@@ -534,10 +639,23 @@ class MeshMedia {
         video.muted = true;
         video.srcObject = this.localStream;
         const camTrack = this.localStream && this.localStream.getVideoTracks()[0];
-        video.style.display = camTrack && camTrack.enabled ? '' : 'none';
-        tile.querySelector('.tile-placeholder').classList.toggle('hidden', Boolean(camTrack && camTrack.enabled));
+        const camLive = Boolean(camTrack && camTrack.readyState === 'live');
+        video.style.display = camLive ? '' : 'none';
+        tile.querySelector('.tile-placeholder').classList.toggle('hidden', camLive);
         tile.querySelector('.tile-name').textContent = `${this.self.name} (شما)`;
+        if (camLive) video.play().catch(() => {});
         this._syncLocalUI();
+        this._layout();
+    }
+
+    /** Local stream fully gone (mic+camera off): show the placeholder. */
+    _renderLocalTileEmpty() {
+        const tile = this.tiles.get(this.self.identity);
+        if (!tile) return;
+        const video = tile.querySelector('video');
+        video.srcObject = null;
+        video.style.display = 'none';
+        tile.querySelector('.tile-placeholder').classList.remove('hidden');
         this._layout();
     }
 
@@ -581,37 +699,93 @@ class MeshMedia {
 
     // ------------------------------------------------- speaker + quality
     _evaluateSpeaker() {
-        // real signal levels from an AnalyserNode per remote audio stream
+        // real signal levels from an AnalyserNode per remote audio stream;
+        // every tile gets a live level bar, the loudest becomes the speaker
         let best = null;
         let bestLevel = 0.02; // noise gate
         for (const [identity, link] of this.links) {
             const stream = link.remoteStream;
+            const tile = this.tiles.get(identity);
             const audioTrack = stream && stream.getAudioTracks()[0];
-            if (!audioTrack || !audioTrack.enabled) continue;
+            if (!audioTrack || !audioTrack.enabled) {
+                if (tile) tile.style.setProperty('--lvl', '0');
+                continue;
+            }
             let analyser = this.levels.get(identity);
-            try {
-                if (!analyser) {
-                    this.audioCtx = this.audioCtx || new (window.AudioContext || window.webkitAudioContext)();
-                    const src = this.audioCtx.createMediaStreamSource(stream);
-                    analyser = this.audioCtx.createAnalyser();
-                    analyser.fftSize = 512;
-                    src.connect(analyser);
-                    analyser._buf = new Uint8Array(analyser.frequencyBinCount);
-                    this.levels.set(identity, analyser);
-                }
-                analyser.getByteTimeDomainData(analyser._buf);
-                let peak = 0;
-                for (let i = 0; i < analyser._buf.length; i++) peak = Math.max(peak, Math.abs(analyser._buf[i] - 128));
-                if (peak > bestLevel) { bestLevel = peak; best = identity; }
-            } catch (e) { /* context blocked */ }
+            if (!analyser) {
+                analyser = createAnalyser(stream);
+                if (!analyser) continue;
+                this.levels.set(identity, analyser);
+            }
+            const level = analyserLevel(analyser);
+            if (tile) tile.style.setProperty('--lvl', level.toFixed(3));
+            if (level > bestLevel) { bestLevel = level; best = identity; }
         }
         if (best !== this.activeSpeaker) {
             this.activeSpeaker = best;
             this.tiles.forEach((tile, identity) => {
-                tile.classList.toggle('speaking', identity === best);
+                if (identity !== this.self.identity) tile.classList.toggle('speaking', identity === best);
             });
             this._layout();
+            this.updatePip(this.currentView); // pip follows the speaker
         }
+    }
+
+    // ------------------------------------------------- picture-in-picture
+    /**
+     * Small floating camera for the full-stage views (whiteboard,
+     * presentation, screen share) so nobody disappears while the board
+     * is in use.  Shows OUR camera when it is on; otherwise the active
+     * remote speaker's camera when there is one.
+     */
+    updatePip(view) {
+        if (view) this.currentView = view;
+        const pip = document.getElementById('cam-pip');
+        const vid = document.getElementById('cam-pip-video');
+        const label = document.getElementById('cam-pip-label');
+        if (!pip || !vid) return;
+        if (this.currentView !== this._pipView) {
+            this._pipView = this.currentView;
+            this._pipClosed = false; // a fresh view re-opens the pip
+        }
+        const pipViews = ['whiteboard', 'presentation', 'screen'];
+        if (!pipViews.includes(this.currentView) || this._pipClosed) {
+            pip.classList.add('hidden');
+            vid.srcObject = null;
+            return;
+        }
+        let stream = null;
+        let name = '';
+        const camTrack = this.localStream
+            && this.localStream.getVideoTracks().find((t) => t.readyState === 'live');
+        if (this.cameraOn && camTrack) {
+            stream = this.localStream;
+            name = `${this.self.name} (شما)`;
+            vid.muted = true;
+        } else {
+            const link = this.activeSpeaker && this.links.get(this.activeSpeaker);
+            const rs = link && link.remoteStream;
+            const rt = rs && rs.getVideoTracks().find((t) => t.readyState === 'live');
+            if (rt) {
+                stream = rs;
+                name = (link.peer && link.peer.name) || '';
+                vid.muted = false;
+            }
+        }
+        if (!stream) {
+            pip.classList.add('hidden');
+            vid.srcObject = null;
+            return;
+        }
+        if (vid.srcObject !== stream) vid.srcObject = stream;
+        if (label) label.textContent = name;
+        pip.classList.remove('hidden');
+        vid.play().catch(() => {});
+    }
+
+    closePip() {
+        this._pipClosed = true;
+        this.updatePip(this.currentView);
     }
 
     async _evaluateQuality() {

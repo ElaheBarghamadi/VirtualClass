@@ -172,7 +172,7 @@ class WhiteboardImpl {
 
     _updatePageUI() {
         const label = document.getElementById('wb-page-label');
-        if (label) label.textContent = `صفحهٔ ${this.page} از ${this.pageCount}`;
+        if (label) label.textContent = `صفحهٔ ${Number(this.page).toLocaleString('fa-IR')} از ${Number(this.pageCount).toLocaleString('fa-IR')}`;
         const prev = document.getElementById('wb-prev');
         const next = document.getElementById('wb-next');
         if (prev) prev.disabled = this.page <= 1;

@@ -29,6 +29,8 @@ class PresentationImpl {
         this.color = '#e11d48';
         this.width = 4;
         this._pdfCache = null;       // {fileId, doc}
+        this._pdfLoading = null;     // {fileId, promise} — single-flight loader
+        this._renderGen = 0;         // generation guard against render races
         this._scale = 1;             // css px per page unit (for normalisation)
         this._fileOps = new Map();   // "fid:page" → ops
         this._myUndo = [];
@@ -170,7 +172,15 @@ class PresentationImpl {
     }
 
     // ------------------------------------------------------------ rendering
+    /**
+     * Renders are guarded by a generation counter: show(), ResizeObserver
+     * and history events can all trigger a render at once, and without
+     * this guard a stale render could (a) refetch the document, (b) have
+     * its doc destroyed mid-render and (c) flash the error fallback over
+     * a perfectly good newer render.  Stale renders abort silently.
+     */
     async renderCurrent() {
+        const gen = ++this._renderGen;
         const stage = document.getElementById('pres-stage');
         const fallback = document.getElementById('pres-fallback');
         if (!stage || !this.fileId) return;
@@ -185,40 +195,75 @@ class PresentationImpl {
                 `<a class="btn" href="/class/${this.roomCode}/files/${this.fileId}/download/" download>⬇ دانلود فایل</a>`;
             return;
         }
+        // While the view is hidden the holder measures 0×0 — rendering now
+        // would produce a stamp-sized page; the ResizeObserver re-renders
+        // as soon as the view becomes visible.
+        const holder = document.getElementById('presentation-holder');
+        const rect = holder.getBoundingClientRect();
+        if (rect.width < 32 || rect.height < 32) return;
+
         fallback.classList.add('hidden');
         stage.classList.remove('hidden');
 
         try {
-            if (kind === 'pdf') await this._renderPdfPage();
-            else await this._renderImage();
+            if (kind === 'pdf') await this._renderPdfPage(gen);
+            else await this._renderImage(gen);
         } catch (err) {
+            if (gen !== this._renderGen) return; // a newer render owns the UI
             console.warn('[presentation] render failed:', err);
             fallback.classList.remove('hidden');
             stage.classList.add('hidden');
             fallback.innerHTML = `<p>نمایش فایل ناموفق بود.</p><a class="btn" href="/class/${this.roomCode}/files/${this.fileId}/download/" download>⬇ دانلود فایل</a>`;
             return;
         }
+        if (gen !== this._renderGen) return;
         this._ensureAnnotCanvas();
         this._repaintAnnot();
         this._syncAnnotGate();
     }
 
-    async _renderPdfPage() {
+    /** Single-flight document load: concurrent callers share ONE fetch. */
+    _loadPdfDoc() {
+        if (this._pdfCache && this._pdfCache.fileId === this.fileId) {
+            return Promise.resolve(this._pdfCache.doc);
+        }
+        if (this._pdfLoading && this._pdfLoading.fileId === this.fileId) {
+            return this._pdfLoading.promise;
+        }
+        const fileId = this.fileId;
+        const promise = pdfjsLib
+            .getDocument({ url: `/class/${this.roomCode}/files/${fileId}/download/` }).promise
+            .then((doc) => {
+                const old = this._pdfCache;
+                this._pdfCache = { fileId, doc };
+                if (this._pdfLoading && this._pdfLoading.fileId === fileId) this._pdfLoading = null;
+                // Destroy the PREVIOUS file's doc only now — any render still
+                // using it is stale and aborts at its next generation check.
+                if (old && old.fileId !== fileId) {
+                    try { old.doc.destroy(); } catch (e) { /* noop */ }
+                }
+                return doc;
+            })
+            .catch((err) => {
+                if (this._pdfLoading && this._pdfLoading.fileId === fileId) this._pdfLoading = null;
+                throw err;
+            });
+        this._pdfLoading = { fileId, promise };
+        return promise;
+    }
+
+    async _renderPdfPage(gen) {
         if (typeof pdfjsLib === 'undefined') throw new Error('pdf.js not loaded');
         if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
             pdfjsLib.GlobalWorkerOptions.workerSrc = window.PDF_WORKER_URL || '/static/vendor/pdf.worker.min.js';
         }
-        if (!this._pdfCache || this._pdfCache.fileId !== this.fileId) {
-            const task = pdfjsLib.getDocument({ url: `/class/${this.roomCode}/files/${this.fileId}/download/` });
-            const doc = await task.promise;
-            if (this._pdfCache) { try { this._pdfCache.doc.destroy(); } catch (e) { /* noop */ } }
-            this._pdfCache = { fileId: this.fileId, doc };
-        }
-        const doc = this._pdfCache.doc;
+        const doc = await this._loadPdfDoc();
+        if (gen !== this._renderGen) return;
         this.pageCount = doc.numPages || 1;
         this.page = Math.max(1, Math.min(this.pageCount, this.page));
 
         const page = await doc.getPage(this.page);
+        if (gen !== this._renderGen) return;
         const holder = document.getElementById('presentation-holder');
         const holderRect = holder.getBoundingClientRect();
         const base = page.getViewport({ scale: 1 });
@@ -241,15 +286,17 @@ class PresentationImpl {
             viewport,
             transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : undefined,
         }).promise;
+        if (gen !== this._renderGen) return;
         this._updateNavUI();
     }
 
-    async _renderImage() {
+    async _renderImage(gen) {
         this.pageCount = 1;
         this.page = 1;
         const img = new Image();
         img.src = `/class/${this.roomCode}/files/${this.fileId}/download/`;
         await img.decode();
+        if (gen !== this._renderGen) return;
         const holder = document.getElementById('presentation-holder');
         const holderRect = holder.getBoundingClientRect();
         const scale = Math.max(0.05, Math.min(
@@ -445,7 +492,7 @@ class PresentationImpl {
 
     _updateNavUI() {
         const label = document.getElementById('pres-page-label');
-        if (label) label.textContent = `صفحهٔ ${this.page} از ${this.pageCount || '?'}`;
+        if (label) label.textContent = `صفحهٔ ${Number(this.page).toLocaleString('fa-IR')} از ${this.pageCount ? Number(this.pageCount).toLocaleString('fa-IR') : '?'}`;
         const prev = document.getElementById('pres-prev');
         const next = document.getElementById('pres-next');
         if (prev) prev.disabled = this.page <= 1;

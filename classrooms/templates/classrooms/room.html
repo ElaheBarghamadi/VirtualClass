@@ -240,6 +240,14 @@
         </aside>
     </div>
 
+    {# Picture-in-picture camera for the full-stage views (whiteboard /
+       presentation / screen share). Filled by media.js / mesh.js. #}
+    <div id="cam-pip" class="cam-pip hidden" aria-label="تصویر کوچک دوربین">
+        <video id="cam-pip-video" autoplay playsinline muted></video>
+        <span id="cam-pip-label" class="cam-pip-label"></span>
+        <button type="button" id="cam-pip-close" class="cam-pip-close" aria-label="بستن تصویر کوچک">✕</button>
+    </div>
+
     <footer class="room-controls">
         <button type="button" class="ctrl-btn" id="btn-mic" title="میکروفون (M)" aria-label="میکروفون" aria-pressed="false">
             <svg class="ic icon-on" viewBox="0 0 24 24"><use href="#i-mic"/></svg>
