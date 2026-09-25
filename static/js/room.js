@@ -328,6 +328,7 @@ function handleEvent(data) {
                 PERMISSIONS[data.permission] = data.value;
                 Whiteboard.setPermission(PERMISSIONS.can_use_whiteboard);
                 Presentation.setPermission(PERMISSIONS.can_use_whiteboard);
+                if (data.permission === 'can_present') applyFilePresentability();
                 refreshControlStates();
             }
             break;
@@ -652,6 +653,7 @@ window.__media = Media;           // debugging + automated smoke tests
 function refreshControlStates() {
     const micBtn = document.getElementById('btn-mic');
     micBtn?.classList.toggle('off', !PERMISSIONS.can_use_microphone);
+    document.getElementById('btn-camera')?.classList.toggle('off', !PERMISSIONS.can_use_camera);
     document.getElementById('btn-screen')?.classList.toggle('off', !PERMISSIONS.can_share_screen);
 }
 
@@ -853,6 +855,34 @@ function initSettingsModal() {
 // ---------------------------------------------------------------------------
 // Files + presentation
 // ---------------------------------------------------------------------------
+/**
+ * Sync the "click row to present" affordance with PERMISSIONS.can_present.
+ *
+ * Idempotent and two-directional: presenters get data-present/role/tabindex
+ * on every row; non-presenters get them stripped, leaving the download link
+ * as the only action.  Called at boot and whenever permissions change live.
+ */
+function applyFilePresentability() {
+    const list = document.getElementById('file-list');
+    if (!list) return;
+    list.classList.toggle('can-present', !!PERMISSIONS.can_present);
+    list.querySelectorAll('.file-item').forEach((li) => {
+        const info = li.querySelector('.file-info');
+        if (!info) return;
+        if (PERMISSIONS.can_present) {
+            info.dataset.present = li.dataset.fileId;
+            info.setAttribute('role', 'button');
+            info.setAttribute('tabindex', '0');
+            if (!info.title) info.title = 'کلیک: ارائهٔ این فایل';
+        } else {
+            delete info.dataset.present;
+            info.removeAttribute('role');
+            info.removeAttribute('tabindex');
+            info.removeAttribute('title');
+        }
+    });
+}
+
 function initFiles() {
     if (PERMISSIONS.can_upload_files) {
         document.getElementById('upload-form').classList.remove('hidden');
@@ -886,24 +916,12 @@ function initFiles() {
         });
     }
     const list = document.getElementById('file-list');
-    if (PERMISSIONS.can_present) {
-        // presenters: the file row itself is the present trigger — the
-        // only visible BUTTON stays the download link.
-        list.classList.add('can-present');
-        list.querySelectorAll('.file-info').forEach((el) => {
-            if (!el.title) el.title = 'کلیک: ارائهٔ این فایل';
-        });
-    } else {
-        // non-presenters: the row is inert — drop the present affordance
-        // entirely so the DOM (and screen readers) only see the download.
-        list.querySelectorAll('.file-info').forEach((el) => {
-            el.removeAttribute('role');
-            el.removeAttribute('tabindex');
-            el.removeAttribute('data-present');
-        });
-    }
+    applyFilePresentability();
     const presentFile = (trigger) => {
-        if (!PERMISSIONS.can_present) return;
+        if (!PERMISSIONS.can_present) {
+            toast('شما اجازهٔ ارائهٔ فایل ندارید.', 'warning', 2500);
+            return;
+        }
         api('/presentation/', { file_id: Number(trigger.dataset.present), page: 1 });
     };
     list.addEventListener('click', (e) => {

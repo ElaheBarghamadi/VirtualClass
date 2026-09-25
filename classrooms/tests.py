@@ -224,3 +224,77 @@ class ApiTests(TestCase):
     def test_api_requires_auth(self):
         response = self.client.get(reverse("api_classroom_list"))
         self.assertEqual(response.status_code, 401)
+
+
+class StalePermissionFlagTests(TestCase):
+    """Regression: `can_present` was added by migration 0002 with
+    default=False, so membership rows created earlier (including the OWNER
+    of old classrooms) could never present — file rows silently did nothing
+    and the only working action was download.
+    """
+
+    def setUp(self):
+        self.owner = make_user("old_owner")
+        self.classroom = create_classroom(self.owner, title="Old class")
+        self.member = ClassroomMember.objects.get(classroom=self.classroom, user=self.owner)
+
+    def test_owner_with_stale_flags_still_has_full_permissions(self):
+        from .permissions import effective_permissions
+        # simulate a membership row created before migration 0002
+        ClassroomMember.objects.filter(pk=self.member.pk).update(
+            can_present=False, can_share_screen=False,
+            can_use_whiteboard=False, can_upload_files=False,
+        )
+        self.member.refresh_from_db()
+        perms = effective_permissions(self.member, self.classroom)
+        self.assertTrue(perms["can_present"], "owner must always be able to present")
+        self.assertTrue(all(perms.values()), f"owner must hold every capability: {perms}")
+
+    def test_backfill_migration_repairs_privileged_roles(self):
+        import importlib
+        from django.apps import apps as global_apps
+        migration = importlib.import_module(
+            "classrooms.migrations.0005_backfill_can_present")
+        presenter = join_classroom(self.classroom, make_user("pres"))
+        student = join_classroom(self.classroom, make_user("stud"))
+        ClassroomMember.objects.filter(pk__in=[self.member.pk, presenter.pk]).update(
+            can_present=False)
+        presenter.role = Role.PRESENTER
+        presenter.save(update_fields=["role"])
+
+        migration.backfill_can_present(global_apps, None)
+
+        self.member.refresh_from_db(); presenter.refresh_from_db(); student.refresh_from_db()
+        self.assertTrue(self.member.can_present)   # OWNER repaired
+        self.assertTrue(presenter.can_present)     # PRESENTER repaired
+        self.assertFalse(student.can_present)      # STUDENT untouched
+
+    def test_owner_room_page_marks_files_presentable(self):
+        from django.core.files.base import ContentFile
+        from .models import SharedFile
+        ClassroomMember.objects.filter(pk=self.member.pk).update(can_present=False)
+        sf = SharedFile.objects.create(
+            classroom=self.classroom, uploader=self.owner,
+            original_name="deck.pdf", size=10, content_type="application/pdf",
+        )
+        sf.file.save("deck.pdf", ContentFile(b"%PDF-1.4 test"), save=True)
+        self.client.force_login(self.owner)
+        resp = self.client.get(reverse("room:room", args=[self.classroom.room_code]))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "data-present")  # owner row is presentable
+        self.assertTrue(resp.context["permissions"]["can_present"])
+
+    def test_owner_with_stale_flags_can_start_presentation(self):
+        from django.core.files.base import ContentFile
+        from .models import SharedFile
+        from .services import set_presentation
+        ClassroomMember.objects.filter(pk=self.member.pk).update(can_present=False)
+        sf = SharedFile.objects.create(
+            classroom=self.classroom, uploader=self.owner,
+            original_name="deck.pdf", size=10, content_type="application/pdf",
+        )
+        sf.file.save("deck.pdf", ContentFile(b"%PDF-1.4 test"), save=True)
+        set_presentation(self.classroom, self.owner, sf.id, 1)  # must not raise
+        self.classroom.refresh_from_db()
+        self.assertEqual(self.classroom.current_file_id, sf.id)
+        self.assertEqual(self.classroom.current_page, 1)

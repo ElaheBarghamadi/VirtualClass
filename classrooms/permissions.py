@@ -160,7 +160,13 @@ def effective_permissions(member: "ClassroomMember" | None, classroom: "Classroo
     if member is None or not member.is_active:
         return {name: False for name in permission_fields()}
 
-    perms = member.permissions_dict()
+    # OWNER is authoritative in their own classroom: always the full
+    # capability set, regardless of stale stored flags (e.g. members
+    # created before a capability field existed and backfilled False).
+    if member.role == Role.OWNER:
+        perms = {name: True for name in permission_fields()}
+    else:
+        perms = member.permissions_dict()
 
     if member.role in {Role.STUDENT, Role.GUEST}:
         perms["can_send_messages"] &= classroom.allow_student_chat

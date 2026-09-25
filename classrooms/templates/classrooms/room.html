@@ -226,8 +226,10 @@
                     {% for f in files %}
                         <li class="file-item" data-file-id="{{ f.id }}">
                             {# The file itself presents (for presenters); the only
-                               BUTTON in the row is the download link. #}
-                            <div class="file-info" data-present="{{ f.id }}" role="button" tabindex="0">
+                               BUTTON in the row is the download link.  Rendered
+                               conditionally so even pre-JS the row is honest. #}
+                            <div class="file-info"
+                                 {% if permissions.can_present %}data-present="{{ f.id }}" role="button" tabindex="0" title="کلیک: ارائهٔ این فایل"{% endif %}>
                                 <span class="file-name">{{ f.original_name }}</span>
                                 <small class="muted">{{ f.uploader.name }} · {{ f.size_display }} · {{ f.uploaded_at|date:"m/d H:i" }}</small>
                             </div>

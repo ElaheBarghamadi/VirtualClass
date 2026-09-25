@@ -621,7 +621,10 @@ def update_settings(classroom: Classroom, owner: User, values: dict) -> None:
 def set_presentation(classroom: Classroom, operator: User, file_id: int | None, page: int) -> None:
     """Presenter picks the shared material and page; state syncs to all."""
     actor = get_active_member(classroom, operator)
-    if actor is None or not actor.can_present or not effective_permissions(actor, classroom)["can_present"]:
+    # effective_permissions is the single source of truth — checking the
+    # stored flag as well would lock out members whose row predates the
+    # can_present field (stale default=False), e.g. owners of old classrooms.
+    if actor is None or not effective_permissions(actor, classroom)["can_present"]:
         raise PermissionDenied("شما اجازهٔ ارائه ندارید.")
     if file_id is not None:
         # strict int — a bool/str/float from JSON must not become "file 1"
