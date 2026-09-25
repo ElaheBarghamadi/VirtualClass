@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 MAX_OP_BYTES = 64 * 1024
 HISTORY_LIMIT = 2000
-VALID_OP_TYPES = {"draw", "text", "remove", "clear"}
+VALID_OP_TYPES = {"draw", "text", "remove", "clear", "page_add"}
 VALID_TOOLS = {"pen", "highlighter", "eraser", "line", "arrow", "rectangle", "circle"}
 
 
@@ -117,7 +117,16 @@ class WhiteboardConsumer(AsyncJsonWebsocketConsumer):
 
     # -- validation -------------------------------------------------------------
     @staticmethod
-    def _valid_op(op) -> bool:
+    def _normalise_page(op) -> int:
+        """Clamp the page number carried by an op (1..999, default 1)."""
+        try:
+            page = int(op.get("page", 1))
+        except (TypeError, ValueError):
+            return 1
+        return max(1, min(999, page))
+
+    @classmethod
+    def _valid_op(cls, op) -> bool:
         if not isinstance(op, dict) or op.get("type") not in VALID_OP_TYPES:
             return False
         try:
@@ -133,6 +142,10 @@ class WhiteboardConsumer(AsyncJsonWebsocketConsumer):
             return False
         if op["type"] == "text" and len(op.get("text", "")) > 500:
             return False
+        if op["type"] == "page_add":
+            # page_add must carry the new page number
+            if not isinstance(op.get("page"), int) or op["page"] < 2:
+                return False
         return True
 
     # -- DB helpers ---------------------------------------------------------------
@@ -174,15 +187,20 @@ class WhiteboardConsumer(AsyncJsonWebsocketConsumer):
     @database_sync_to_async
     def _persist(self, op: dict) -> tuple[dict, int]:
         board, _ = Whiteboard.objects.get_or_create(classroom=self.classroom)
+        page = self._normalise_page(op)
+        op = {**op, "page": page}
         if op.get("type") == "clear":
-            # Compaction: a clear invalidates everything before it.
-            board.events.all().delete()
+            # Compaction: a clear invalidates everything before it on
+            # THIS page only — other pages keep their content, and the
+            # page_add marker stays so the page itself survives.
+            board.events.filter(page=page).exclude(operation__type="page_add").delete()
         member = ClassroomMember.objects.filter(id=self.member.id).first()
         event = WhiteboardEvent.objects.create(
             whiteboard=board,
             actor=member.user if member and member.user_id else None,
             actor_identity=(member.identity if member else "")[:48],
             operation=op,
+            page=page,
         )
         board.save(update_fields=["updated_at"])
         op = dict(op)

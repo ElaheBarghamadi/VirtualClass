@@ -49,6 +49,7 @@ class WhiteboardEvent(models.Model):
     )
     actor_identity = models.CharField(max_length=48, default="", verbose_name="شناسهٔ کاربر")
     operation = models.JSONField(verbose_name="عملیات")
+    page = models.PositiveIntegerField(default=1, db_index=True, verbose_name="صفحه")
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="زمان")
 
     class Meta:

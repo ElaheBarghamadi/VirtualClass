@@ -233,3 +233,92 @@ class ChatModerationTests(TransactionTestCase):
 
         async_to_sync(scenario)()
         self.assertEqual(ChatMessage.objects.count(), 0)
+
+
+class WhiteboardPageTests(TransactionTestCase):
+    """Multi-page whiteboard: page tagging, isolation and validation."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="pg_owner", password="x")
+        self.classroom = create_classroom(self.owner, title="Pages")
+
+    def _ws(self, user):
+        return WebsocketCommunicator(
+            app_with_user(user, wb_routes), f"/ws/classroom/{self.classroom.room_code}/whiteboard/"
+        )
+
+    def test_ops_carry_pages_and_clear_is_per_page(self):
+        async def scenario():
+            ws = self._ws(self.owner)
+            connected, _ = await ws.connect()
+            assert connected
+            await ws.receive_json_from()  # history
+
+            draw1 = {"type": "draw", "tool": "pen", "points": [[1, 2], [3, 4]], "color": "#000", "width": 2, "id": "p1"}
+            await ws.send_json_to({"action": "op", "op": draw1})
+            await ws.send_json_to({"action": "op", "op": {"type": "page_add", "page": 2, "id": "padd"}})
+            draw2 = {"type": "draw", "tool": "pen", "points": [[5, 6], [7, 8]], "color": "#f00", "width": 2, "id": "p2", "page": 2}
+            await ws.send_json_to({"action": "op", "op": draw2})
+            await ws.send_json_to({"action": "op", "op": {"type": "clear", "id": "clr", "page": 2}})
+            await asyncio.sleep(0.4)
+            await ws.disconnect()
+
+        async_to_sync(scenario)()
+
+        events = list(WhiteboardEvent.objects.order_by("id"))
+        pages = [(e.operation.get("type"), e.page) for e in events]
+        # draw p1 survives; page 2 was compacted by the clear (its draw is
+        # gone) but the page_add marker stays so the page still exists
+        assert pages == [("draw", 1), ("page_add", 2), ("clear", 2)], pages
+        # page 1 drawing survived the page-2 clear (only page 2 compacted)
+        surviving = WhiteboardEvent.objects.filter(operation__type="draw")
+        assert [(e.page) for e in surviving] == [1], [(e.page) for e in surviving]
+        # op payloads are tagged too (clients filter by page)
+        assert events[0].operation["page"] == 1
+        assert events[1].operation["page"] == 2
+
+    def test_page_add_validation(self):
+        async def scenario():
+            ws = self._ws(self.owner)
+            connected, _ = await ws.connect()
+            assert connected
+            await ws.receive_json_from()
+
+            # page must be an int ≥ 2
+            await ws.send_json_to({"action": "op", "op": {"type": "page_add", "page": 1}})
+            msg = await ws.receive_json_from()
+            assert msg["type"] == "error", msg
+
+            await ws.send_json_to({"action": "op", "op": {"type": "page_add"}})
+            msg = await ws.receive_json_from()
+            assert msg["type"] == "error", msg
+
+            await ws.send_json_to({"action": "op", "op": {"type": "page_add", "page": 3, "id": "ok"}})
+            await asyncio.sleep(0.3)
+            await ws.disconnect()
+
+        async_to_sync(scenario)()
+        assert WhiteboardEvent.objects.filter(operation__type="page_add", page=3).exists()
+
+    def test_history_returns_pages_for_replay(self):
+        async def scenario():
+            ws = self._ws(self.owner)
+            connected, _ = await ws.connect()
+            assert connected
+            await ws.receive_json_from()
+            await ws.send_json_to({"action": "op", "op": {
+                "type": "draw", "tool": "pen", "points": [[1, 2], [3, 4]],
+                "color": "#000", "width": 2, "id": "h1", "page": 4,
+            }})
+            await asyncio.sleep(0.3)
+            await ws.disconnect()
+
+            ws2 = self._ws(self.owner)
+            connected, _ = await ws2.connect()
+            assert connected
+            history = await ws2.receive_json_from()
+            assert history["type"] == "whiteboard_history"
+            assert history["events"][0]["op"]["page"] == 4, history
+            await ws2.disconnect()
+
+        async_to_sync(scenario)()

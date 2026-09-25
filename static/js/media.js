@@ -15,6 +15,14 @@ import { MeshMedia } from './mesh.js';
 
 const LivekitClient = window.LivekitClient;
 
+/** Fullscreen a tile's video (falls back to the tile itself). */
+function toggleTileFullscreen(tile) {
+    const video = tile.querySelector('video');
+    const target = video && video.readyState > 0 ? video : tile;
+    if (document.fullscreenElement) document.exitFullscreen?.();
+    else target.requestFullscreen?.().catch(() => {});
+}
+
 class LivekitMedia {
     constructor() {
         this.room = null;
@@ -145,7 +153,8 @@ class LivekitMedia {
         overlay.className = 'tile-overlay';
         overlay.innerHTML = `
             <span class="tile-name"></span>
-            <span class="tile-icons"><i class="t-mic" title="میکروفون">🎤</i><i class="t-hand" title="دست بالا">✋</i></span>`;
+            <span class="tile-icons"><i class="t-mic" title="میکروفون">🎤</i><i class="t-hand" title="دست بالا">✋</i></span>
+            <button type="button" class="tile-fs" title="نمایش تمام‌صفحه" aria-label="نمایش تمام‌صفحه">⛶</button>`;
 
         const placeholder = document.createElement('div');
         placeholder.className = 'tile-placeholder';
@@ -154,6 +163,10 @@ class LivekitMedia {
         tile.append(video, placeholder, overlay);
         tile.addEventListener('click', () => this.togglePin(identity));
         tile.addEventListener('keydown', (e) => { if (e.key === 'Enter') this.togglePin(identity); });
+        overlay.querySelector('.tile-fs')?.addEventListener('click', (e) => {
+            e.stopPropagation(); // don't trigger pin
+            toggleTileFullscreen(tile);
+        });
 
         this.tiles.set(identity, tile);
         this.tilesEl.appendChild(tile);

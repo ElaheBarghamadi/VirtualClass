@@ -506,6 +506,31 @@ function applyWhiteboardState(open) {
 }
 
 // ---------------------------------------------------------------------------
+// Stage fullscreen — works for every view (media / screen / whiteboard /
+// presentation).  Any element with [data-action="fullscreen-stage"] toggles.
+// ---------------------------------------------------------------------------
+function initFullscreen() {
+    document.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-action="fullscreen-stage"]');
+        if (!btn) return;
+        if (document.fullscreenElement) {
+            document.exitFullscreen?.();
+        } else {
+            document.getElementById('stage')?.requestFullscreen?.()
+                .catch(() => toast('حالت تمام‌صفحه در این مرورگر در دسترس نیست.', 'warning'));
+        }
+    });
+    document.addEventListener('fullscreenchange', () => {
+        const on = Boolean(document.fullscreenElement);
+        document.querySelectorAll('[data-action="fullscreen-stage"]').forEach((b) => {
+            b.classList.toggle('active', on);
+            b.setAttribute('aria-pressed', String(on));
+        });
+        setTimeout(() => Whiteboard.resize(), 80); // canvas follows the new size
+    });
+}
+
+// ---------------------------------------------------------------------------
 // Tabs, drawers, layouts
 // ---------------------------------------------------------------------------
 function initTabs() {
@@ -954,6 +979,7 @@ function initClock() {
 initTabs();
 initLayouts();
 initControls();
+initFullscreen();
 initMoreMenu();
 initDevicesDialog();
 initShortcuts();

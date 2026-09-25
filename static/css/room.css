@@ -140,6 +140,18 @@ body.full-page .messages {
 }
 .tile-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tile-icons i { font-style: normal; font-size: .7rem; margin-inline-start: .3rem; }
+.tile-fs {
+    background: transparent; border: none; color: inherit; cursor: pointer;
+    font-size: .85rem; padding: 0 .2rem; line-height: 1; opacity: .55;
+    border-radius: var(--radius-sm);
+}
+.tile-fs:hover, .tile:hover .tile-fs { opacity: 1; }
+.tile-fs:focus-visible { outline: 2px solid var(--accent); opacity: 1; }
+
+/* ---------- fullscreen ---------- */
+.stage:fullscreen { background: var(--background); padding: .6rem; }
+.stage:fullscreen .stage-view { height: 100%; }
+video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #000; }
 .tile-icons .t-mic.off { opacity: .3; filter: grayscale(1); }
 
 .stage-empty {
@@ -189,6 +201,14 @@ body.full-page .messages {
 .wb-sep { width: 1px; height: 22px; background: var(--room-border); margin: 0 .25rem; }
 .wb-color input { width: 30px; height: 26px; border: none; background: transparent; cursor: pointer; padding: 0; }
 .wb-width input { width: 70px; accent-color: var(--accent); }
+.wb-pages { display: flex; align-items: center; gap: .2rem; }
+.wb-pages button {
+    background: transparent; border: 1px solid var(--room-border); border-radius: var(--radius-sm);
+    color: var(--room-text); cursor: pointer; font-size: 1rem; padding: .18rem .55rem; min-width: 30px;
+}
+.wb-pages button:disabled { opacity: .38; cursor: default; }
+.wb-pages button:not(:disabled):hover { background: var(--surface-2); }
+#wb-page-label { font-size: .8rem; white-space: nowrap; padding: 0 .25rem; color: var(--room-text); }
 .wb-canvas-wrap { flex: 1; min-height: 0; }
 .wb-canvas-wrap canvas { border-radius: var(--radius); cursor: crosshair; touch-action: none; background: var(--surface); }
 

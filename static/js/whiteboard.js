@@ -1,10 +1,16 @@
 /**
- * whiteboard.js — collaborative whiteboard on Fabric.js.
+ * whiteboard.js — collaborative, multi-page whiteboard on Fabric.js.
  *
- * Synchronisation model: every stroke/shape/text/clear is a structured
- * operation (JSON) sent over the whiteboard WebSocket — never a canvas
- * image.  The server validates permissions + shape, persists the op and
- * relays it; on connect we replay the stored history.
+ * Synchronisation model: every stroke/shape/text/clear/page-add is a
+ * structured operation (JSON) sent over the whiteboard WebSocket — never
+ * a canvas image.  The server validates permissions + shape, persists
+ * the op (tagged with its page) and relays it; on connect we replay the
+ * stored history page by page.
+ *
+ * Pages: every op carries `page`.  Each client freely navigates pages;
+ * "new page" broadcasts a page_add op so everybody's page count stays
+ * in sync.  Pages are persisted server-side automatically — the 💾
+ * button additionally exports the visible page as a PNG download.
  *
  * Local undo/redo affects only this user's own operations.
  */
@@ -26,6 +32,10 @@ class WhiteboardImpl {
         this.unavailable = false;  // fabric failed to load
         this.identity = null;
         this.retryDelay = 1000;
+        // multi-page state
+        this.page = 1;
+        this.pageCount = 1;
+        this._pageOps = new Map(); // page → ordered ops (source of truth for repaint)
     }
 
     init({ roomCode, identity, canDraw }) {
@@ -47,10 +57,25 @@ class WhiteboardImpl {
         });
         this.resize();
         window.addEventListener('resize', () => this.resize());
+        // The wrap changes size on view-switch, panel toggles and
+        // fullscreen — observe it directly instead of guessing.
+        const wrap = this._wrapEl();
+        if (wrap && window.ResizeObserver) {
+            this._resizeObs = new ResizeObserver(() => this.resize());
+            this._resizeObs.observe(wrap);
+        }
 
         this._bindToolbar();
+        this._bindPages();
         this._bindDrawing();
         this._connect(roomCode);
+    }
+
+    /** The element whose size the canvas should match (.wb-canvas-wrap). */
+    _wrapEl() {
+        // fabric wraps our <canvas> in .canvas-container (wrapperEl);
+        // the layout parent of THAT is what we must measure.
+        return this.canvas?.wrapperEl?.parentElement || null;
     }
 
     // ------------------------------------------------------------ transport
@@ -62,14 +87,17 @@ class WhiteboardImpl {
         this.ws.onmessage = (evt) => {
             const data = JSON.parse(evt.data);
             if (data.type === 'whiteboard_history') {
+                this._pageOps.clear();
                 this.remote = true;
                 data.events.forEach((e) => this._applyOp(e.op));
                 this.remote = false;
+                this._updatePageUI();
             } else if (data.type === 'whiteboard_operation') {
                 if (data.actor_identity === this.identity) return; // already applied locally
                 this.remote = true;
                 this._applyOp(data.op);
                 this.remote = false;
+                this._updatePageUI();
             }
         };
     }
@@ -100,6 +128,59 @@ class WhiteboardImpl {
         document.getElementById('wb-width')?.addEventListener('input', (e) => { this.width = Number(e.target.value); });
     }
 
+    _bindPages() {
+        document.getElementById('wb-prev')?.addEventListener('click', () => this.setPage(this.page - 1));
+        document.getElementById('wb-next')?.addEventListener('click', () => this.setPage(this.page + 1));
+        document.getElementById('wb-new-page')?.addEventListener('click', () => this.addPage());
+        document.getElementById('wb-save')?.addEventListener('click', () => this.exportPNG());
+    }
+
+    _updatePageUI() {
+        const label = document.getElementById('wb-page-label');
+        if (label) label.textContent = `صفحهٔ ${this.page} از ${this.pageCount}`;
+        const prev = document.getElementById('wb-prev');
+        const next = document.getElementById('wb-next');
+        if (prev) prev.disabled = this.page <= 1;
+        if (next) next.disabled = this.page >= this.pageCount;
+    }
+
+    setPage(n) {
+        n = Math.max(1, Math.min(this.pageCount, n));
+        if (n === this.page) return;
+        this.page = n;
+        this._repaintPage();
+        this._updatePageUI();
+    }
+
+    addPage() {
+        if (!this.canDraw) return this._deny();
+        const target = this.pageCount + 1;
+        const op = { type: 'page_add', page: target, id: this._id() };
+        // apply locally first (we are the actor — server echo is filtered out)
+        this._applyOp(op);
+        this._sendOp(op);
+        this._updatePageUI();
+    }
+
+    /** Re-render the current page from its recorded ops. */
+    _repaintPage() {
+        if (!this.canvas) return;
+        this.canvas.clear();
+        this.canvas.backgroundColor = '#ffffff';
+        for (const op of this._pageOps.get(this.page) || []) this._paintOp(op);
+        this.canvas.requestRenderAll();
+    }
+
+    /** Export the visible page as a downloadable PNG. */
+    exportPNG() {
+        if (!this.canvas) return;
+        const url = this.canvas.toDataURL({ format: 'png', multiplier: 2 });
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `whiteboard-page-${this.page}.png`;
+        a.click();
+    }
+
     _bindDrawing() {
         this.canvas.on('mouse:down', (opt) => this._down(opt));
         this.canvas.on('mouse:move', (opt) => this._move(opt));
@@ -123,7 +204,7 @@ class WhiteboardImpl {
             const text = prompt('متن مورد نظر:');
             if (text && text.trim()) {
                 const op = {
-                    type: 'text', id: this._id(), x: p.x, y: p.y,
+                    type: 'text', id: this._id(), page: this.page, x: p.x, y: p.y,
                     text: text.slice(0, 500), color: this.color, size: 18 + this.width * 2,
                 };
                 this._applyOp(op);
@@ -174,6 +255,7 @@ class WhiteboardImpl {
 
         const op = this._serialize(obj);
         if (!op) { this.canvas.remove(obj); return; }
+        op.page = this.page;
         obj.set('data', { opId: op.id });
         this._sendOp(op);
         this._pushUndo(op);
@@ -260,23 +342,49 @@ class WhiteboardImpl {
     }
 
     // ------------------------------------------------------------ applying ops
+    /** Record an op, track page count, and paint it when it is visible. */
     _applyOp(op) {
         if (!op || !op.type) return;
+        const pg = Math.max(1, parseInt(op.page || 1, 10) || 1);
+        op = { ...op, page: pg };
+
+        if (op.type === 'page_add') {
+            if (pg > this.pageCount) this.pageCount = pg;
+            // the actor jumps to the fresh page; viewers stay put
+            if (op.id && String(op.id).startsWith(`${this.identity}-`)) this.setPage(pg);
+            return;
+        }
+
+        // per-page source of truth
+        const list = this._pageOps.get(pg) || [];
         if (op.type === 'clear') {
-            this.canvas.clear();
-            this.canvas.backgroundColor = '#ffffff';
-            this.canvas.requestRenderAll();
-            this.myUndo = [];
-            this.myRedo = [];
-            return;
+            this._pageOps.set(pg, []);           // compaction (mirrors server)
+        } else if (op.type === 'remove') {
+            this._pageOps.set(pg, list.filter((o) => o.id !== op.id));
+        } else if (!list.some((o) => o.id === op.id)) {
+            // Idempotency: an op may arrive both in the snapshot and live.
+            list.push(op);
+            this._pageOps.set(pg, list);
         }
-        if (op.type === 'remove') {
-            const target = this.canvas.getObjects().find((o) => o.data?.opId === op.id);
-            if (target) this.canvas.remove(target);
-            return;
+        if (pg > this.pageCount) this.pageCount = pg;
+
+        if (pg === this.page) {
+            if (op.type === 'clear') {
+                this.canvas.clear();
+                this.canvas.backgroundColor = '#ffffff';
+                this.myUndo = [];
+                this.myRedo = [];
+                this.canvas.requestRenderAll();
+            } else if (op.type === 'remove') {
+                this._removeById(op.id);
+            } else {
+                this._paintOp(op);
+            }
         }
-        // Idempotency: an op may arrive both in the snapshot and live.
-        if (op.id && this.canvas.getObjects().some((o) => o.data?.opId === op.id)) return;
+    }
+
+    /** Canvas-level rendering of a single op (current page assumed). */
+    _paintOp(op) {
         if (op.type === 'text') {
             const text = new fabric.Text(op.text, {
                 left: op.x, top: op.y, fill: op.color,
@@ -287,6 +395,7 @@ class WhiteboardImpl {
             return;
         }
         if (op.type === 'draw') {
+            if (op.id && this.canvas.getObjects().some((o) => o.data?.opId === op.id)) return;
             const obj = this._opToShape(op);
             if (obj) {
                 obj.set('data', { opId: op.id });
@@ -344,21 +453,28 @@ class WhiteboardImpl {
     // ------------------------------------------------------------ actions
     run(action) {
         if (action === 'undo') {
-            const op = this.myUndo.pop();
-            if (!op) return;
-            this._removeById(op.id);
-            this._sendOp({ type: 'remove', id: op.id });
-            this.myRedo.push(op);
+            // undo only touches this user's ops on the CURRENT page
+            for (let i = this.myUndo.length - 1; i >= 0; i--) {
+                if (this.myUndo[i].page !== this.page) continue;
+                const [op] = this.myUndo.splice(i, 1);
+                this._applyOp({ type: 'remove', id: op.id, page: this.page });
+                this._sendOp({ type: 'remove', id: op.id, page: this.page });
+                this.myRedo.push(op);
+                return;
+            }
         } else if (action === 'redo') {
-            const op = this.myRedo.pop();
-            if (!op) return;
-            this._applyOp(op);
-            this._sendOp(op);
-            this._pushUndo(op);
+            for (let i = this.myRedo.length - 1; i >= 0; i--) {
+                if (this.myRedo[i].page !== this.page) continue;
+                const [op] = this.myRedo.splice(i, 1);
+                this._applyOp(op);
+                this._sendOp(op);
+                this.myUndo.push(op);
+                return;
+            }
         } else if (action === 'clear') {
             if (!this.canDraw) return this._deny();
-            if (!confirm('کل تخته برای همه پاک شود؟')) return;
-            const op = { type: 'clear', id: this._id() };
+            if (!confirm('فقط صفحهٔ جاری برای همه پاک شود؟')) return;
+            const op = { type: 'clear', id: this._id(), page: this.page };
             this._applyOp(op);
             this._sendOp(op);
         }
@@ -377,10 +493,10 @@ class WhiteboardImpl {
 
     resize() {
         if (!this.canvas) return;
-        const wrap = this.canvas.getElement().parentElement;
+        const wrap = this._wrapEl();
         if (!wrap || wrap.offsetParent === null) return;
         const rect = wrap.getBoundingClientRect();
-        if (rect.width < 10) return;
+        if (rect.width < 10 || rect.height < 10) return;
         this.canvas.setDimensions({ width: rect.width, height: rect.height });
         this.canvas.requestRenderAll();
     }

@@ -507,7 +507,15 @@ class MeshMedia {
         video.playsInline = true;
         const overlay = document.createElement('div');
         overlay.className = 'tile-overlay';
-        overlay.innerHTML = '<span class="tile-name"></span><span class="tile-icons"><i class="t-mic" title="میکروفون">🎤</i></span>';
+        overlay.innerHTML = '<span class="tile-name"></span><span class="tile-icons"><i class="t-mic" title="میکروفون">🎤</i></span>'
+            + '<button type="button" class="tile-fs" title="نمایش تمام‌صفحه" aria-label="نمایش تمام‌صفحه">⛶</button>';
+        overlay.querySelector('.tile-fs')?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const v = tile.querySelector('video');
+            const t = v && v.readyState > 0 ? v : tile;
+            if (document.fullscreenElement) document.exitFullscreen?.();
+            else t.requestFullscreen?.().catch(() => {});
+        });
         const placeholder = document.createElement('div');
         placeholder.className = 'tile-placeholder';
         placeholder.textContent = (peer.name || '?').charAt(0);

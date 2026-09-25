@@ -81,6 +81,8 @@
                         <button type="button" class="layout-btn" data-layout="speaker" aria-pressed="false" title="سخنران">🎙 سخنران</button>
                         <button type="button" class="layout-btn" data-layout="focus" aria-pressed="false" title="تمرکز (فقط سخنران)">◎ تمرکز</button>
                         <button type="button" class="layout-btn" data-layout="presentation" aria-pressed="false" title="ارائه">📽 ارائه</button>
+                        <span class="ctrl-sep" aria-hidden="true"></span>
+                        <button type="button" class="layout-btn" data-action="fullscreen-stage" aria-pressed="false" title="تمام‌صفحه" aria-label="تمام‌صفحه">⛶ تمام‌صفحه</button>
                     </div>
                     <div class="tiles" id="tiles" data-count="1"></div>
                     <div class="stage-empty" id="stage-empty">
@@ -119,6 +121,16 @@
                         <button type="button" class="wb-action" data-action="undo" title="بازگشت" aria-label="بازگشت">↩️</button>
                         <button type="button" class="wb-action" data-action="redo" title="جلو" aria-label="جلو">↪️</button>
                         <button type="button" class="wb-action" data-action="clear" title="پاک کردن همه" aria-label="پاک کردن همه">🗑️</button>
+                        <span class="wb-sep"></span>
+                        <div class="wb-pages" role="group" aria-label="صفحه‌های تخته">
+                            <button type="button" id="wb-prev" title="صفحهٔ قبل" aria-label="صفحهٔ قبل" disabled>‹</button>
+                            <span id="wb-page-label" aria-live="polite">صفحهٔ ۱ از ۱</span>
+                            <button type="button" id="wb-next" title="صفحهٔ بعد" aria-label="صفحهٔ بعد" disabled>›</button>
+                            <button type="button" id="wb-new-page" class="wb-action" title="صفحهٔ جدید" aria-label="صفحهٔ جدید">＋</button>
+                        </div>
+                        <span class="wb-sep"></span>
+                        <button type="button" id="wb-save" class="wb-action" title="ذخیرهٔ این صفحه (PNG)" aria-label="ذخیرهٔ این صفحه">💾</button>
+                        <button type="button" class="wb-action" data-action="fullscreen-stage" title="تمام‌صفحه" aria-label="تمام‌صفحه">⛶</button>
                         <span class="wb-sep"></span>
                         <label class="wb-color"><input type="color" id="wb-color" value="#2563eb" aria-label="رنگ قلم"></label>
                         <label class="wb-width"><input type="range" id="wb-width" min="1" max="24" value="3" aria-label="ضخامت قلم"></label>
