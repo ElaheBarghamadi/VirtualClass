@@ -520,6 +520,7 @@ function initControls() {
     });
     bind('btn-whiteboard', () => {
         if (!PERMISSIONS.can_use_whiteboard) return toast('شما اجازهٔ استفاده از تخته را ندارید.', 'warning');
+        if (Whiteboard.unavailable) return toast('کتابخانهٔ تخته بارگذاری نشد؛ صفحه را تازه کنید.', 'error');
         const showing = !document.getElementById('view-whiteboard').classList.contains('hidden');
         switchView(showing ? 'media' : 'whiteboard');
         document.getElementById('btn-whiteboard').classList.toggle('active', !showing);
@@ -906,19 +907,11 @@ function initClock() {
 
 // ---------------------------------------------------------------------------
 // Boot
+//
+// Order matters: every UI binding happens FIRST, so a failure in any
+// optional subsystem (media libs, whiteboard canvas, sockets) can never
+// leave the page with dead controls.  Each risky init is isolated.
 // ---------------------------------------------------------------------------
-presence.connect();
-ChatClient.connect(ROOM_CODE, IDENTITY, PRIVILEGED);
-Whiteboard.init({ roomCode: ROOM_CODE, identity: IDENTITY, canDraw: PERMISSIONS.can_use_whiteboard });
-await Media.init({
-    roomCode: ROOM_CODE,
-    currentIdentity: IDENTITY,
-    permissions: PERMISSIONS,
-    mediaUrl: MEDIA_URL,
-    mediaEnabled: MEDIA_ENABLED,
-    onStateChange: (state) => presence.send({ action: 'media_state', ...state }),
-    onQualityChange,
-});
 initTabs();
 initLayouts();
 initControls();
@@ -934,6 +927,32 @@ if (!PERMISSIONS.can_send_messages) {
 }
 if (SHOW_CHAT) {
     activateTab('chat');
+}
+
+presence.connect();
+try {
+    ChatClient.connect(ROOM_CODE, IDENTITY, PRIVILEGED);
+} catch (err) {
+    console.warn('[chat] init failed:', err);
+}
+try {
+    Whiteboard.init({ roomCode: ROOM_CODE, identity: IDENTITY, canDraw: PERMISSIONS.can_use_whiteboard });
+} catch (err) {
+    console.warn('[whiteboard] init failed:', err);
+    Whiteboard.unavailable = true;
+}
+try {
+    await Media.init({
+        roomCode: ROOM_CODE,
+        currentIdentity: IDENTITY,
+        permissions: PERMISSIONS,
+        mediaUrl: MEDIA_URL,
+        mediaEnabled: MEDIA_ENABLED,
+        onStateChange: (state) => presence.send({ action: 'media_state', ...state }),
+        onQualityChange,
+    });
+} catch (err) {
+    console.warn('[media] init failed:', err);
 }
 
 // Periodic keepalive so idle proxies don't drop the presence socket.

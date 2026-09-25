@@ -33,16 +33,17 @@ body.full-page .messages {
     width: min(520px, calc(100% - 2rem)); margin-inline: auto;
 }
 
-/* ---------- header ---------- */
+/* ---------- header (slim, minimal) ---------- */
 .room-header {
     display: flex; align-items: center; justify-content: space-between;
-    padding: .6rem 1.1rem;
+    padding: .45rem 1rem;
     background: var(--room-surface);
     border-bottom: 1px solid var(--room-border);
     gap: 1rem;
+    flex: none;
 }
-.room-title { display: flex; align-items: center; gap: .6rem; min-width: 0; flex-wrap: wrap; }
-.room-title h1 { margin: 0; font-size: 1.02rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.room-title { display: flex; align-items: center; gap: .5rem; min-width: 0; flex-wrap: wrap; }
+.room-title h1 { margin: 0; font-size: .95rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .room-logo { width: 30px; height: 30px; border-radius: var(--radius-sm); object-fit: cover; border: 1px solid var(--room-border); }
 .room-header-actions { display: flex; align-items: center; gap: .8rem; }
 .room-clock { font-variant-numeric: tabular-nums; color: var(--room-muted); font-size: .95rem; direction: ltr; }
@@ -66,22 +67,34 @@ body.full-page .messages {
 
 /* ---------- body ---------- */
 .room-body { flex: 1; display: grid; grid-template-columns: 1fr 330px; min-height: 0; }
-.room-main { padding: .8rem; min-width: 0; display: flex; }
+/* bottom padding keeps content clear of the floating control bar */
+.room-main { padding: .8rem .8rem 4.75rem; min-width: 0; display: flex; }
 .stage { flex: 1; display: flex; flex-direction: column; min-height: 0; position: relative; }
 .stage-view { flex: 1; display: flex; flex-direction: column; min-height: 0; gap: .5rem; }
 .hidden { display: none !important; }
 
-/* ---------- stage toolbar / layouts ---------- */
-.stage-toolbar { display: flex; gap: .35rem; flex-wrap: wrap; }
+/* ---------- stage toolbar / layouts (floating pill over the stage) ---------- */
+.stage-toolbar {
+    position: absolute; top: .6rem; left: 50%; transform: translateX(-50%);
+    z-index: 6;
+    display: flex; gap: .2rem;
+    padding: .2rem;
+    background: color-mix(in srgb, var(--room-surface) 82%, transparent);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid var(--room-border);
+    border-radius: var(--radius-pill);
+    box-shadow: var(--shadow-sm);
+}
 .layout-btn {
-    background: var(--room-surface); border: 1px solid var(--room-border);
+    background: transparent; border: none;
     color: var(--room-muted); border-radius: var(--radius-pill);
-    font: inherit; font-size: .74rem; font-weight: 600;
-    padding: .22rem .7rem; cursor: pointer;
+    font: inherit; font-size: .72rem; font-weight: 600;
+    padding: .25rem .75rem; cursor: pointer;
     transition: background var(--speed) var(--ease), color var(--speed) var(--ease);
 }
 .layout-btn:hover { color: var(--room-text); }
-.layout-btn.active { background: var(--accent); border-color: var(--accent); color: var(--accent-contrast); }
+.layout-btn.active { background: var(--accent); color: var(--accent-contrast); }
 
 /* ---------- media grid ---------- */
 #view-media { position: relative; }
@@ -298,39 +311,52 @@ body.full-page .messages {
 .file-info small { font-size: .68rem; }
 .file-actions { display: flex; gap: .3rem; flex: none; }
 
-/* ---------- control bar ---------- */
+/* ---------- control bar (floating, minimal) ---------- */
 .room-controls {
-    position: relative;
-    display: flex; justify-content: center; align-items: center; gap: .55rem;
-    padding: .6rem 1rem;
-    background: var(--room-surface);
-    border-top: 1px solid var(--room-border);
+    position: absolute;
+    bottom: 1rem;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 30;
+    display: flex; justify-content: center; align-items: center; gap: .35rem;
+    padding: .5rem .7rem;
+    background: color-mix(in srgb, var(--room-surface) 86%, transparent);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    border: 1px solid var(--room-border);
+    border-radius: var(--radius-pill);
+    box-shadow: var(--shadow-lg);
+    max-width: calc(100vw - 1.5rem);
     flex-wrap: wrap;
 }
-.room-controls.screen-active { box-shadow: inset 0 2px 0 var(--success); }
+.room-controls.screen-active { border-color: var(--success); }
+.ctrl-sep { width: 1px; height: 22px; background: var(--room-border); margin: 0 .15rem; flex: none; }
 .ctrl-btn {
-    min-width: 52px; padding: .4rem .6rem; border-radius: var(--radius);
-    background: var(--room-bg); border: 1px solid var(--room-border);
-    font: inherit; font-size: .78rem; cursor: pointer; color: var(--room-text);
-    display: inline-flex; flex-direction: column; align-items: center; justify-content: center; gap: .1rem;
-    transition: background var(--speed) var(--ease), transform .05s ease, border-color var(--speed) var(--ease);
+    position: relative;
+    width: 44px; height: 44px; flex: none;
+    border-radius: 50%;
+    background: transparent; border: 1px solid transparent;
+    cursor: pointer; color: var(--room-text);
+    display: inline-flex; align-items: center; justify-content: center;
+    transition: background var(--speed) var(--ease), color var(--speed) var(--ease), transform .05s ease;
 }
-.ctrl-btn .ctrl-icon { font-size: 1.05rem; line-height: 1.2; }
-.ctrl-btn .ctrl-label { font-size: .66rem; color: var(--room-muted); }
+.ctrl-btn .ic {
+    width: 20px; height: 20px;
+    fill: none; stroke: currentColor; stroke-width: 2;
+    stroke-linecap: round; stroke-linejoin: round;
+}
+/* on/off icon states (mic/camera): aria-pressed + .active drive them,
+   so the state never relies on colour alone */
+.ctrl-btn .icon-on { display: none; }
+.ctrl-btn.active .icon-on { display: block; }
+.ctrl-btn.active .icon-off { display: none; }
 .ctrl-btn:hover { background: var(--surface-2); }
 .ctrl-btn:focus-visible { outline: none; box-shadow: var(--focus-ring); }
-.ctrl-btn:active { transform: scale(.95); }
-.ctrl-btn.active { background: var(--accent); border-color: var(--accent); }
-.ctrl-btn.active .ctrl-label { color: var(--accent-contrast); }
-.ctrl-btn.active .ctrl-icon { filter: none; }
-/* active state is also marked with a solid ring + checkmark underline so it
-   never relies on colour alone */
-.ctrl-btn[aria-pressed="true"]::after { content: "●"; font-size: .5rem; line-height: .4rem; }
-.ctrl-btn.off { opacity: .45; }
-.ctrl-btn.off::before { content: "🚫"; position: absolute; font-size: .6rem; transform: translate(14px, -12px); }
-.ctrl-exit { background: var(--danger); border-color: var(--danger); color: var(--on-primary); }
-.ctrl-exit .ctrl-label { color: var(--on-primary); }
-.ctrl-exit:hover { filter: brightness(.92); background: var(--danger); }
+.ctrl-btn:active { transform: scale(.94); }
+.ctrl-btn.active { background: var(--accent); color: var(--accent-contrast); }
+.ctrl-btn.off { opacity: .38; cursor: not-allowed; }
+.ctrl-exit { background: var(--danger); color: var(--on-primary); border-radius: var(--radius-pill); width: 52px; }
+.ctrl-exit:hover { background: var(--danger); filter: brightness(.9); }
 
 /* ---------- more menu ---------- */
 .more-menu {
@@ -413,24 +439,25 @@ body.full-page .messages {
     .room-body { grid-template-columns: 1fr; grid-template-rows: 1fr; }
     .room-side {
         position: absolute; inset-block: 0; inset-inline-end: 0; width: min(330px, 86%);
-        transform: translateX(100%); transition: transform .22s ease; z-index: 20;
+        transform: translateX(100%); transition: transform .22s ease; z-index: 35;
         border-inline-start: 1px solid var(--room-border);
+        padding-bottom: 4.5rem; /* clear the floating control bar */
     }
     [dir="rtl"] .room-side { transform: translateX(-100%); }
     .room-side.drawer-open { transform: none !important; box-shadow: var(--shadow-lg); }
-    .side-toggle { background: var(--surface-2); }
 }
 @media (min-width: 901px) {
     .side-toggle { display: none; }
 }
 @media (max-width: 560px) {
-    .room-controls { gap: .35rem; padding: .5rem; }
-    .ctrl-btn { min-width: 46px; padding: .35rem .45rem; }
-    .ctrl-btn .ctrl-label { display: none; }
-    .ctrl-btn { flex-direction: row; border-radius: var(--radius-pill); }
-    .room-title h1 { font-size: .9rem; }
+    .room-controls { gap: .15rem; padding: .4rem .5rem; bottom: .6rem; }
+    .ctrl-btn { width: 40px; height: 40px; }
+    .ctrl-btn .ic { width: 18px; height: 18px; }
+    .ctrl-sep { margin: 0 .05rem; }
+    .room-title h1 { font-size: .85rem; }
     .conn-pill .conn-text { display: none; }
     .tiles.has-focus { grid-template-columns: 1fr 90px; }
     .more-menu { inset-inline-end: .5rem; min-width: 190px; }
-    .stage-toolbar { justify-content: center; }
+    .stage-toolbar { gap: .1rem; padding: .15rem; }
+    .layout-btn { padding: .2rem .55rem; font-size: .68rem; }
 }

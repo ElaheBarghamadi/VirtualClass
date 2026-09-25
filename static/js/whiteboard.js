@@ -23,6 +23,7 @@ class WhiteboardImpl {
         this.myRedo = [];
         this.remote = false;       // suppress broadcast while applying remote ops
         this.canDraw = false;
+        this.unavailable = false;  // fabric failed to load
         this.identity = null;
         this.retryDelay = 1000;
     }
@@ -30,6 +31,12 @@ class WhiteboardImpl {
     init({ roomCode, identity, canDraw }) {
         this.identity = identity;
         this.canDraw = canDraw;
+        if (typeof fabric === 'undefined') {
+            // library failed to load — degrade, don't crash the room
+            this.unavailable = true;
+            console.warn('[whiteboard] fabric.js is not loaded');
+            return;
+        }
         const el = document.getElementById('whiteboard-canvas');
         if (!el) return;
         this.canvas = new fabric.Canvas(el, {

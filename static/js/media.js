@@ -307,7 +307,10 @@ class MediaManager {
 
     // ------------------------------------------------------- local controls
     async toggleMicrophone() {
-        if (!this.enabled || !this.room) return false;
+        if (!this.enabled || !this.room) {
+            toast('سرور رسانه پیکربندی نشده است — صدا/تصویر در دسترس نیست.', 'warning');
+            return false;
+        }
         if (!this.permissions.can_use_microphone) {
             toast('شما اجازهٔ استفاده از میکروفون را ندارید.', 'warning');
             return false;
@@ -318,7 +321,10 @@ class MediaManager {
     }
 
     async toggleCamera() {
-        if (!this.enabled || !this.room) return false;
+        if (!this.enabled || !this.room) {
+            toast('سرور رسانه پیکربندی نشده است — صدا/تصویر در دسترس نیست.', 'warning');
+            return false;
+        }
         if (!this.permissions.can_use_camera) {
             toast('شما اجازهٔ استفاده از دوربین را ندارید.', 'warning');
             return false;
@@ -338,7 +344,10 @@ class MediaManager {
     }
 
     async toggleScreenShare() {
-        if (!this.enabled || !this.room) return false;
+        if (!this.enabled || !this.room) {
+            toast('سرور رسانه پیکربندی نشده است — اشتراک صفحه در دسترس نیست.', 'warning');
+            return false;
+        }
         if (!this.permissions.can_share_screen) {
             toast('شما اجازهٔ اشتراک صفحه را ندارید.', 'warning');
             return false;
