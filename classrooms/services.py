@@ -535,6 +535,13 @@ def approve_waiting_room(classroom: Classroom, operator: User, member_id: int) -
         "type": "notification", "text": "ورود شما تأیید شد؛ در حال ورود به کلاس…",
         "level": "success", "event": "waiting_room_approved",
     })
+    # Keep every roster (all hosts) in sync — the waiting entry is now cleared.
+    broadcast(classroom.room_code, {
+        "type": "waiting_room_approved",
+        "member_id": target.id,
+        "identity": target.identity,
+        "participant": participant_payload(target),
+    })
 
 
 def deny_waiting_room(classroom: Classroom, operator: User, member_id: int) -> None:
@@ -547,6 +554,12 @@ def deny_waiting_room(classroom: Classroom, operator: User, member_id: int) -> N
     target.save(update_fields=["is_active", "in_waiting_room"])
     notify_member(classroom.room_code, target, {
         "type": "notification", "text": "درخواست ورود شما رد شد.", "level": "error", "event": "waiting_room_denied",
+    })
+    # Without this the denied entry would linger in every host's roster.
+    broadcast(classroom.room_code, {
+        "type": "waiting_room_denied",
+        "member_id": target.id,
+        "identity": target.identity,
     })
 
 

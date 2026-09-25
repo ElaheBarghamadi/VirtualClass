@@ -142,11 +142,15 @@ class WhiteboardConsumer(AsyncJsonWebsocketConsumer):
 
     @database_sync_to_async
     def _can_draw_now(self) -> bool:
-        classroom = Classroom.objects.filter(room_code=self.room_code).first()
-        member = ClassroomMember.objects.filter(id=self.member.id).first()
-        if classroom is None:
+        # Single query: the member row + its classroom in one round trip.
+        member = (
+            ClassroomMember.objects.filter(id=self.member.id)
+            .select_related("classroom", "user")
+            .first()
+        )
+        if member is None:
             return False
-        return effective_permissions(member, classroom)["can_use_whiteboard"]
+        return effective_permissions(member, member.classroom)["can_use_whiteboard"]
 
     @database_sync_to_async
     def _load_history(self) -> tuple[list[dict], int]:

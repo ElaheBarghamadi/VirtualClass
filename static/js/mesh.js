@@ -187,6 +187,7 @@ class MeshMedia {
                         try { link.pc.createDataChannel('mesh-init'); } catch (e) { /* noop */ }
                     }
                 }
+                this._replayPending(p.identity);
             }
         }
         for (const identity of Array.from(this.links.keys())) {
@@ -398,8 +399,30 @@ class MeshMedia {
     handleSignal(msg) {
         // {type:'rtc_signal', from_identity, from_member_id, data}
         const link = this.links.get(msg.from_identity);
-        if (!link) return; // peer left the roster already
+        if (!link) {
+            // Roster sync may lag behind the first offer — buffer briefly and
+            // replay once syncPeers creates the link (perfect negotiation
+            // cannot recover otherwise: the polite side never re-offers).
+            const buf = this._pendingSignals || (this._pendingSignals = []);
+            if (buf.length < 100) buf.push(msg);
+            return;
+        }
         link.handleSignal(msg.data).catch((err) => console.warn('[mesh] signal error:', err));
+    }
+
+    _replayPending(identity) {
+        if (!this._pendingSignals) return;
+        const link = this.links.get(identity);
+        if (!link) return;
+        const keep = [];
+        for (const msg of this._pendingSignals) {
+            if (msg.from_identity === identity) {
+                link.handleSignal(msg.data).catch((err) => console.warn('[mesh] signal error:', err));
+            } else {
+                keep.push(msg);
+            }
+        }
+        this._pendingSignals = keep;
     }
 
     _onRemoteMedia(peer, stream) {

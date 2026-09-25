@@ -130,12 +130,22 @@ class PresenceClient {
     upsert(p) {
         if (!p || !p.identity) return;
         this.participants.set(p.identity, { ...(this.participants.get(p.identity) || {}), ...p });
-        this.render();
+        this.scheduleRender();
     }
 
     remove(identity) {
         this.participants.delete(identity);
-        this.render();
+        this.scheduleRender();
+    }
+
+    /** Coalesce burst updates (join + media_state + …) into one paint. */
+    scheduleRender() {
+        if (this._renderQueued) return;
+        this._renderQueued = true;
+        requestAnimationFrame(() => {
+            this._renderQueued = false;
+            this.render();
+        });
     }
 
     render() {
@@ -391,6 +401,14 @@ function handleEvent(data) {
         case 'waiting_room_entry':
             // New pending participant (visible to hosts via next snapshot too).
             if (PRIVILEGED) presence.upsert(data.participant);
+            break;
+        case 'waiting_room_approved':
+            // The pending entry becomes a normal roster row (until the
+            // guest's own user_joined arrives it stays flagged as waiting).
+            if (PRIVILEGED && data.participant) presence.upsert(data.participant);
+            break;
+        case 'waiting_room_denied':
+            if (PRIVILEGED) presence.remove(data.identity);
             break;
         case 'whiteboard_state':
             applyWhiteboardState(data.open);

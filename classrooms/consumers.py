@@ -68,6 +68,15 @@ class ClassroomConsumer(AsyncJsonWebsocketConsumer):
                 code = 4401 if not self.scope.get("session") else 4403
             await self.close(code=code)
             return
+        # Waiting-room members get a restricted connection: their personal
+        # notification group ONLY (so the waiting page can receive the
+        # approve/deny notification).  They never join the room group, so
+        # they see no roster and nobody sees them until admission.
+        self.waiting = bool(self.member.in_waiting_room)
+        if self.waiting:
+            await self.channel_layer.group_add(member_group(self.room_code, self.member.id), self.channel_name)
+            await self.accept()
+            return
 
         await self.channel_layer.group_add(self.group_name, self.channel_name)
         await self.channel_layer.group_add(member_group(self.room_code, self.member.id), self.channel_name)
@@ -75,25 +84,35 @@ class ClassroomConsumer(AsyncJsonWebsocketConsumer):
 
         await self._start_attendance()
 
+        # Cache the public payload once: identity/name never change during a
+        # connection, so join and leave broadcasts need no extra queries.
+        self._payload_cache = await self._self_payload()
+
         # Fresh snapshot first (makes reconnection seamless), then the
         # join broadcast for everybody — including this client.
+        participants, classroom_state = await self._snapshot()
         await self.send_json({
             "type": "participant_list",
-            "participants": await self._participant_snapshot(),
-            "classroom": await self._classroom_state(),
+            "participants": participants,
+            "classroom": classroom_state,
         })
         await self.channel_layer.group_send(
             self.group_name,
-            {"type": "presence.user_joined", "participant": await self._self_payload()},
+            {"type": "presence.user_joined", "participant": self._payload_cache},
         )
 
     async def disconnect(self, code: int) -> None:
         if getattr(self, "member", None) is None:
             return
+        if getattr(self, "waiting", False):
+            # Restricted waiting-room connection: personal group only.
+            await self.channel_layer.group_discard(member_group(self.room_code, self.member.id), self.channel_name)
+            return
         await self._stop_attendance()
         await self.channel_layer.group_send(
             self.group_name,
-            {"type": "presence.user_left", "participant": await self._self_payload()},
+            {"type": "presence.user_left",
+             "participant": getattr(self, "_payload_cache", None) or await self._self_payload()},
         )
         await self.channel_layer.group_discard(self.group_name, self.channel_name)
         await self.channel_layer.group_discard(member_group(self.room_code, self.member.id), self.channel_name)
@@ -103,6 +122,12 @@ class ClassroomConsumer(AsyncJsonWebsocketConsumer):
     # ------------------------------------------------------------------
     async def receive_json(self, content: dict, **kwargs) -> None:
         action = content.get("action")
+
+        if getattr(self, "waiting", False):
+            # Not admitted yet — only keep-alive is accepted.
+            if action == "ping":
+                await self.send_json({"type": "pong"})
+            return
 
         if action == "raise_hand":
             perms = await self._effective_permissions()
@@ -184,20 +209,32 @@ class ClassroomConsumer(AsyncJsonWebsocketConsumer):
         return resolve_scope_member(self.scope, self.room_code)
 
     @database_sync_to_async
-    def _participant_snapshot(self) -> list[dict]:
-        from .services import active_members
+    def _snapshot(self) -> tuple[list[dict], dict]:
+        """Participants + classroom state in ONE database round trip.
 
-        classroom = Classroom.objects.filter(room_code=self.room_code).first()
-        if classroom is None:
-            return []
-        return [participant_payload(m) for m in active_members(classroom) if not m.in_waiting_room]
+        Hosts/moderators also receive waiting-room members so a page
+        refresh restores the pending list; regular members never see it.
+        """
+        from .permissions import is_privileged
 
-    @database_sync_to_async
-    def _classroom_state(self) -> dict:
-        classroom = Classroom.objects.filter(room_code=self.room_code).first()
+        classroom = (
+            Classroom.objects.select_related("current_file")
+            .filter(room_code=self.room_code)
+            .first()
+        )
         if classroom is None:
-            return {}
-        return {
+            return [], {}
+        include_waiting = is_privileged(self.member)
+        members = (
+            ClassroomMember.objects.filter(classroom=classroom, is_active=True)
+            .select_related("user")
+            .order_by("role", "joined_at")
+        )
+        participants = [
+            participant_payload(m) for m in members
+            if include_waiting or not m.in_waiting_room
+        ]
+        state = {
             "is_locked": classroom.is_locked,
             "chat_disabled": classroom.chat_disabled,
             "whiteboard_open": classroom.whiteboard_open,
@@ -205,6 +242,7 @@ class ClassroomConsumer(AsyncJsonWebsocketConsumer):
             "current_file_name": classroom.current_file.original_name if classroom.current_file else None,
             "current_page": classroom.current_page,
         }
+        return participants, state
 
     @database_sync_to_async
     def _self_payload(self) -> dict:
@@ -215,11 +253,15 @@ class ClassroomConsumer(AsyncJsonWebsocketConsumer):
     def _effective_permissions(self) -> dict:
         from .permissions import effective_permissions
 
-        classroom = Classroom.objects.filter(room_code=self.room_code).first()
-        member = ClassroomMember.objects.filter(id=self.member.id).first()
-        if classroom is None:
+        # Single query: member + classroom together (live values).
+        member = (
+            ClassroomMember.objects.filter(id=self.member.id)
+            .select_related("classroom", "user")
+            .first()
+        )
+        if member is None:
             return {}
-        return effective_permissions(member, classroom)
+        return effective_permissions(member, member.classroom)
 
     @database_sync_to_async
     def _set_hand_raised(self, raised: bool) -> None:

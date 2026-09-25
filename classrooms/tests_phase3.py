@@ -552,3 +552,101 @@ class RtcSignalRelayTests(TransactionTestCase):
         async_to_sync(scenario)()
         self.classroom.refresh_from_db()
         self.assertFalse(self.classroom.whiteboard_open)
+
+
+class WaitingRoomPresenceTests(TransactionTestCase):
+    """Restricted waiting-room sockets + roster sync on approve/deny."""
+
+    def setUp(self):
+        cache.clear()
+        self.owner = make_user("wr_owner")
+        self.student = make_user("wr_student")
+        self.late = make_user("wr_late")
+        self.third = make_user("wr_third")
+        self.classroom = create_classroom(self.owner, title="WR")
+        self.owner_member = join_classroom(self.classroom, self.owner)
+        join_classroom(self.classroom, self.student)
+        self.classroom.enable_waiting_room = True
+        self.classroom.save(update_fields=["enable_waiting_room"])
+        self.late_member = join_classroom(self.classroom, self.late)
+        self.third_member = join_classroom(self.classroom, self.third)
+        self.assertTrue(self.late_member.in_waiting_room)
+        self.assertTrue(self.third_member.in_waiting_room)
+
+    def _ws(self, user):
+        inner = URLRouter(classroom_routes)
+
+        async def app(scope, receive, send):
+            scope = dict(scope)
+            scope["user"] = user
+            scope["session"] = {}
+            await inner(scope, receive, send)
+
+        return WebsocketCommunicator(app, f"/ws/classroom/{self.classroom.room_code}/")
+
+    def test_waiting_member_gets_restricted_connection(self):
+        async def scenario():
+            owner_ws = self._ws(self.owner)
+            connected, _ = await owner_ws.connect()
+            assert connected
+            snapshot = await owner_ws.receive_json_from()
+            assert snapshot["type"] == "participant_list"
+            # hosts see waiting entries in the snapshot
+            waiting_names = [p["name"] for p in snapshot["participants"] if p["in_waiting_room"]]
+            assert len(waiting_names) == 2, snapshot["participants"]
+            await owner_ws.receive_json_from()  # owner's own user_joined
+
+            late_ws = self._ws(self.late)
+            connected, _ = await late_ws.connect()
+            assert connected, "waiting member must be able to connect"
+
+            # waiting member can only ping; every other action is ignored
+            await late_ws.send_json_to({"action": "raise_hand", "raised": True})
+            await late_ws.send_json_to({"action": "whiteboard_state", "open": True})
+            await late_ws.send_json_to({"action": "ping"})
+            msg = await late_ws.receive_json_from(timeout=3)
+            assert msg["type"] == "pong", msg
+
+            # nothing reached the room roster
+            assert await owner_ws.receive_nothing(timeout=0.6), "waiting member leaked into the room!"
+
+            # students never see waiting members
+            stu_ws = self._ws(self.student)
+            connected, _ = await stu_ws.connect()
+            assert connected
+            snap = await stu_ws.receive_json_from()
+            assert not any(p["in_waiting_room"] for p in snap["participants"]), snap["participants"]
+            await owner_ws.receive_json_from()  # student's user_joined reaches the host
+
+            await late_ws.disconnect()
+            await owner_ws.disconnect()
+            await stu_ws.disconnect()
+
+        async_to_sync(scenario)()
+
+    def test_approve_and_deny_broadcasts_reach_other_hosts(self):
+        from asgiref.sync import sync_to_async
+
+        from .services import approve_waiting_room, deny_waiting_room
+
+        async def scenario():
+            owner_ws = self._ws(self.owner)
+            connected, _ = await owner_ws.connect()
+            assert connected
+            await owner_ws.receive_json_from()  # snapshot
+            await owner_ws.receive_json_from()  # own user_joined
+
+            await sync_to_async(approve_waiting_room)(self.classroom, self.owner, self.late_member.id)
+            msg = await owner_ws.receive_json_from(timeout=3)
+            assert msg["type"] == "waiting_room_approved", msg
+            assert msg["participant"]["in_waiting_room"] is False, msg
+            assert msg["identity"] == self.late_member.identity
+
+            await sync_to_async(deny_waiting_room)(self.classroom, self.owner, self.third_member.id)
+            msg = await owner_ws.receive_json_from(timeout=3)
+            assert msg["type"] == "waiting_room_denied", msg
+            assert msg["identity"] == self.third_member.identity
+
+            await owner_ws.disconnect()
+
+        async_to_sync(scenario)()

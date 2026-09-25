@@ -130,11 +130,15 @@
 
 **اعتبارسنجی اتصال:** کاربر ثبت‌نام‌شده (session/auth) یا مهمانِ دارای `guest_uid` در session خودش باید عضو فعال آن کلاس باشد (وگرنه ۴۴۰۱/۴۴۰۳) — با `SessionMiddlewareStack` در ASGI. هر عملیات **به‌صورت مستقل و زنده** بازبینی می‌شود — تغییر تنظیمات در میانهٔ جلسه فوراً اثر می‌کند.
 
+**اتصال عضوِ اتاق انتظار «محدود» است:** تا قبل از پذیرش، سوکت حضور فقط عضو گروه اعلان شخصی خودش می‌شود (برای دریافت تأیید/رد) — بدون snapshot، بدون عضویت در گروه کلاس و فقط `ping` پذیرفته می‌شود؛ پس فردِ در انتظار هرگز در فهرست دیگران ظاهر نمی‌شود. میزبان‌ها اعضای در انتظار را در snapshot می‌بینند (دانش‌آموزان نه) و رویدادهای `waiting_room_approved` / `waiting_room_denied` فهرست همهٔ میزبان‌ها را همگام نگه می‌دارد.
+
+**بهینگی:** snapshot حضور (فهرست + وضعیت کلاس) در **یک** رفت‌وبرگشت دیتابیس ساخته می‌شود؛ بازبینی زندهٔ مجوز در چت/تخته/حضور با یک کوئری (member+classroom با هم) انجام می‌شود؛ رندر فهرست شرکت‌کنندگان در مرورگر با `requestAnimationFrame` دسته‌بندی می‌شود.
+
 ### پروتکل رویدادها
 
 ```
 user_joined · user_left · participant_list · media_state · classroom_updated
-raise_hand · lower_hand
+raise_hand · lower_hand · waiting_room_entry · waiting_room_approved · waiting_room_denied
 chat_message · chat_deleted
 permission_changed · role_changed · participant_muted · mute_all
 participant_removed · waiting_room_entry · notification
