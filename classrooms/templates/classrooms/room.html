@@ -48,6 +48,8 @@
      data-live-session="{{ live_session.id|default:'' }}"
      data-media-url="{{ media.url }}"
      data-media-enabled="{{ media.enabled|yesno:'1,0' }}"
+     data-ice-servers="{{ media.ice_servers_json }}"
+     data-mesh-max="{{ media.mesh_max_participants }}"
      data-show-chat="{{ classroom.show_chat_default|yesno:'1,0' }}">
 
     <header class="room-header">

@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 from urllib.parse import urlparse
 
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -29,14 +30,27 @@ def env_list(name: str, default: str = "") -> list[str]:
 # ---------------------------------------------------------------------------
 # Core
 # ---------------------------------------------------------------------------
+_DEV_SECRET_KEY = "django-insecure-dev-only-key-change-me-in-production"
 SECRET_KEY = os.environ.get(
     "SECRET_KEY",
     # Fallback ONLY for local development convenience.  In production the
-    # SECRET_KEY environment variable MUST be set to a random secret.
-    "django-insecure-dev-only-key-change-me-in-production",
+    # SECRET_KEY environment variable MUST be set to a random secret —
+    # the fail-fast check below refuses to boot otherwise.
+    _DEV_SECRET_KEY,
 )
 DEBUG = env_bool("DEBUG", "true")
 ALLOWED_HOSTS = env_list("ALLOWED_HOSTS", "localhost,127.0.0.1,[::1]")
+
+if not DEBUG and SECRET_KEY == _DEV_SECRET_KEY:
+    # Fail fast: a production deployment must never run on the public
+    # dev key — sessions/CSRF tokens would be forgeable.
+    raise ImproperlyConfigured(
+        "SECRET_KEY is not set (or is the development default) while "
+        "DEBUG=false. Generate one with:\n"
+        "  python -c \"from django.core.management.utils import "
+        "get_random_secret_key; print(get_random_secret_key())\"\n"
+        "and put it in your .env file."
+    )
 
 INSTALLED_APPS = [
     "daphne",  # ASGI server (also powers `runserver` with WebSockets)
@@ -165,11 +179,36 @@ LIVEKIT_API_KEY = os.environ.get("MEDIA_SERVER_API_KEY", "")
 LIVEKIT_API_SECRET = os.environ.get("MEDIA_SERVER_API_SECRET", "")
 LIVEKIT_TOKEN_TTL_MINUTES = int(os.environ.get("MEDIA_TOKEN_TTL_MINUTES", "360"))
 
+# ICE servers for the fallback P2P mesh.  STUN alone fails behind strict
+# NATs, so deployments should run coturn and list it here, e.g.:
+#   WEBRTC_ICE_SERVERS=[{"urls":["stun:turn.example.com:3478"]},
+#     {"urls":["turn:turn.example.com:3478"],"username":"u","credential":"p"}]
+# Empty → the client falls back to public Google STUN (no TURN relay).
+import json as _json
+
+def _parse_ice_servers(raw: str) -> list[dict]:
+    if not raw:
+        return []
+    try:
+        parsed = _json.loads(raw)
+    except ValueError:
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+WEBRTC_ICE_SERVERS = _parse_ice_servers(os.environ.get("WEBRTC_ICE_SERVERS", ""))
+
+# The mesh is O(n²) in connections; beyond this many concurrent
+# participants the owner is warned to configure the LiveKit media server.
+MESH_MAX_PARTICIPANTS = int(os.environ.get("MESH_MAX_PARTICIPANTS", "12"))
+
 # ---------------------------------------------------------------------------
 # Uploads
 # ---------------------------------------------------------------------------
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "25"))
 FILE_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024  # larger uploads stream to disk
+# per-user throttle for the upload endpoint (abuse/disk-fill protection)
+UPLOAD_RATE_LIMIT = int(os.environ.get("UPLOAD_RATE_LIMIT", "10"))
+UPLOAD_RATE_WINDOW = int(os.environ.get("UPLOAD_RATE_WINDOW", "600"))  # seconds
 
 # ---------------------------------------------------------------------------
 # Cache — Redis in production, local-memory fallback in development.

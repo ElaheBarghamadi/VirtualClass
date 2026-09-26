@@ -26,6 +26,9 @@ const MEMBER_ID = Number(root.dataset.memberId);
 const PRIVILEGED = root.dataset.privileged === '1';
 const MEDIA_ENABLED = root.dataset.mediaEnabled === '1';
 const MEDIA_URL = root.dataset.mediaUrl;
+const MESH_MAX = Number(root.dataset.meshMax || 0) || 12;
+let ICE_SERVERS = [];
+try { ICE_SERVERS = JSON.parse(root.dataset.iceServers || '[]'); } catch { ICE_SERVERS = []; }
 const SHOW_CHAT = root.dataset.showChat === '1';
 const PERMISSIONS = JSON.parse(document.getElementById('member-permissions').textContent);
 const EXIT_URL = root.dataset.isGuest === '1' ? '/' : '/dashboard/';
@@ -293,6 +296,18 @@ function qualityLabel(q) {
     return { excellent: 'عالی', good: 'خوب', poor: 'ضعیف', lost: 'قطع', unknown: 'نامشخص' }[q] || q;
 }
 
+// The P2P mesh is O(n²) in connections; past MESH_MAX the host should
+// configure the LiveKit media server.  Warn once, host only.
+let meshCapacityWarned = false;
+function checkMeshCapacity() {
+    if (MEDIA_ENABLED || meshCapacityWarned || !PRIVILEGED) return;
+    const active = [...presence.participants.values()].filter((p) => !p.in_waiting_room).length;
+    if (active > MESH_MAX) {
+        meshCapacityWarned = true;
+        toast(`اکنون ${active.toLocaleString('fa-IR')} شرکت‌کنندهٔ فعال در حالت شبکهٔ همتا (بدون سرور رسانه) هستید — کیفیت صدا/تصویر افت می‌کند. برای کلاس‌های بزرگ LiveKit را پیکربندی کنید (README).`, 'warning', 9000);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Event router — one consistent server protocol
 // ---------------------------------------------------------------------------
@@ -303,9 +318,11 @@ function handleEvent(data) {
             data.participants.forEach((p) => { if (p.identity) presence.participants.set(p.identity, p); });
             presence.render();
             applyClassroomState(data.classroom || {});
+            checkMeshCapacity();
             break;
         case 'user_joined':
             presence.upsert(data.participant);
+            checkMeshCapacity();
             if (data.participant.identity !== IDENTITY) {
                 ChatClient.addSystemMessage(`${data.participant.name} به کلاس پیوست.`);
             }
@@ -1184,6 +1201,7 @@ try {
         permissions: PERMISSIONS,
         mediaUrl: MEDIA_URL,
         mediaEnabled: MEDIA_ENABLED,
+        iceServers: ICE_SERVERS,
         self: { identity: IDENTITY, memberId: MEMBER_ID, name: root.dataset.participantName },
         signal: (payload) => presence.send(payload),
         onStateChange: (state) => presence.send({ action: 'media_state', ...state }),

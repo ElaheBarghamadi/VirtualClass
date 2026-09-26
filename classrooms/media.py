@@ -83,5 +83,16 @@ def generate_media_token(member, classroom: Classroom, perms: dict[str, bool]) -
 
 
 def media_config_payload() -> dict:
-    """Non-secret config the browser needs (URL only — never the keys)."""
-    return {"enabled": media_enabled(), "url": settings.LIVEKIT_URL if media_enabled() else ""}
+    """Non-secret config the browser needs (URL only — never the keys).
+
+    ``ice_servers`` powers the P2P mesh fallback: deployments behind
+    strict NATs run coturn and list it in WEBRTC_ICE_SERVERS.  TURN
+    credentials here are per standard practice — they grant relay only,
+    never app data, and should be scope-limited on the coturn side.
+    """
+    return {
+        "enabled": media_enabled(),
+        "url": settings.LIVEKIT_URL if media_enabled() else "",
+        "ice_servers_json": json.dumps(settings.WEBRTC_ICE_SERVERS),
+        "mesh_max_participants": settings.MESH_MAX_PARTICIPANTS,
+    }

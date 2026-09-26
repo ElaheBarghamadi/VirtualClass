@@ -611,6 +611,14 @@ def file_upload_view(request, room_code: str):
     upload = request.FILES.get("file")
     if upload is None:
         return JsonResponse({"detail": "فایلی ارسال نشد."}, status=400)
+    # per-user throttle — protects the disk from rapid-fire uploads
+    from core.ratelimit import hit as rate_hit
+    if not rate_hit(f"upload:{request.user.id}",
+                    settings.UPLOAD_RATE_LIMIT, settings.UPLOAD_RATE_WINDOW):
+        return JsonResponse(
+            {"detail": "بارگذاری‌های پشت‌سرهم زیاد است؛ چند لحظه صبر کنید."},
+            status=429,
+        )
     if classroom.files.count() >= MAX_FILES_PER_CLASSROOM:
         return JsonResponse(
             {"detail": f"حداکثر تعداد فایل‌های این کلاس ({MAX_FILES_PER_CLASSROOM}) پر شده است."},

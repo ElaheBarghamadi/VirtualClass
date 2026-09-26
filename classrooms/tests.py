@@ -390,3 +390,73 @@ class FileSharingTests(TestCase):
                            ("d.xlsx", "📊"), ("e.pptx", "📽️"), ("f.zip", "📦"), ("g", "📎")]:
             sf = SharedFile(original_name=name, size=1)
             self.assertEqual(sf.type_icon, icon, name)
+
+
+class RemainingHardeningTests(TestCase):
+    """The five remaining review items: upload throttle, storage cleanup
+    signal, deploy checks, ICE config plumbing."""
+
+    def setUp(self):
+        from django.core.cache import cache
+        cache.clear()
+        self.owner = make_user("h_owner")
+        self.classroom = create_classroom(self.owner, title="Hardening")
+
+    def tearDown(self):
+        from django.core.cache import cache
+        cache.clear()
+
+    def _upload(self, name="up.pdf"):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        self.client.force_login(self.owner)
+        return self.client.post(
+            reverse("room:file_upload", args=[self.classroom.room_code]),
+            {"file": SimpleUploadedFile(name, b"%PDF-1.4 test", content_type="application/pdf")},
+        )
+
+    def test_upload_rate_limit_returns_429(self):
+        from unittest import mock
+        with mock.patch("django.conf.settings.UPLOAD_RATE_LIMIT", 2):
+            r1 = self._upload("a.pdf"); r2 = self._upload("b.pdf"); r3 = self._upload("c.pdf")
+        self.assertEqual(r1.status_code, 200)
+        self.assertEqual(r2.status_code, 200)
+        self.assertEqual(r3.status_code, 429)
+        self.assertIn("صبر", r3.json()["detail"])
+
+    def test_classroom_delete_removes_physical_files(self):
+        import os
+        from django.core.files.base import ContentFile
+        sf = SharedFile.objects.create(
+            classroom=self.classroom, uploader=self.owner,
+            original_name="x.pdf", size=10, content_type="application/pdf")
+        sf.file.save("x.pdf", ContentFile(b"%PDF-1.4 data"), save=True)
+        path = sf.file.path
+        self.assertTrue(os.path.exists(path))
+        self.classroom.delete()  # cascade → post_delete signal
+        self.assertFalse(os.path.exists(path), "physical file must not be orphaned")
+
+    def test_deploy_check_warns_on_debug_with_public_hosts(self):
+        from core.checks import deploy_configuration
+        with self.settings(DEBUG=True, ALLOWED_HOSTS=["classroom.example.com"]):
+            issues = deploy_configuration(None)
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].id, "deploy.W001")
+        with self.settings(DEBUG=True, ALLOWED_HOSTS=["localhost", "127.0.0.1"]):
+            self.assertEqual(deploy_configuration(None), [])
+
+    def test_ice_servers_config_parsed_and_shipped_to_page(self):
+        import json as _json
+        from config.settings import _parse_ice_servers
+        from classrooms.media import media_config_payload
+        self.assertEqual(_parse_ice_servers(""), [])
+        self.assertEqual(_parse_ice_servers("not json"), [])
+        self.assertEqual(_parse_ice_servers('{"a":1}'), [])
+        good = '[{"urls":["turn:t.example.com:3478"],"username":"u","credential":"c"}]'
+        self.assertEqual(_parse_ice_servers(good), _json.loads(good))
+        payload = media_config_payload()
+        self.assertIn("ice_servers_json", payload)
+        self.assertIn("mesh_max_participants", payload)
+        self.client.force_login(self.owner)
+        resp = self.client.get(reverse("room:room", args=[self.classroom.room_code]))
+        self.assertContains(resp, "data-ice-servers=")
+        self.assertContains(resp, "data-mesh-max=")

@@ -118,7 +118,22 @@
 
 ### حالت جایگزین: WebRTC Mesh (بدون نیاز به SFU)
 
-اگر LiveKit پیکربندی نشده باشد، اتاق به‌طور خودکار به **حالت mesh** می‌رود (`static/js/mesh.js`): هر شرکت‌کننده اتصال P2P مستقیم با بقیه می‌سازد (mic/camera و اشتراک صفحه روی اتصال‌های جدا، تا تصویر صفحه با دوربین قاطی نشود). هماهنگی با *perfect negotiation* انجام می‌شود: **عضو با `member_id` بزرگ‌تر پیشنهاد می‌دهد** و کوچکت‌ر پاسخ می‌دهد؛ SDP/ICE از مسیر `rtc_signal` بالا و **نقطه‌به‌نقطه** (نه broadcast) رله می‌شوند. STUN عمومی گوگل استفاده می‌شود و کاندیدای host برای شبکهٔ محلی بدون اینترنت هم کار می‌کند. رسانه هرگز از Django عبور نمی‌کند. برای کلاس‌های بزرگ همان LiveKit توصیه می‌شود (mesh با N نفر، O(N²) اتصال می‌سازد).
+اگر LiveKit پیکربندی نشده باشد، اتاق به‌طور خودکار به **حالت mesh** می‌رود (`static/js/mesh.js`): هر شرکت‌کننده اتصال P2P مستقیم با بقیه می‌سازد (mic/camera و اشتراک صفحه روی اتصال‌های جدا، تا تصویر صفحه با دوربین قاطی نشود). هماهنگی با *perfect negotiation* انجام می‌شود: **عضو با `member_id` بزرگ‌تر پیشنهاد می‌دهد** و کوچکت‌ر پاسخ می‌دهد؛ SDP/ICE از مسیر `rtc_signal` بالا و **نقطه‌به‌نقطه** (نه broadcast) رله می‌شوند. به‌طور پیش‌فرض STUN عمومی گوگل استفاده می‌شود و کاندیدای host برای شبکهٔ محلی بدون اینترنت هم کار می‌کند؛ ولی STUN خالی پشت NATهای سخت (شبکهٔ شرکتی/موبایل) برای رله‌کردن کافی نیست. برای رفع این محدودیت یک **coturn** بالا بیاورید و آن را در `WEBRTC_ICE_SERVERS` معرفی کنید تا بدون تغییر کد استفاده شود:
+
+```bash
+# /etc/turnserver.conf
+listening-port=3478
+realm=turn.example.com
+user=classroom:CHANGE-ME
+no-tls   # در پروداکشن TLS را با گواهی معتبر فعال کنید
+```
+
+```bash
+# .env
+WEBRTC_ICE_SERVERS=[{"urls":["stun:turn.example.com:3478"]},{"urls":["turn:turn.example.com:3478?transport=udp"],"username":"classroom","credential":"CHANGE-ME"}]
+```
+
+وقتی تعداد شرکت‌کنندگان فعال از `MESH_MAX_PARTICIPANTS` (پیش‌فرض ۱۲) بیشتر شود، به میزبان هشدار داده می‌شود که سرور رسانه را پیکربندی کند. رسانه هرگز از Django عبور نمی‌کند. برای کلاس‌های بزرگ همان LiveKit توصیه می‌شود (mesh با N نفر، O(N²) اتصال می‌سازد).
 
 ### تجربهٔ کاربری صدا/تصویر (هر دو موتور)
 
@@ -300,6 +315,9 @@ cp .env.example .env
 | `REDIS_URL` | خالی = لایهٔ InMemory؛ پروداکشن `redis://127.0.0.1:6379/0` |
 | `ALLOWED_HOSTS` / `CSRF_TRUSTED_ORIGINS` | هاست‌ها و originهای مورد اعتماد |
 | `MEDIA_SERVER_URL` / `MEDIA_SERVER_API_KEY` / `MEDIA_SERVER_API_SECRET` | تنظیمات LiveKit — خالی بگذارید تا بدون مدیا اجرا شود |
+| `WEBRTC_ICE_SERVERS` | لیست JSON سرورهای STUN/TURN برای حالت mesh (مثال: coturn) |
+| `MESH_MAX_PARTICIPANTS` | آستانهٔ هشدار به میزبان در حالت mesh (پیش‌فرض ۱۲) |
+| `UPLOAD_RATE_LIMIT` / `UPLOAD_RATE_WINDOW` | محدودیت نرخ بارگذاری هر کاربر (پیش‌فرض ۱۰ بار در ۶۰۰ ثانیه) |
 | `MEDIA_TOKEN_TTL_MINUTES` | عمر توکن رسانه (پیش‌فرض ۳۶۰) |
 | `MAX_UPLOAD_MB` | حداکثر حجم آپلود (پیش‌فرض ۲۵) |
 

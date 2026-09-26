@@ -22,9 +22,13 @@
 import { toast } from './toast.js';
 import { analyserLevel, createAnalyser, disposeAnalyser } from './meter.js';
 
-const ICE_SERVERS = [
+// Deployment-configurable (WEBRTC_ICE_SERVERS → data-ice-servers on the
+// room root → Media.init).  Default is public Google STUN, which has no
+// TURN relay — strict NATs need a coturn entry to connect reliably.
+const DEFAULT_ICE_SERVERS = [
     { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
 ];
+let ICE_SERVERS = DEFAULT_ICE_SERVERS;
 
 class PeerLink {
     constructor(mesh, peer) {
@@ -153,13 +157,16 @@ class MeshMedia {
         this._pipClosed = false;
     }
 
-    async init({ roomCode, self, permissions, signal, onStateChange, onQualityChange }) {
+    async init({ roomCode, self, permissions, signal, onStateChange, onQualityChange, iceServers }) {
         this.roomCode = roomCode;
         this.self = self;
         this.permissions = permissions || {};
         this.signal = signal;
         this.onStateChange = onStateChange || (() => {});
         this.onQualityChange = onQualityChange || (() => {});
+        if (Array.isArray(iceServers) && iceServers.length) {
+            ICE_SERVERS = iceServers;  // deployment-provided STUN/TURN list
+        }
         try {
             const saved = localStorage.getItem(`room_layout_${roomCode}`);
             if (saved && ['grid', 'speaker', 'focus', 'presentation'].includes(saved)) this.layout = saved;

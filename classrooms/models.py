@@ -21,6 +21,8 @@ import uuid
 from django.conf import settings
 from django.contrib.auth.hashers import check_password, make_password
 from django.db import models
+from django.db.models.signals import post_delete
+from django.dispatch import receiver
 from django.utils import timezone
 
 from .permissions import Role, apply_role_defaults, permission_fields
@@ -335,3 +337,16 @@ class SharedFile(models.Model):
             "pdf": "📄", "png": "🖼️", "jpg": "🖼️", "jpeg": "🖼️",
             "docx": "📝", "pptx": "📽️", "xlsx": "📊", "zip": "📦",
         }.get(ext, "📎")
+
+
+# ---------------------------------------------------------------------------
+# Storage hygiene — whenever a SharedFile row goes away (UI delete, admin,
+# or classroom cascade) the physical file leaves storage too.  Django never
+# deletes FileField content by itself.
+# ---------------------------------------------------------------------------
+@receiver(post_delete, sender=SharedFile)
+def _remove_shared_file_from_storage(sender, instance: SharedFile, **kwargs) -> None:
+    try:
+        instance.file.delete(save=False)
+    except Exception:  # storage hiccup must not break the delete itself
+        pass
