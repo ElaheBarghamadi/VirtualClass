@@ -214,30 +214,48 @@
             </section>
 
             <!-- ===== files ===== -->
-            <section class="side-panel" id="panel-files" role="tabpanel">
+            <section class="side-panel" id="panel-files" role="tabpanel"
+                     data-max-upload-mb="{{ max_upload_mb }}"
+                     data-allowed-ext="{{ allowed_extensions|join:',' }}">
                 <form class="upload-form hidden" id="upload-form">
                     <label class="btn btn-ghost btn-sm btn-block" for="file-input">📎 بارگذاری فایل</label>
                     <input type="file" id="file-input" class="hidden"
                            accept=".pdf,.png,.jpg,.jpeg,.docx,.pptx,.xlsx,.zip" aria-label="انتخاب فایل">
-                    <small class="muted">PDF، PNG، JPG، DOCX، PPTX، XLSX، ZIP — حداکثر ۲۵ مگابایت</small>
-                    <div class="upload-progress hidden" id="upload-progress"></div>
+                    <small class="muted">PDF، PNG، JPG، DOCX، PPTX، XLSX، ZIP — حداکثر {{ max_upload_mb }} مگابایت</small>
+                    <div class="upload-progress hidden" id="upload-progress" role="status" aria-live="polite">
+                        <div class="upload-progress-track">
+                            <div class="upload-progress-fill" id="upload-progress-fill"></div>
+                        </div>
+                        <span class="upload-progress-text" id="upload-progress-text"></span>
+                        <button type="button" class="btn btn-ghost btn-sm" id="upload-cancel">لغو</button>
+                    </div>
                 </form>
                 <ul class="file-list" id="file-list" aria-label="فایل‌های کلاس">
+                    <li class="file-empty{% if files %} hidden{% endif %}" id="file-empty">
+                        📂 هنوز فایلی به اشتراک گذاشته نشده است.
+                    </li>
                     {% for f in files %}
-                        <li class="file-item" data-file-id="{{ f.id }}">
-                            {# The file itself presents (for presenters); the only
-                               BUTTON in the row is the download link.  Rendered
-                               conditionally so even pre-JS the row is honest. #}
+                        <li class="file-item{% if classroom.current_file_id == f.id %} presenting{% endif %}"
+                            data-file-id="{{ f.id }}">
+                            <span class="file-icon" aria-hidden="true">{{ f.type_icon }}</span>
+                            {# The file itself presents (for presenters); download is
+                               the primary action of the row.  Delete is management —
+                               only for privileged members or the uploader. #}
                             <div class="file-info"
                                  {% if permissions.can_present %}data-present="{{ f.id }}" role="button" tabindex="0" title="کلیک: ارائهٔ این فایل"{% endif %}>
                                 <span class="file-name">{{ f.original_name }}</span>
                                 <small class="muted">{{ f.uploader.name }} · {{ f.size_display }} · {{ f.uploaded_at|date:"m/d H:i" }}</small>
                             </div>
+                            <span class="file-presenting-pill" title="این فایل اکنون ارائه می‌شود">📽 در حال ارائه</span>
                             <div class="file-actions">
                                 <a class="btn btn-sm btn-primary file-download"
                                    href="{% url 'room:file_download' classroom.room_code f.id %}"
                                    download title="دانلود این فایل"
                                    aria-label="دانلود {{ f.original_name }}">⬇ دانلود</a>
+                                {% if is_privileged or f.uploader_id == user.id %}
+                                    <button type="button" class="file-delete" data-delete="{{ f.id }}"
+                                            title="حذف فایل" aria-label="حذف {{ f.original_name }}">🗑</button>
+                                {% endif %}
                             </div>
                         </li>
                     {% endfor %}
@@ -366,8 +384,6 @@
     </form>
 </dialog>
 
-<!-- ===== initial file list for JS ===== -->
-{{ files_json|json_script:"initial-files" }}
 {% endblock %}
 
 {% block extra_js %}

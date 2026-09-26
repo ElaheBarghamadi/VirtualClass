@@ -33,4 +33,5 @@ urlpatterns = [
     # File sharing.
     path("<str:room_code>/files/upload/", views.file_upload_view, name="file_upload"),
     path("<str:room_code>/files/<int:file_id>/download/", views.file_download_view, name="file_download"),
+    path("<str:room_code>/files/<int:file_id>/delete/", views.file_delete_view, name="file_delete"),
 ]

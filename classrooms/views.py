@@ -18,7 +18,7 @@ from django.http import FileResponse, Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_http_methods, require_POST
 
-from .file_validation import validate_upload
+from .file_validation import ALLOWED_EXTENSIONS, validate_upload
 from .forms import (
     ClassroomCustomizationForm,
     ClassroomForm,
@@ -31,6 +31,7 @@ from .media import generate_media_token, media_config_payload, media_enabled
 from .models import Classroom, ClassroomSession, SharedFile
 from .permissions import PRIVILEGED_ROLES, Role, effective_permissions, is_privileged
 from .services import (
+    MAX_FILES_PER_CLASSROOM,
     ClassroomAccessError,
     ClassroomLocked,
     PermissionDenied,
@@ -41,6 +42,7 @@ from .services import (
     approve_waiting_room,
     attendance_summary,
     create_classroom,
+    delete_shared_file,
     deny_waiting_room,
     end_session,
     get_active_member,
@@ -315,16 +317,6 @@ def _room_context(request, classroom: Classroom, member) -> dict:
     perms = effective_permissions(member, classroom)
     session = get_live_session(classroom)
     files = list(classroom.files.select_related("uploader")[:50])
-    files_json = [
-        {
-            "id": f.id,
-            "name": f.original_name,
-            "size": f.size_display,
-            "uploader": f.uploader.name,
-            "url": f"/class/{classroom.room_code}/files/{f.id}/download/",
-        }
-        for f in files
-    ]
     return {
         "classroom": classroom,
         "member": member,
@@ -333,7 +325,8 @@ def _room_context(request, classroom: Classroom, member) -> dict:
         "is_privileged": is_privileged(member),
         "live_session": session,
         "files": files,
-        "files_json": files_json,
+        "max_upload_mb": settings.MAX_UPLOAD_MB,
+        "allowed_extensions": sorted(ALLOWED_EXTENSIONS),
         "media": media_config_payload(),
         "waiting_room_count": classroom.members.filter(is_active=True, in_waiting_room=True).count(),
         # the room takes over the whole viewport — no header/footer/margins
@@ -618,6 +611,11 @@ def file_upload_view(request, room_code: str):
     upload = request.FILES.get("file")
     if upload is None:
         return JsonResponse({"detail": "فایلی ارسال نشد."}, status=400)
+    if classroom.files.count() >= MAX_FILES_PER_CLASSROOM:
+        return JsonResponse(
+            {"detail": f"حداکثر تعداد فایل‌های این کلاس ({MAX_FILES_PER_CLASSROOM}) پر شده است."},
+            status=400,
+        )
     try:
         safe_name = validate_upload(upload, settings.MAX_UPLOAD_MB * 1024 * 1024)
     except Exception as exc:  # ValidationError from the validator
@@ -641,6 +639,8 @@ def file_upload_view(request, room_code: str):
             "name": shared.original_name,
             "size": shared.size_display,
             "uploader": request.user.name,
+            "uploader_id": request.user.id,
+            "icon": shared.type_icon,
             "url": f"/class/{classroom.room_code}/files/{shared.id}/download/",
         },
     })
@@ -659,3 +659,21 @@ def file_download_view(request, room_code: str, file_id: int):
     shared = get_object_or_404(SharedFile, id=file_id, classroom=classroom)
     response = FileResponse(shared.file.open("rb"), as_attachment=True, filename=shared.original_name)
     return response
+
+
+@require_http_methods(["POST"])
+def file_delete_view(request, room_code: str, file_id: int):
+    """Delete a shared file — privileged members or the uploader.
+
+    Business rules (and the physical cleanup) live in
+    ``services.delete_shared_file``; this is only the HTTP boundary.
+    """
+    classroom = get_object_or_404(Classroom, room_code=room_code)
+    member = resolve_member(request, classroom)
+    try:
+        delete_shared_file(classroom, member, file_id)
+    except PermissionDenied as exc:
+        return _json_error(exc)
+    except ClassroomAccessError as exc:
+        return _json_error(exc, status=404)
+    return JsonResponse({"ok": True})

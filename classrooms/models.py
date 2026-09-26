@@ -326,3 +326,12 @@ class SharedFile(models.Model):
                 return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
             size /= 1024
         return f"{size:.1f} GB"
+
+    @property
+    def type_icon(self) -> str:
+        """Human-friendly glyph per format, used by the files panel."""
+        ext = self.original_name.rsplit(".", 1)[-1].lower() if "." in self.original_name else ""
+        return {
+            "pdf": "📄", "png": "🖼️", "jpg": "🖼️", "jpeg": "🖼️",
+            "docx": "📝", "pptx": "📽️", "xlsx": "📊", "zip": "📦",
+        }.get(ext, "📎")

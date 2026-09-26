@@ -4,7 +4,7 @@ from django.test import TestCase
 from django.urls import reverse
 from rest_framework.test import APIClient
 
-from .models import Classroom, ClassroomMember
+from .models import Classroom, ClassroomMember, SharedFile
 from .permissions import Role, defaults_for_role
 from .services import create_classroom, join_classroom, WrongClassroomPassword
 
@@ -298,3 +298,95 @@ class StalePermissionFlagTests(TestCase):
         self.classroom.refresh_from_db()
         self.assertEqual(self.classroom.current_file_id, sf.id)
         self.assertEqual(self.classroom.current_page, 1)
+
+
+class FileSharingTests(TestCase):
+    """Files panel rebuild: delete rights, presentation cleanup, quota."""
+
+    def setUp(self):
+        from django.core.files.base import ContentFile
+        from .models import SharedFile
+        self.owner = make_user("f_owner")
+        self.student = make_user("f_stu")
+        self.other = make_user("f_other")
+        self.classroom = create_classroom(self.owner, title="Files")
+        join_classroom(self.classroom, self.student)
+        join_classroom(self.classroom, self.other)
+        self.sf = SharedFile.objects.create(
+            classroom=self.classroom, uploader=self.owner,
+            original_name="deck.pdf", size=15, content_type="application/pdf",
+        )
+        self.sf.file.save("deck.pdf", ContentFile(b"%PDF-1.4 hello"), save=True)
+        self.path = self.sf.file.path
+
+    def _upload(self, user, name="up.pdf"):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        self.client.force_login(user)
+        return self.client.post(
+            reverse("room:file_upload", args=[self.classroom.room_code]),
+            {"file": SimpleUploadedFile(name, b"%PDF-1.4 test", content_type="application/pdf")},
+        )
+
+    def test_owner_deletes_any_file_and_physical_copy_goes(self):
+        import os
+        self.client.force_login(self.owner)
+        resp = self.client.post(
+            reverse("room:file_delete", args=[self.classroom.room_code, self.sf.id]))
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(SharedFile.objects.filter(id=self.sf.id).exists())
+        self.assertFalse(os.path.exists(self.path), "physical file must be removed")
+
+    def test_uploader_without_privileges_deletes_own_file(self):
+        from .models import ClassroomMember
+        import os
+        # student granted upload rights — not privileged
+        ClassroomMember.objects.filter(classroom=self.classroom, user=self.student).update(
+            can_upload_files=True)
+        resp = self._upload(self.student)
+        self.assertEqual(resp.status_code, 200)
+        fid = resp.json()["id"]
+        path = SharedFile.objects.get(id=fid).file.path
+        resp = self.client.post(
+            reverse("room:file_delete", args=[self.classroom.room_code, fid]))
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(os.path.exists(path))
+
+    def test_student_cannot_delete_others_file(self):
+        self.client.force_login(self.other)
+        resp = self.client.post(
+            reverse("room:file_delete", args=[self.classroom.room_code, self.sf.id]))
+        self.assertEqual(resp.status_code, 403)
+        self.assertTrue(SharedFile.objects.filter(id=self.sf.id).exists())
+
+    def test_non_member_cannot_delete(self):
+        outsider = make_user("f_out")
+        self.client.force_login(outsider)
+        resp = self.client.post(
+            reverse("room:file_delete", args=[self.classroom.room_code, self.sf.id]))
+        self.assertIn(resp.status_code, (403, 404))
+
+    def test_deleting_presented_file_clears_presentation(self):
+        from .services import set_presentation
+        set_presentation(self.classroom, self.owner, self.sf.id, 1)
+        self.classroom.refresh_from_db()
+        self.assertEqual(self.classroom.current_file_id, self.sf.id)
+        self.client.force_login(self.owner)
+        resp = self.client.post(
+            reverse("room:file_delete", args=[self.classroom.room_code, self.sf.id]))
+        self.assertEqual(resp.status_code, 200)
+        self.classroom.refresh_from_db()
+        self.assertIsNone(self.classroom.current_file_id)
+
+    def test_upload_quota_enforced(self):
+        from unittest import mock
+        with mock.patch("classrooms.views.MAX_FILES_PER_CLASSROOM", 1):
+            resp = self._upload(self.owner)  # one file already exists
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("حداکثر", resp.json()["detail"])
+
+    def test_type_icon_per_extension(self):
+        from .models import SharedFile
+        for name, icon in [("a.pdf", "📄"), ("b.png", "🖼️"), ("c.docx", "📝"),
+                           ("d.xlsx", "📊"), ("e.pptx", "📽️"), ("f.zip", "📦"), ("g", "📎")]:
+            sf = SharedFile(original_name=name, size=1)
+            self.assertEqual(sf.type_icon, icon, name)

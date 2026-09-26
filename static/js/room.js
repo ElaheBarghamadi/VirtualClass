@@ -21,6 +21,7 @@ import { confirmDialog, infoDialog } from './modal.js';
 const root = document.getElementById('classroom-root');
 const ROOM_CODE = root.dataset.roomCode;
 const IDENTITY = root.dataset.identity;
+const SELF_USER_ID = IDENTITY.startsWith('u:') ? Number(IDENTITY.slice(2)) : null;
 const MEMBER_ID = Number(root.dataset.memberId);
 const PRIVILEGED = root.dataset.privileged === '1';
 const MEDIA_ENABLED = root.dataset.mediaEnabled === '1';
@@ -397,6 +398,10 @@ function handleEvent(data) {
         case 'file_uploaded':
             addFileItem(data.file);
             toast(`فایل «${data.file.name}» بارگذاری شد.`, 'info', 2500);
+            break;
+        case 'file_deleted':
+            removeFileItem(data.file_id);
+            toast(`فایل «${data.name}» حذف شد.`, 'info', 2500);
             break;
         case 'presentation_changed':
             applyPresentation(data);
@@ -883,40 +888,104 @@ function applyFilePresentability() {
     });
 }
 
+function formatBytes(n) {
+    if (n < 1024) return `${n} B`;
+    let v = n;
+    for (const u of ['KB', 'MB', 'GB']) {
+        v /= 1024;
+        if (v < 1024 || u === 'GB') return `${v.toFixed(1)} ${u}`;
+    }
+    return `${v.toFixed(1)} GB`;
+}
+
+let activeUpload = null; // in-flight XHR so the cancel button can abort it
+
 function initFiles() {
+    const section = document.getElementById('panel-files');
+    const MAX_MB = Number(section.dataset.maxUploadMb || 25);
+    const ALLOWED_EXT = new Set((section.dataset.allowedExt || '').split(',').filter(Boolean));
+
     if (PERMISSIONS.can_upload_files) {
+        const input = document.getElementById('file-input');
+        const progress = document.getElementById('upload-progress');
+        const fill = document.getElementById('upload-progress-fill');
+        const text = document.getElementById('upload-progress-text');
         document.getElementById('upload-form').classList.remove('hidden');
-        document.getElementById('file-input').addEventListener('change', async (e) => {
+
+        const setProgress = (pct, label) => {
+            fill.style.width = `${pct}%`;
+            fill.setAttribute('aria-valuenow', String(pct));
+            text.textContent = label;
+        };
+
+        input.addEventListener('change', (e) => {
             const file = e.target.files[0];
-            if (!file) return;
-            const progress = document.getElementById('upload-progress');
+            e.target.value = '';
+            if (!file || activeUpload) return;
+
+            // ---- pre-flight checks: fail instantly, don't waste the upload ----
+            const ext = file.name.includes('.') ? file.name.split('.').pop().toLowerCase() : '';
+            if (!ALLOWED_EXT.has(ext)) {
+                toast(`پسوند «.${ext || 'نامشخص'}» مجاز نیست. فرمت‌های مجاز: ${[...ALLOWED_EXT].join('، ')}`, 'error', 4000);
+                return;
+            }
+            if (file.size === 0) { toast('فایل خالی است.', 'error'); return; }
+            if (file.size > MAX_MB * 1024 * 1024) {
+                toast(`حجم فایل بیش از حد مجاز (${MAX_MB.toLocaleString('fa-IR')} مگابایت) است.`, 'error', 4000);
+                return;
+            }
+
             progress.classList.remove('hidden');
-            progress.textContent = `در حال بارگذاری «${file.name}»…`;
+            input.disabled = true;
+            setProgress(0, `۰٪ — «${file.name}»`);
+
+            const xhr = new XMLHttpRequest();
+            activeUpload = xhr;
+            xhr.upload.addEventListener('progress', (ev) => {
+                if (!ev.lengthComputable) return;
+                const pct = Math.round((ev.loaded / ev.total) * 100);
+                setProgress(pct, `${pct.toLocaleString('fa-IR')}٪ — «${file.name}»`);
+            });
+            const finish = () => {
+                activeUpload = null;
+                input.disabled = false;
+                progress.classList.add('hidden');
+            };
+            xhr.addEventListener('load', () => {
+                finish();
+                let data = {};
+                try { data = JSON.parse(xhr.responseText); } catch { /* non-JSON error */ }
+                if (xhr.status >= 200 && xhr.status < 300) {
+                    // add locally for instant feedback; the `file_uploaded`
+                    // broadcast reaches everyone else (dedup keeps one row).
+                    addFileItem({
+                        id: data.id, name: data.name,
+                        size: formatBytes(file.size),
+                        uploader: 'شما', uploader_id: SELF_USER_ID,
+                        icon: iconForName(file.name),
+                        url: `/class/${ROOM_CODE}/files/${data.id}/download/`,
+                    });
+                    toast('فایل بارگذاری شد.', 'success');
+                } else {
+                    toast(data.detail || 'بارگذاری ناموفق بود.', 'error', 4000);
+                }
+            });
+            xhr.addEventListener('error', () => { finish(); toast('خطای شبکه در بارگذاری فایل.', 'error'); });
+            xhr.addEventListener('abort', () => { finish(); toast('بارگذاری لغو شد.', 'info', 2000); });
             const fd = new FormData();
             fd.append('file', file);
-            try {
-                const res = await fetch(`/class/${ROOM_CODE}/files/upload/`, {
-                    method: 'POST',
-                    headers: { 'X-CSRFToken': csrfToken },
-                    body: fd,
-                });
-                const data = await res.json();
-                if (!res.ok) throw new Error(data.detail || 'بارگذاری ناموفق بود.');
-                addFileItem({
-                    id: data.id, name: data.name,
-                    url: `/class/${ROOM_CODE}/files/${data.id}/download/`,
-                });
-                toast('فایل بارگذاری شد.', 'success');
-            } catch (err) {
-                toast(err.message, 'error');
-            } finally {
-                progress.classList.add('hidden');
-                e.target.value = '';
-            }
+            xhr.open('POST', `/class/${ROOM_CODE}/files/upload/`);
+            xhr.setRequestHeader('X-CSRFToken', csrfToken);
+            xhr.send(fd);
         });
+
+        document.getElementById('upload-cancel').addEventListener('click', () => activeUpload?.abort());
     }
+
     const list = document.getElementById('file-list');
     applyFilePresentability();
+    updateFileEmpty();
+
     const presentFile = (trigger) => {
         if (!PERMISSIONS.can_present) {
             toast('شما اجازهٔ ارائهٔ فایل ندارید.', 'warning', 2500);
@@ -924,7 +993,21 @@ function initFiles() {
         }
         api('/presentation/', { file_id: Number(trigger.dataset.present), page: 1 });
     };
+    const deleteFile = async (btn) => {
+        const ok = await confirmDialog('حذف فایل', 'این فایل برای همهٔ شرکت‌کنندگان حذف شود؟',
+            { danger: true, okLabel: 'حذف' });
+        if (!ok) return;
+        try {
+            await api(`/files/${btn.dataset.delete}/delete/`, {});
+            removeFileItem(btn.dataset.delete);  // broadcast also removes — idempotent
+            toast('فایل حذف شد.', 'success', 2200);
+        } catch (err) {
+            toast(err.message, 'error');
+        }
+    };
     list.addEventListener('click', (e) => {
+        const del = e.target.closest('.file-delete');
+        if (del) { deleteFile(del); return; }
         if (e.target.closest('a[download]')) return; // native download
         const trigger = e.target.closest('[data-present]');
         if (trigger) presentFile(trigger);
@@ -938,9 +1021,35 @@ function initFiles() {
     });
 }
 
+/** Icon glyph per extension — mirrors SharedFile.type_icon server-side. */
+function iconForName(name) {
+    const ext = (name || '').includes('.') ? name.split('.').pop().toLowerCase() : '';
+    return { pdf: '📄', png: '🖼️', jpg: '🖼️', jpeg: '🖼️', docx: '📝',
+             pptx: '📽️', xlsx: '📊', zip: '📦' }[ext] || '📎';
+}
+
+/** Management rights over a file: privileged members, or its uploader. */
+function canManageFile(file) {
+    if (PRIVILEGED) return true;
+    return SELF_USER_ID !== null && Number(file.uploader_id) === SELF_USER_ID;
+}
+
+function updateFileEmpty() {
+    const list = document.getElementById('file-list');
+    const empty = document.getElementById('file-empty');
+    if (list && empty) empty.classList.toggle('hidden', list.querySelectorAll('.file-item').length > 0);
+}
+
+/** Highlight the row of the file currently being presented (null clears). */
+function syncPresentingBadge(fileId) {
+    document.querySelectorAll('#file-list .file-item').forEach((li) => {
+        li.classList.toggle('presenting', fileId != null && Number(li.dataset.fileId) === Number(fileId));
+    });
+}
+
 function addFileItem(file) {
     const list = document.getElementById('file-list');
-    if (list.querySelector(`[data-file-id="${file.id}"]`)) return;
+    if (list.querySelector(`.file-item[data-file-id="${Number(file.id)}"]`)) return;
     const li = document.createElement('li');
     li.className = 'file-item';
     li.dataset.fileId = String(file.id);
@@ -948,21 +1057,41 @@ function addFileItem(file) {
         ? ` data-present="${Number(file.id)}" role="button" tabindex="0" title="کلیک: ارائهٔ این فایل"`
         : '';
     li.innerHTML = `
+        <span class="file-icon" aria-hidden="true"></span>
         <div class="file-info"${presentAttrs}>
             <span class="file-name"></span>
             <small class="muted"></small>
         </div>
+        <span class="file-presenting-pill" title="این فایل اکنون ارائه می‌شود">📽 در حال ارائه</span>
         <div class="file-actions">
             <a class="btn btn-sm btn-primary file-download" href="${file.url}" download
                title="دانلود این فایل" aria-label="دانلود">⬇ دانلود</a>
         </div>`;
+    li.querySelector('.file-icon').textContent = file.icon || iconForName(file.name);
     li.querySelector('.file-name').textContent = file.name;
     li.querySelector('.file-info small').textContent =
         [file.uploader, file.size].filter(Boolean).join(' · ');
+    if (canManageFile(file)) {
+        const del = document.createElement('button');
+        del.type = 'button';
+        del.className = 'file-delete';
+        del.dataset.delete = String(file.id);
+        del.title = 'حذف فایل';
+        del.setAttribute('aria-label', `حذف ${file.name}`);
+        del.textContent = '🗑';
+        li.querySelector('.file-actions').appendChild(del);
+    }
     list.prepend(li);
+    updateFileEmpty();
+}
+
+function removeFileItem(fileId) {
+    document.querySelector(`#file-list .file-item[data-file-id="${Number(fileId)}"]`)?.remove();
+    updateFileEmpty();
 }
 
 function applyPresentation(data) {
+    syncPresentingBadge(data?.file_id ?? null);
     if (!data || !data.file_id) {
         Presentation.hide();
         switchView('media');

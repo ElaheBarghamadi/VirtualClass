@@ -413,18 +413,56 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
 
 /* files */
 .upload-form { padding: .7rem; display: grid; gap: .4rem; border-bottom: 1px solid var(--room-border); }
-.upload-progress { font-size: .78rem; color: var(--warning); }
-.file-list { list-style: none; margin: 0; padding: .5rem; overflow-y: auto; flex: 1; display: grid; gap: .4rem; align-content: start; }
-.file-item {
-    display: flex; align-items: center; gap: .5rem; justify-content: space-between;
-    background: var(--surface-2); border-radius: var(--radius-sm); padding: .5rem .7rem;
+/* upload progress — real bar + percent + cancel */
+.upload-progress { display: grid; gap: .3rem; font-size: .78rem; color: var(--warning); padding: .3rem .2rem; }
+.upload-progress-track {
+    height: 6px; border-radius: var(--radius-pill);
+    background: var(--surface-3); overflow: hidden;
 }
+.upload-progress-fill {
+    height: 100%; width: 0;
+    background: var(--accent);
+    border-radius: var(--radius-pill);
+    transition: width .15s ease;
+}
+.upload-progress-text { font-variant-numeric: tabular-nums; }
+
+.file-list { list-style: none; margin: 0; padding: .5rem; overflow-y: auto; flex: 1; display: grid; gap: .4rem; align-content: start; }
+.file-empty {
+    padding: 1.2rem .5rem; text-align: center;
+    color: var(--text-muted); font-size: .82rem;
+    border: 1px dashed var(--room-border); border-radius: var(--radius-sm);
+}
+.file-item {
+    display: flex; align-items: center; gap: .5rem;
+    background: var(--surface-2); border-radius: var(--radius-sm); padding: .5rem .7rem;
+    border: 1px solid transparent;
+}
+.file-icon { font-size: 1.15rem; flex: none; line-height: 1; }
 .file-info { display: grid; min-width: 0; flex: 1; padding: .15rem .3rem; border-radius: var(--radius-sm); }
 .file-name { font-size: .84rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .file-info small { font-size: .68rem; }
-.file-actions { display: flex; gap: .3rem; flex: none; }
+.file-actions { display: flex; gap: .3rem; flex: none; align-items: center; }
 .file-download { white-space: nowrap; }
-/* presenters: the file row is the present trigger (the only button is download) */
+.file-delete {
+    border: none; background: transparent; cursor: pointer;
+    font-size: .9rem; line-height: 1; padding: .3rem;
+    border-radius: var(--radius-sm); color: var(--text-muted);
+    opacity: .55; transition: opacity .12s ease, background .12s ease;
+}
+.file-delete:hover { opacity: 1; background: color-mix(in srgb, var(--danger, #e11d48) 14%, transparent); }
+.file-delete:focus-visible { outline: none; box-shadow: var(--focus-ring); opacity: 1; }
+/* the file currently being presented */
+.file-presenting-pill {
+    display: none; flex: none;
+    font-size: .66rem; font-weight: 700;
+    color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent);
+    padding: .15rem .45rem; border-radius: var(--radius-pill);
+    white-space: nowrap;
+}
+.file-item.presenting { border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+.file-item.presenting .file-presenting-pill { display: inline-block; }
+/* presenters: the file row is the present trigger (primary button = download) */
 .file-list.can-present .file-info { cursor: pointer; }
 .file-list.can-present .file-info:hover { background: var(--surface-3); }
 .file-list.can-present .file-info:focus-visible { outline: none; box-shadow: var(--focus-ring); }

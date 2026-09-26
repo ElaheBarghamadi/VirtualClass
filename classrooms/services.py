@@ -647,6 +647,44 @@ def set_presentation(classroom: Classroom, operator: User, file_id: int | None, 
     })
 
 
+MAX_FILES_PER_CLASSROOM = 100  # per-classroom cap so shared storage stays bounded
+
+
+def delete_shared_file(classroom: Classroom, member: ClassroomMember | None, file_id: int) -> None:
+    """Remove a shared file — privileged members may delete any file,
+    anyone else only their own upload.
+
+    Also cleans up after itself: the physical file leaves storage, and if
+    the deleted file was the one being presented, the presentation is
+    cleared and everyone is told.
+    """
+    from .models import SharedFile
+
+    if member is None or not member.is_active or member.in_waiting_room:
+        raise PermissionDenied("شما اجازهٔ مدیریت فایل‌ها را ندارید.")
+    shared = SharedFile.objects.filter(classroom=classroom, id=file_id).first()
+    if shared is None:
+        raise ClassroomAccessError("فایل یافت نشد.")
+    is_uploader = bool(member.user_id) and member.user_id == shared.uploader_id
+    if not (is_privileged(member) or is_uploader):
+        raise PermissionDenied("فقط مدیر کلاس یا بارگذار می‌تواند این فایل را حذف کند.")
+
+    was_presenting = classroom.current_file_id == shared.id
+    name, fid = shared.original_name, shared.id
+    shared.file.delete(save=False)  # physical copy (no-op if already gone)
+    shared.delete()
+
+    if was_presenting:
+        classroom.current_file = None
+        classroom.current_page = 1
+        classroom.save(update_fields=["current_file", "current_page", "updated_at"])
+        broadcast(classroom.room_code, {
+            "type": "presentation_changed", "file_id": None, "file_name": None, "page": 1,
+        })
+    broadcast(classroom.room_code, {"type": "file_deleted", "file_id": fid, "name": name})
+    logger.info("file_deleted", extra={"room_code": classroom.room_code, "file_id": fid})
+
+
 def set_hand_raised(classroom: Classroom, member: ClassroomMember, raised: bool) -> None:
     member.hand_raised_at = timezone.now() if raised else None
     member.save(update_fields=["hand_raised_at"])
