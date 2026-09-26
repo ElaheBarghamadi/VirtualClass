@@ -245,7 +245,9 @@
                                only for privileged members or the uploader. #}
                             <div class="file-info"
                                  {% if permissions.can_present %}data-present="{{ f.id }}" role="button" tabindex="0" title="کلیک: ارائهٔ این فایل"{% endif %}>
-                                <span class="file-name">{{ f.original_name }}</span>
+                                <span class="file-name">{{ f.original_name }}
+                                    {% if f.pdf_version %}<span class="pdf-ready-pill" title="نسخهٔ PDF آمادهٔ ارائه است">✓ PDF</span>{% endif %}
+                                </span>
                                 <small class="muted">{{ f.uploader.name }} · {{ f.size_display }} · {{ f.uploaded_at|date:"m/d H:i" }}</small>
                             </div>
                             <span class="file-presenting-pill" title="این فایل اکنون ارائه می‌شود">📽 در حال ارائه</span>

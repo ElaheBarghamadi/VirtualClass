@@ -460,3 +460,91 @@ class RemainingHardeningTests(TestCase):
         resp = self.client.get(reverse("room:room", args=[self.classroom.room_code]))
         self.assertContains(resp, "data-ice-servers=")
         self.assertContains(resp, "data-mesh-max=")
+
+
+class OfficeConversionTests(TestCase):
+    """Office → PDF pipeline (LibreOffice optional; skipped when absent)."""
+
+    def setUp(self):
+        from django.core.cache import cache
+        cache.clear()
+        from .office_convert import conversion_available
+        if not conversion_available():
+            self.skipTest("LibreOffice not installed")
+        self.owner = make_user("c_owner")
+        self.classroom = create_classroom(self.owner, title="Convert")
+
+    def tearDown(self):
+        from django.core.cache import cache
+        cache.clear()
+
+    def _make_pptx_bytes(self) -> bytes:
+        import io
+        from pptx import Presentation as Pptx
+        prs = Pptx()
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        from pptx.util import Inches
+        tb = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(6), Inches(2))
+        tb.text_frame.text = "Hello from conversion test"
+        buf = io.BytesIO(); prs.save(buf)
+        return buf.getvalue()
+
+    def _make_docx_bytes(self) -> bytes:
+        import io
+        import docx
+        d = docx.Document()
+        d.add_heading("Conversion test", 0)
+        d.add_paragraph("سلام — این یک سند تست است.")
+        buf = io.BytesIO(); d.save(buf)
+        return buf.getvalue()
+
+    def _upload(self, name, content, ctype):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        self.client.force_login(self.owner)
+        return self.client.post(
+            reverse("room:file_upload", args=[self.classroom.room_code]),
+            {"file": SimpleUploadedFile(name, content, content_type=ctype)},
+        )
+
+    def test_pptx_upload_produces_pdf_version(self):
+        resp = self._upload("lesson.pptx", self._make_pptx_bytes(),
+                            "application/vnd.openxmlformats-officedocument.presentationml.presentation")
+        self.assertEqual(resp.status_code, 200)
+        sf = SharedFile.objects.get(id=resp.json()["id"])
+        self.assertTrue(sf.pdf_version, "PPTX must gain a PDF copy")
+        head = sf.pdf_version.read(5)
+        self.assertEqual(head, b"%PDF-")
+
+    def test_docx_upload_produces_pdf_version(self):
+        resp = self._upload("notes.docx", self._make_docx_bytes(),
+                            "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        self.assertEqual(resp.status_code, 200)
+        sf = SharedFile.objects.get(id=resp.json()["id"])
+        self.assertTrue(sf.pdf_version, "DOCX must gain a PDF copy")
+
+    def test_download_pdf_format_serves_conversion(self):
+        resp = self._upload("lesson.pptx", self._make_pptx_bytes(), "application/x-pptx")
+        sf = SharedFile.objects.get(id=resp.json()["id"])
+        r = self.client.get(reverse("room:file_download",
+                            args=[self.classroom.room_code, sf.id]) + "?format=pdf")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(b"".join(r.streaming_content)[:5], b"%PDF-")
+        # original download still returns the PPTX
+        r2 = self.client.get(reverse("room:file_download",
+                             args=[self.classroom.room_code, sf.id]))
+        self.assertEqual(b"".join(r2.streaming_content)[:2], b"PK")
+
+    def test_pdf_format_404_without_conversion(self):
+        resp = self._upload("pic.pdf", b"%PDF-1.4 fake", "application/pdf")
+        sf = SharedFile.objects.get(id=resp.json()["id"])
+        r = self.client.get(reverse("room:file_download",
+                            args=[self.classroom.room_code, sf.id]) + "?format=pdf")
+        self.assertEqual(r.status_code, 404)
+
+    def test_upload_survives_without_libreoffice(self):
+        from unittest import mock
+        with mock.patch("classrooms.office_convert.soffice_path", return_value=None):
+            resp = self._upload("deck.pptx", self._make_pptx_bytes(), "application/x-pptx")
+        self.assertEqual(resp.status_code, 200)
+        sf = SharedFile.objects.get(id=resp.json()["id"])
+        self.assertFalse(sf.pdf_version)  # graceful: download-only

@@ -638,6 +638,11 @@ def file_upload_view(request, room_code: str):
         size=upload.size,
         content_type=(upload.content_type or "application/octet-stream")[:128],
     )
+    # Office → PDF (when LibreOffice is installed) so PPTX/DOCX/XLSX can be
+    # presented in the browser; a no-op otherwise — never fails the upload.
+    from .office_convert import convert_to_pdf
+    convert_to_pdf(shared)
+
     from .services import broadcast
 
     broadcast(classroom.room_code, {
@@ -649,6 +654,7 @@ def file_upload_view(request, room_code: str):
             "uploader": request.user.name,
             "uploader_id": request.user.id,
             "icon": shared.type_icon,
+            "has_pdf": bool(shared.pdf_version),
             "url": f"/class/{classroom.room_code}/files/{shared.id}/download/",
         },
     })
@@ -665,6 +671,12 @@ def file_download_view(request, room_code: str, file_id: int):
         # not admitted yet — shared material must stay hidden
         raise Http404
     shared = get_object_or_404(SharedFile, id=file_id, classroom=classroom)
+    if request.GET.get("format") == "pdf":
+        # the server-converted copy used by the presentation renderer
+        if not shared.pdf_version:
+            raise Http404
+        pdf_name = shared.original_name.rsplit(".", 1)[0] + ".pdf"
+        return FileResponse(shared.pdf_version.open("rb"), as_attachment=True, filename=pdf_name)
     response = FileResponse(shared.file.open("rb"), as_attachment=True, filename=shared.original_name)
     return response
 

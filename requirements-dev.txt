@@ -1,0 +1,6 @@
+# Development & testing extras (install ON TOP of requirements.txt)
+-r requirements.txt
+playwright>=1.44        # end-to-end browser suite (tests_e2e/)
+reportlab>=4.0          # builds PDF fixtures for the e2e suite
+python-pptx>=0.6.23     # builds PPTX fixtures (office-conversion checks)
+python-docx>=1.1        # builds DOCX fixtures (office-conversion tests)

@@ -54,6 +54,8 @@
 - تخته سفید هم‌زمان: قلم، هایلایت، پاک‌کن، خط، فلش، مستطیل، دایره، متن، Undo/Redo/Clear، رنگ و ضخامت
 - اشتراک فایل: PDF, PNG, JPG, JPEG, DOCX, PPTX, XLSX, ZIP با اعتبارسنجی سمت سرور
 - ارائه: انتخاب فایل و صفحه، همگام‌سازی بین همهٔ شرکت‌کنندگان
+- **ارائهٔ Office**: فایل‌های DOCX/PPTX/XLSX با LibreOffice (اختیاری) سمت سرور به PDF تبدیل و در مرورگر ارائه می‌شوند (نشان «✓ PDF»)؛ بدون LibreOffice، دانلود همچنان کار می‌کند
+- **بازیابی رمز عبور**: لینک «رمز عبور را فراموش کرده‌اید؟» + ایمیل با توکن یک‌بارمصرف؛ در توسعه روی کنسول چاپ می‌شود (`EMAIL_MODE=console`)
 
 **سازمان‌دهی**
 - جدا بودن **کلاس** (دائمی) از **جلسه** (`SCHEDULED` / `LIVE` / `ENDED`)
@@ -491,8 +493,31 @@ online_classroom/
 ## ۶. تست‌ها
 
 ```bash
-python manage.py test     # 141 تست
+python manage.py test     # 167 تست
 ```
+
+### تست مرورگری سرتاسری (E2E)
+
+```bash
+pip install -r requirements-dev.txt
+python -m playwright install chromium
+
+python manage.py migrate
+python manage.py seed_demo        # کد اتاق نمونه را چاپ می‌کند (owner1/stu1)
+python manage.py runserver 8000
+python tests_e2e/run_e2e.py --room <CODE>
+```
+
+سوئیت `tests_e2e/run_e2e.py` با دو مرورگر واقعی (مالک + دانش‌آموز) حدود
+۳۰ سناریو را می‌سنجد: گفتگوی زنده، بالا بردن دست، force-mute و آزادسازی
+دستگاه، ارتقای نقش با رفرش خودکار، چرخهٔ کامل فایل‌ها (آپلود/ارائه/دانلود/حذف)،
+ارائهٔ Office با تبدیل PDF سمت سرور، تختهٔ سفید، دوربین + PiP و نبود خطای JS.
+اگر LibreOffice روی سرور نصب نباشد، بخش Office به‌صورت خودکار skip می‌شود.
+
+### CI (GitHub Actions)
+
+`.github/workflows/ci.yml` روی هر push: تست‌های Django (۱۶۷ مورد، شامل تبدیل
+واقعی Office با LibreOffice نصب‌شده روی رانر) + سرور runserver + سوئیت E2E کامل.
 
 | حوزه | پوشش |
 |---|---|

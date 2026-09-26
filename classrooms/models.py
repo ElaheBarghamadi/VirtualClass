@@ -304,6 +304,10 @@ class SharedFile(models.Model):
         settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="uploaded_files", verbose_name="بارگذار"
     )
     file = models.FileField(upload_to=classroom_upload_path, verbose_name="فایل")
+    # Server-side PDF conversion (LibreOffice) so Office documents can be
+    # presented in the browser; empty when conversion is unavailable.
+    pdf_version = models.FileField(upload_to=classroom_upload_path, null=True, blank=True,
+                                   verbose_name="نسخهٔ PDF")
     original_name = models.CharField(max_length=255, verbose_name="نام اصلی")
     size = models.PositiveBigIntegerField(verbose_name="اندازه (بایت)")
     content_type = models.CharField(max_length=128, verbose_name="نوع محتوا")

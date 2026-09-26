@@ -643,6 +643,7 @@ def set_presentation(classroom: Classroom, operator: User, file_id: int | None, 
         "type": "presentation_changed",
         "file_id": classroom.current_file_id,
         "file_name": classroom.current_file.original_name if classroom.current_file else None,
+        "has_pdf": bool(classroom.current_file and classroom.current_file.pdf_version),
         "page": classroom.current_page,
     })
 

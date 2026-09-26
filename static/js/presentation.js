@@ -125,11 +125,13 @@ class PresentationImpl {
     }
 
     // ------------------------------------------------------------ show / navigate
-    show({ file_id, file_name, page }) {
+    show({ file_id, file_name, page, has_pdf = false }) {
         if (!file_id) { this.hide(); return; }
         const sameFile = file_id === this.fileId;
         this.fileId = file_id;
         this.fileName = file_name || '';
+        // server-converted PDF copy exists (Office uploads) → present that
+        this.hasPdf = !!has_pdf;
         this.page = Math.max(1, page || 1);
         document.getElementById('presentation-title').textContent =
             `ارائه: ${this.fileName}`;
@@ -165,10 +167,18 @@ class PresentationImpl {
     }
 
     _fileKind() {
+        // Office files with a server-side PDF conversion render as PDF
+        if (this.hasPdf) return 'pdf';
         const ext = this._fileExt();
         if (ext === 'pdf') return 'pdf';
         if (['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(ext)) return 'image';
         return 'other';
+    }
+
+    /** URL of whatever the pdf renderer should fetch for the current file. */
+    _pdfUrl() {
+        const base = `/class/${this.roomCode}/files/${this.fileId}/download/`;
+        return this.hasPdf ? `${base}?format=pdf` : base;
     }
 
     // ------------------------------------------------------------ rendering
@@ -232,7 +242,7 @@ class PresentationImpl {
         }
         const fileId = this.fileId;
         const promise = pdfjsLib
-            .getDocument({ url: `/class/${this.roomCode}/files/${fileId}/download/` }).promise
+            .getDocument({ url: this._pdfUrl() }).promise
             .then((doc) => {
                 const old = this._pdfCache;
                 this._pdfCache = { fileId, doc };

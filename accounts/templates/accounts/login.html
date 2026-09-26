@@ -19,6 +19,7 @@
             {% if form.password.errors %}<p class="field-error">{{ form.password.errors.0 }}</p>{% endif %}
         </div>
         <button type="submit" class="btn btn-primary btn-block">ورود</button>
+        <p class="auth-alt"><a href="{% url 'accounts:password_reset' %}">رمز عبور را فراموش کرده‌اید؟</a></p>
     </form>
     <p class="auth-alt">حساب کاربری ندارید؟ <a href="{% url 'accounts:register' %}">ثبت‌نام کنید</a></p>
 </div>

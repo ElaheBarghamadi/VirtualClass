@@ -487,6 +487,7 @@ function applyClassroomState(state) {
             file_id: state.current_file_id,
             file_name: state.current_file_name,
             page: state.current_page,
+            has_pdf: state.current_file_has_pdf,
         });
     }
 }
@@ -1086,6 +1087,13 @@ function addFileItem(file) {
         </div>`;
     li.querySelector('.file-icon').textContent = file.icon || iconForName(file.name);
     li.querySelector('.file-name').textContent = file.name;
+    if (file.has_pdf) {
+        const pill = document.createElement('span');
+        pill.className = 'pdf-ready-pill';
+        pill.title = 'نسخهٔ PDF آمادهٔ ارائه است';
+        pill.textContent = '✓ PDF';
+        li.querySelector('.file-name').appendChild(pill);
+    }
     li.querySelector('.file-info small').textContent =
         [file.uploader, file.size].filter(Boolean).join(' · ');
     if (canManageFile(file)) {
@@ -1117,7 +1125,10 @@ function applyPresentation(data) {
     // switch FIRST: the renderer measures its holder, and a hidden
     // holder measures 0×0 (which now aborts the render entirely).
     switchView('presentation');
-    Presentation.show({ file_id: data.file_id, file_name: data.file_name, page: data.page || 1 });
+    Presentation.show({
+        file_id: data.file_id, file_name: data.file_name,
+        page: data.page || 1, has_pdf: data.has_pdf,
+    });
 }
 
 // ---------------------------------------------------------------------------

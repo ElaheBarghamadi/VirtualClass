@@ -226,6 +226,23 @@ UPLOAD_RATE_LIMIT = int(os.environ.get("UPLOAD_RATE_LIMIT", "10"))
 UPLOAD_RATE_WINDOW = int(os.environ.get("UPLOAD_RATE_WINDOW", "600"))  # seconds
 
 # ---------------------------------------------------------------------------
+# Email — password reset and future notifications.
+# Development: console backend (links print to the server console).
+# Production: set EMAIL_HOST etc. in .env and EMAIL_BACKEND=smtp.
+# ---------------------------------------------------------------------------
+EMAIL_MODE = os.environ.get("EMAIL_BACKEND", "console").lower()
+if EMAIL_MODE == "smtp":
+    EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+    EMAIL_HOST = os.environ.get("EMAIL_HOST", "")
+    EMAIL_PORT = int(os.environ.get("EMAIL_PORT", "587"))
+    EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "")
+    EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "")
+    EMAIL_USE_TLS = env_bool("EMAIL_USE_TLS", "true")
+else:
+    EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "no-reply@classroom.local")
+
+# ---------------------------------------------------------------------------
 # Cache — Redis in production, local-memory fallback in development.
 # Used for classroom password rate limiting and other ephemeral state.
 # ---------------------------------------------------------------------------

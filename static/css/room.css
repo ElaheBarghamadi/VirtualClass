@@ -630,3 +630,13 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
     .stage-toolbar { gap: .1rem; padding: .15rem; }
     .layout-btn { padding: .2rem .55rem; font-size: .68rem; }
 }
+
+/* office files with a server-side PDF conversion */
+.pdf-ready-pill {
+    display: inline-block; vertical-align: middle;
+    font-size: .6rem; font-weight: 700;
+    color: var(--success, #16a34a);
+    background: color-mix(in srgb, var(--success, #16a34a) 12%, transparent);
+    padding: .1rem .4rem; border-radius: var(--radius-pill);
+    margin-inline-start: .3rem;
+}

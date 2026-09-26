@@ -255,6 +255,7 @@ class ClassroomConsumer(AsyncJsonWebsocketConsumer):
             "whiteboard_open": classroom.whiteboard_open,
             "current_file_id": classroom.current_file_id,
             "current_file_name": classroom.current_file.original_name if classroom.current_file else None,
+            "current_file_has_pdf": bool(classroom.current_file and classroom.current_file.pdf_version),
             "current_page": classroom.current_page,
         }
         return participants, state
