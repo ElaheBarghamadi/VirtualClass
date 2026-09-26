@@ -40,3 +40,31 @@ class PageRenderTests(TestCase):
         )
         response = self.client.get("/admin/")
         self.assertEqual(response.status_code, 200)
+
+
+class DatabaseUrlTests(TestCase):
+    """DATABASE_URL → Django DATABASES translation (postgres/mysql/sqlite)."""
+
+    def test_postgres_url(self):
+        from config.settings import _database_from_url
+        cfg = _database_from_url("postgres://u:p@db-host:6543/mydb")
+        self.assertEqual(cfg["ENGINE"], "django.db.backends.postgresql")
+        self.assertEqual(cfg["NAME"], "mydb")
+        self.assertEqual(cfg["USER"], "u")
+        self.assertEqual(cfg["HOST"], "db-host")
+        self.assertEqual(cfg["PORT"], "6543")
+
+    def test_mysql_url_pythonanywhere_style(self):
+        from config.settings import _database_from_url
+        url = "mysql://elahe:secret@elahe.mysql.pythonanywhere-services.com/elahe$default"
+        cfg = _database_from_url(url)
+        self.assertEqual(cfg["ENGINE"], "django.db.backends.mysql")
+        self.assertEqual(cfg["NAME"], "elahe$default")
+        self.assertEqual(cfg["HOST"], "elahe.mysql.pythonanywhere-services.com")
+        self.assertEqual(cfg["PORT"], "3306")  # mysql default port
+
+    def test_empty_and_unknown_scheme_fall_back_to_sqlite(self):
+        from config.settings import _database_from_url
+        for url in ("", "mongodb://x/y", "nonsense"):
+            cfg = _database_from_url(url)
+            self.assertEqual(cfg["ENGINE"], "django.db.backends.sqlite3", url)

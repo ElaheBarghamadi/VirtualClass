@@ -109,28 +109,43 @@ TEMPLATES = [
 # SQLite is used for development.  In production set DATABASE_URL to a
 # PostgreSQL DSN, e.g.:
 #   DATABASE_URL=postgres://user:password@host:5432/dbname
-# Models are written to stay PostgreSQL-compatible.
+# or a MySQL DSN (PythonAnywhere's standard database), e.g.:
+#   DATABASE_URL=mysql://user:password@user.mysql.pythonanywhere-services.com/dbname
+# Models are written to stay PostgreSQL/MySQL-compatible.
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
-if DATABASE_URL:
-    _parsed = urlparse(DATABASE_URL)
-    DATABASES = {
-        "default": {
-            "ENGINE": "django.db.backends.postgresql",
-            "NAME": _parsed.path.lstrip("/") or os.environ.get("DB_NAME", ""),
-            "USER": _parsed.username or os.environ.get("DB_USER", ""),
-            "PASSWORD": _parsed.password or os.environ.get("DB_PASSWORD", ""),
-            "HOST": _parsed.hostname or os.environ.get("DB_HOST", "localhost"),
-            "PORT": str(_parsed.port or os.environ.get("DB_PORT", 5432)),
-        }
+
+def _database_from_url(url: str) -> dict:
+    """Translate a DATABASE_URL DSN into a Django DATABASES entry.
+
+    Supported schemes: ``postgres(ql)://`` and ``mysql://``.  An empty or
+    unknown-scheme URL falls back to the local SQLite file (development).
+    """
+    if url:
+        parsed = urlparse(url)
+        scheme = parsed.scheme.lower()
+        if scheme in {"postgres", "postgresql"}:
+            engine, default_port = "django.db.backends.postgresql", 5432
+        elif scheme in {"mysql", "mysql2"}:
+            engine, default_port = "django.db.backends.mysql", 3306
+        else:
+            engine = ""
+        if engine:
+            return {
+                "ENGINE": engine,
+                "NAME": parsed.path.lstrip("/") or os.environ.get("DB_NAME", ""),
+                "USER": parsed.username or os.environ.get("DB_USER", ""),
+                "PASSWORD": parsed.password or os.environ.get("DB_PASSWORD", ""),
+                "HOST": parsed.hostname or os.environ.get("DB_HOST", "localhost"),
+                "PORT": str(parsed.port or os.environ.get("DB_PORT", default_port)),
+            }
+    return {
+        "ENGINE": "django.db.backends.sqlite3",
+        "NAME": BASE_DIR / "db.sqlite3",
     }
-else:
-    DATABASES = {
-        "default": {
-            "ENGINE": "django.db.backends.sqlite3",
-            "NAME": BASE_DIR / "db.sqlite3",
-        }
-    }
+
+
+DATABASES = {"default": _database_from_url(DATABASE_URL)}
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 

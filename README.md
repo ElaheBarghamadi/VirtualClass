@@ -533,3 +533,14 @@ daphne -b 0.0.0.0 -p 8000 config.asgi:application
 ```
 
 چک‌لیست: `DEBUG=false` · `SECRET_KEY` تصادفی · `DATABASE_URL` روی PostgreSQL · `REDIS_URL` روی Redis · `ALLOWED_HOSTS` و `CSRF_TRUSTED_ORIGINS` · `MEDIA_SERVER_*` · پشت reverse proxy با پشتیبانی WebSocket (Nginx با `Upgrade`/`Connection` headers) · `MEDIA_ROOT` روی volume یا object storage · `python manage.py collectstatic`.
+
+### PythonAnywhere
+
+راهنمای کامل گام‌به‌گام: **[`deploy/PYTHONANYWHERE.md`](deploy/PYTHONANYWHERE.md)** —
+ساخت وب‌اپ، محیط مجازی، `.env` پروداکشن، MySQL، نگاشت `/static/` و `/media/`
+و فایل WSGI آماده (`deploy/pythonanywhere_wsgi.py`).
+
+> توجه: PythonAnywhere فقط WSGI ارائه می‌دهد (بدون WebSocket) — روی آن
+> قابلیت‌های HTTP (ورود، داشبورد، مدیریت کلاس، آپلود/دانلود فایل) کامل
+> کار می‌کنند ولی چت/تخته/صدا/تصویرِ زمان‌واقعی به میزبان ASGI نیاز دارند.
+
