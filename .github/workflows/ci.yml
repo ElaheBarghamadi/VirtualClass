@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements-dev.txt
+          python -m playwright install --with-deps chromium
+
+      - name: Install LibreOffice (office-to-PDF conversion)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libreoffice-impress libreoffice-writer
+
+      - name: Django test suite
+        env:
+          SECRET_KEY: ci-only-not-a-secret
+        run: python manage.py test
+
+      - name: Seed demo data and start the server
+        env:
+          SECRET_KEY: ci-only-not-a-secret
+        run: |
+          python manage.py migrate
+          python manage.py seed_demo | tee /tmp/seed.log
+          nohup python manage.py runserver 0.0.0.0:8123 > /tmp/server.log 2>&1 &
+          sleep 6
+
+      - name: End-to-end browser suite
+        env:
+          SECRET_KEY: ci-only-not-a-secret
+        run: |
+          ROOM=$(grep -oP 'room code: \K\S+' /tmp/seed.log)
+          python tests_e2e/run_e2e.py --base http://127.0.0.1:8123 --room "$ROOM"
