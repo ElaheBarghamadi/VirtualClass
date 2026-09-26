@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %}{{ assignment.title }} — تکلیف{% endblock %}
+{% block content %}
+<div class="page-head">
+    <div>
+        <h1>{{ assignment.title }}</h1>
+        <p class="muted">
+            مهلت: {{ assignment.due_at|date:"Y/m/d H:i" }} · بارم {{ assignment.max_score }}
+            · <span class="badge {% if assignment.is_open %}badge-success{% else %}badge-muted{% endif %}">
+                {% if assignment.is_open %}باز{% else %}مهلت تمام{% endif %}</span>
+        </p>
+    </div>
+    <a class="btn btn-ghost" href="{% url 'assignments_manage:list' classroom.room_code %}">بازگشت</a>
+</div>
+
+{% if assignment.description %}
+    <div class="card form-card"><p>{{ assignment.description|linebreaksbr }}</p></div>
+{% endif %}
+
+<div class="two-col">
+    {% if is_owner %}
+        <div>
+            <h2 class="section-title">ارسال‌ها ({{ submissions|length }})</h2>
+            {% for s in submissions %}
+                <div class="card form-card">
+                    <div class="page-head">
+                        <div>
+                            <h3>{{ s.student_name }}</h3>
+                            <p class="muted">ارسال: {{ s.submitted_at|date:"Y/m/d H:i" }}</p>
+                        </div>
+                        {% if s.graded_at %}<span class="badge badge-info">نمره: {{ s.score }}</span>{% endif %}
+                    </div>
+                    {% if s.content %}<p>{{ s.content|linebreaksbr }}</p>{% endif %}
+                    {% if s.file %}
+                        <p><a class="btn btn-sm btn-ghost" href="{{ s.file.url }}" download>⬇ دانلود فایل پاسخ</a></p>
+                    {% endif %}
+                    <form method="post" class="grade-form">
+                        {% csrf_token %}
+                        <label for="score-{{ s.id }}">نمره (۰ تا {{ assignment.max_score }})</label>
+                        <input id="score-{{ s.id }}" type="number" name="score" step="0.5"
+                               min="0" max="{{ assignment.max_score }}"
+                               value="{% if s.graded_at %}{{ s.score }}{% endif %}" required>
+                        <label for="fb-{{ s.id }}">بازخورد</label>
+                        <textarea id="fb-{{ s.id }}" name="feedback" rows="2">{{ s.feedback }}</textarea>
+                        <div class="card-actions">
+                            <button type="submit" name="grade_submission" value="{{ s.id }}" class="btn btn-primary">
+                                {% if s.graded_at %}به‌روزرسانی نمره{% else %}ثبت نمره{% endif %}
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            {% empty %}
+                <div class="empty-state card"><p>هنوز پاسخی ارسال نشده است.</p></div>
+            {% endfor %}
+        </div>
+    {% else %}
+        <div>
+            <h2 class="section-title">پاسخ من</h2>
+            {% if submission and submission.graded_at %}
+                <div class="card form-card">
+                    <p><span class="badge badge-info">نمرهٔ شما: {{ submission.score }} از {{ assignment.max_score }}</span></p>
+                    {% if submission.feedback %}<p>{{ submission.feedback|linebreaksbr }}</p>{% endif %}
+                    <hr>
+                    {% if submission.content %}<p>{{ submission.content|linebreaksbr }}</p>{% endif %}
+                    {% if submission.file %}<p><a class="btn btn-sm btn-ghost" href="{{ submission.file.url }}" download>⬇ فایل ارسالی من</a></p>{% endif %}
+                </div>
+            {% else %}
+                <div class="card form-card">
+                    {% if submission %}
+                        <p class="muted">ارسال شده در {{ submission.submitted_at|date:"Y/m/d H:i" }} — تا پایان مهلت می‌توانید ویرایش کنید.</p>
+                    {% endif %}
+                    <form method="post" enctype="multipart/form-data" novalidate>
+                        {% csrf_token %}
+                        <label for="s-content">متن پاسخ</label>
+                        <textarea id="s-content" name="content" rows="6">{{ submission.content }}</textarea>
+                        <label for="s-file">یا فایل پاسخ (pdf, docx, pptx, xlsx, zip, png, jpg — حداکثر ۲۵MB)</label>
+                        <input id="s-file" type="file" name="file"
+                               accept=".pdf,.png,.jpg,.jpeg,.docx,.pptx,.xlsx,.zip">
+                        <div class="card-actions">
+                            <button type="submit" class="btn btn-primary" {% if not assignment.is_open %}disabled{% endif %}>
+                                {% if submission %}ویرایش پاسخ{% else %}ارسال پاسخ{% endif %}
+                            </button>
+                        </div>
+                        {% if not assignment.is_open %}<p class="muted">مهلت ارسال تمام شده است.</p>{% endif %}
+                    </form>
+                </div>
+            {% endif %}
+        </div>
+    {% endif %}
+</div>
+{% endblock %}

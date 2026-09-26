@@ -82,17 +82,30 @@ def dashboard_view(request):
         ).order_by("-created_at")
     )
     joined_count = request.user.classroom_memberships.filter(is_active=True).count()
+    joined = (
+        request.user.classroom_memberships
+        .filter(is_active=True)
+        .exclude(classroom__owner=request.user)
+        .select_related("classroom")
+        .order_by("-joined_at")[:20]
+    )
     upcoming = (
         ClassroomSession.objects.filter(
-            classroom__owner=request.user, status=ClassroomSession.Status.SCHEDULED
+            Q(classroom__owner=request.user)
+            | Q(classroom__members__user=request.user, classroom__members__is_active=True),
+            status=ClassroomSession.Status.SCHEDULED,
         )
         .select_related("classroom")
+        .distinct()
         .order_by("scheduled_start")[:10]
     )
     return render(
         request,
         "classrooms/dashboard.html",
-        {"owned_classrooms": owned, "joined_count": joined_count, "upcoming_sessions": upcoming},
+        {
+            "owned_classrooms": owned, "joined_count": joined_count,
+            "upcoming_sessions": upcoming, "joined_memberships": joined,
+        },
     )
 
 
@@ -278,6 +291,7 @@ def lobby_view(request, room_code: str):
                     classroom,
                     join_form.cleaned_data["display_name"],
                     join_form.cleaned_data.get("password", ""),
+                    ip=client_ip or None,
                 )
             except WrongClassroomPassword as exc:
                 register_failed_password_ip(classroom, client_ip)
@@ -317,6 +331,8 @@ def _room_context(request, classroom: Classroom, member) -> dict:
     perms = effective_permissions(member, classroom)
     session = get_live_session(classroom)
     files = list(classroom.files.select_related("uploader")[:50])
+    from quizzes.models import Quiz  # local import keeps app loading order simple
+
     return {
         "classroom": classroom,
         "member": member,
@@ -325,6 +341,7 @@ def _room_context(request, classroom: Classroom, member) -> dict:
         "is_privileged": is_privileged(member),
         "live_session": session,
         "files": files,
+        "quizzes": list(Quiz.objects.filter(classroom=classroom)[:20]),
         "max_upload_mb": settings.MAX_UPLOAD_MB,
         "allowed_extensions": sorted(ALLOWED_EXTENSIONS),
         "media": media_config_payload(),

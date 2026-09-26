@@ -65,6 +65,12 @@ class Command(BaseCommand):
             wb.delete()
         AttendanceRecord.objects.filter(session__classroom=classroom).delete()
         ClassroomSession.objects.filter(classroom=classroom).delete()
+        from assignments.models import Assignment, Submission
+        from quizzes.models import Quiz, QuizRun
+        Submission.objects.filter(assignment__classroom=classroom).delete()
+        Assignment.objects.filter(classroom=classroom).delete()
+        QuizRun.objects.filter(quiz__classroom=classroom).delete()
+        Quiz.objects.filter(classroom=classroom).delete()
         # members back to defaults (owner membership recreated below)
         ClassroomMember.objects.filter(classroom=classroom).exclude(
             user=classroom.owner).delete()

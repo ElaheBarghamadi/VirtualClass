@@ -181,6 +181,9 @@
                     <span class="unread-pill hidden" id="chat-unread">0</span>
                 </button>
                 <button class="side-tab" data-tab="files" role="tab" aria-selected="false">فایل‌ها</button>
+                <button class="side-tab" data-tab="quiz" role="tab" aria-selected="false">
+                    آزمون <span class="live-pill hidden" id="quiz-live-pill">زنده</span>
+                </button>
             </div>
 
             <!-- ===== participants ===== -->
@@ -265,6 +268,35 @@
                     {% endfor %}
                 </ul>
             </section>
+
+            <!-- ===== quiz ===== -->
+            <section class="side-panel" id="panel-quiz" role="tabpanel">
+                <div id="quiz-active" class="quiz-status hidden" role="status" aria-live="polite">
+                    <h3 id="quiz-active-title">آزمون در جریان</h3>
+                    <p class="muted" id="quiz-progress">در انتظار پاسخ‌ها…</p>
+                    <button type="button" class="btn btn-danger btn-sm host-only hidden" id="quiz-end">
+                        پایان آزمون و نمایش نتایج
+                    </button>
+                </div>
+                {% if is_privileged %}
+                    <h3 class="quiz-panel-head">آزمون‌های کلاس</h3>
+                    {% if quizzes %}
+                        <ul class="quiz-list">
+                            {% for q in quizzes %}
+                                <li class="quiz-item" data-quiz-id="{{ q.id }}">
+                                    <span class="quiz-item-title">{{ q.title }}</span>
+                                    <small class="muted">{{ q.question_count }} پرسش</small>
+                                    <button type="button" class="btn btn-sm btn-primary quiz-start">شروع</button>
+                                </li>
+                            {% endfor %}
+                        </ul>
+                    {% else %}
+                        <p class="muted quiz-empty">آزمونی ساخته نشده — از صفحهٔ «مدیریت کلاس» در داشبورد آزمون بسازید.</p>
+                    {% endif %}
+                {% else %}
+                    <p class="muted quiz-empty">وقتی میزبان آزمونی شروع کند، اینجا نمایش داده می‌شود.</p>
+                {% endif %}
+            </section>
         </aside>
     </div>
 
@@ -311,6 +343,12 @@
             </button>
             <button type="button" class="ctrl-btn host-only" id="btn-session" title="شروع/پایان جلسه" aria-label="مدیریت جلسه">
                 <svg class="ic" viewBox="0 0 24 24"><use href="#i-session"/></svg>
+            </button>
+            <button type="button" class="ctrl-btn host-only" id="btn-record" title="ضبط جلسه (ذخیره در دستگاه شما)"
+                    aria-label="ضبط جلسه" aria-pressed="false">
+                <span class="rec-dot" aria-hidden="true"></span>
+                <svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="6" fill="currentColor"/></svg>
+                <span class="rec-timer hidden" id="rec-timer" aria-hidden="true">00:00</span>
             </button>
         {% endif %}
         <span class="ctrl-sep" aria-hidden="true"></span>
@@ -364,6 +402,26 @@
 </dialog>
 
 <!-- ===== settings modal (host) ===== -->
+<dialog class="app-dialog quiz-dialog" id="quiz-dialog" aria-label="آزمون">
+    <div class="app-dialog-head">
+        <h2 class="app-dialog-title" id="quiz-dialog-title">آزمون</h2>
+        <button type="button" class="app-dialog-x" id="quiz-x" aria-label="بستن">✕</button>
+    </div>
+    <div class="app-dialog-body">
+        <p class="quiz-progress-line"><span id="quiz-q-index">پرسش ۱ از ۱</span>
+            <span class="muted" id="quiz-q-points"></span></p>
+        <div class="quiz-progress-track" aria-hidden="true"><div class="quiz-progress-fill" id="quiz-progress-fill"></div></div>
+        <p class="quiz-question-text" id="quiz-question-text"></p>
+        <div class="quiz-options" id="quiz-options" role="group" aria-label="گزینه‌ها"></div>
+        <div class="quiz-nav">
+            <button type="button" class="btn btn-ghost btn-sm" id="quiz-prev">پرسش قبل</button>
+            <button type="button" class="btn btn-ghost btn-sm" id="quiz-next">پرسش بعد</button>
+        </div>
+        <p class="muted quiz-hint" id="quiz-hint"></p>
+        <div class="quiz-results hidden" id="quiz-results"></div>
+    </div>
+</dialog>
+
 <dialog class="app-dialog settings-dialog" id="settings-dialog" aria-label="تنظیمات کلاس">
     <form method="dialog" class="settings-form" id="settings-form">
         <div class="app-dialog-head">

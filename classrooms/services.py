@@ -233,12 +233,14 @@ def unique_display_name(classroom: Classroom, name: str) -> str:
 
 
 @transaction.atomic
-def join_classroom_guest(classroom: Classroom, raw_name: str, raw_password: str = "") -> ClassroomMember:
+def join_classroom_guest(
+    classroom: Classroom, raw_name: str, raw_password: str = "", ip: str | None = None,
+) -> ClassroomMember:
     """Join as a guest — no Django account is created.
 
     Same gates as registered joins: active classroom → guests allowed →
-    not locked → password (rate-limited, keyed by name+room) → optional
-    waiting room.
+    not locked → ban-by-IP (kicked guests cannot rejoin while banned) →
+    password (rate-limited, keyed by name+room) → optional waiting room.
     """
     if not classroom.is_active:
         raise ClassroomAccessError("این کلاس غیرفعال است.")
@@ -246,6 +248,11 @@ def join_classroom_guest(classroom: Classroom, raw_name: str, raw_password: str 
         raise ClassroomAccessError("ورود به این کلاس فقط برای کاربران ثبت‌نام‌شده ممکن است.")
     if classroom.is_locked:
         raise ClassroomLocked("کلاس توسط میزبان قفل شده است.")
+    if ip and ClassroomMember.objects.filter(
+        classroom=classroom, is_guest=True, guest_ip=ip,
+        banned_until__gt=timezone.now(),
+    ).exists():
+        raise UserBanned("شما توسط میزبان از این کلاس خارج شده‌اید و فعلاً امکان ورود مجدد ندارید.")
 
     name = validate_display_name(raw_name)
 
@@ -262,6 +269,7 @@ def join_classroom_guest(classroom: Classroom, raw_name: str, raw_password: str 
         user=None,
         role=Role.GUEST,
         is_guest=True,
+        guest_ip=ip,
         display_name=unique_display_name(classroom, name),
         is_active=True,
         in_waiting_room=classroom.enable_waiting_room,

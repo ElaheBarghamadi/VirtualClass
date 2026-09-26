@@ -152,6 +152,7 @@ class ClassroomMember(models.Model):
     # -- guest identity (never expose the internal pk to clients) ---------------
     is_guest = models.BooleanField(default=False, verbose_name="مهمان")
     guest_uid = models.CharField(max_length=32, null=True, blank=True, unique=True, verbose_name="شناسهٔ مهمان")
+    guest_ip = models.GenericIPAddressField(null=True, blank=True, verbose_name="IP مهمان هنگام ورود")
     display_name = models.CharField(max_length=60, blank=True, verbose_name="نام نمایشی")
 
     # -- granular capabilities (server-side source of truth) --------------------

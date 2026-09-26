@@ -258,6 +258,11 @@ class ClassroomConsumer(AsyncJsonWebsocketConsumer):
             "current_file_has_pdf": bool(classroom.current_file and classroom.current_file.pdf_version),
             "current_page": classroom.current_page,
         }
+        from quizzes.services import active_run, run_payload
+
+        run = active_run(classroom)
+        if run is not None:
+            state["active_quiz"] = run_payload(run)
         return participants, state
 
     @database_sync_to_async

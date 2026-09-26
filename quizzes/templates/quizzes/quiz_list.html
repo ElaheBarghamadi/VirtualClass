@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}آزمون‌ها — {{ classroom.title }}{% endblock %}
+{% block content %}
+<div class="page-head">
+    <div>
+        <h1>آزمون‌ها</h1>
+        <p class="muted">{{ classroom.title }} · کد: <code>{{ classroom.room_code }}</code></p>
+    </div>
+    <a class="btn btn-ghost" href="{% url 'classrooms:detail' classroom.room_code %}">بازگشت به مدیریت</a>
+</div>
+
+<div class="card form-card">
+    <h2 class="section-title">آزمون جدید</h2>
+    <form method="post" novalidate>
+        {% csrf_token %}
+        <label for="quiz-title">عنوان آزمون</label>
+        <input id="quiz-title" type="text" name="title" maxlength="200" required
+               placeholder="مثلاً: آزمون میان‌ترم فصل ۳">
+        <div class="card-actions">
+            <button type="submit" class="btn btn-primary" id="quiz-create-submit">ساخت آزمون</button>
+        </div>
+    </form>
+    <p class="muted">پس از ساخت، پرسش‌های چهارگزینه‌ای را اضافه می‌کنید؛ شروع آزمون از داخل جلسهٔ کلاس است.</p>
+</div>
+
+<h2 class="section-title">آزمون‌های این کلاس</h2>
+{% if quizzes %}
+    <div class="card">
+        <ul class="session-list">
+            {% for q in quizzes %}
+                <li>
+                    <strong>{{ q.title }}</strong>
+                    <span class="muted">{{ q.question_count }} پرسش · {{ q.total_points }} نمره</span>
+                    <a class="btn btn-sm btn-primary" href="{% url 'quizzes_manage:detail' classroom.room_code q.id %}">ویرایش پرسش‌ها</a>
+                </li>
+            {% endfor %}
+        </ul>
+    </div>
+{% else %}
+    <div class="empty-state card"><p>هنوز آزمونی نساخته‌اید.</p></div>
+{% endif %}
+{% endblock %}

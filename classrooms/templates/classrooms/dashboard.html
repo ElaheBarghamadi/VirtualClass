@@ -66,6 +66,8 @@
                 <div class="card-actions">
                     <a class="btn btn-primary btn-sm" href="{% url 'room:lobby' classroom.room_code %}">ورود به کلاس</a>
                     <a class="btn btn-ghost btn-sm" href="{% url 'classrooms:detail' classroom.room_code %}">مدیریت</a>
+                    <a class="btn btn-ghost btn-sm" href="{% url 'quizzes_manage:list' classroom.room_code %}">آزمون‌ها</a>
+                    <a class="btn btn-ghost btn-sm" href="{% url 'assignments_manage:list' classroom.room_code %}">تکالیف</a>
                 </div>
             </article>
         {% endfor %}
@@ -74,6 +76,22 @@
     <div class="empty-state card">
         <p>هنوز کلاسی نساخته‌اید.</p>
         <a class="btn btn-primary" href="{% url 'classrooms:create' %}">اولین کلاس خود را بسازید</a>
+    </div>
+{% endif %}
+
+{% if joined_memberships %}
+    <h2 class="section-title">کلاس‌هایی که عضو آن هستم</h2>
+    <div class="card">
+        <ul class="session-list">
+            {% for m in joined_memberships %}
+                <li>
+                    <strong>{{ m.classroom.title }}</strong>
+                    <span class="muted">{{ m.get_role_display }}</span>
+                    <a class="btn btn-sm btn-ghost" href="{% url 'room:lobby' m.classroom.room_code %}">ورود</a>
+                    <a class="btn btn-sm btn-ghost" href="{% url 'assignments_manage:list' m.classroom.room_code %}">تکالیف</a>
+                </li>
+            {% endfor %}
+        </ul>
     </div>
 {% endif %}
 {% endblock %}

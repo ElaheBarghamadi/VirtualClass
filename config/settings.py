@@ -70,6 +70,8 @@ INSTALLED_APPS = [
     "classrooms.apps.ClassroomsConfig",
     "chat.apps.ChatConfig",
     "whiteboard.apps.WhiteboardConfig",
+    "quizzes.apps.QuizzesConfig",
+    "assignments.apps.AssignmentsConfig",
 ]
 
 MIDDLEWARE = [

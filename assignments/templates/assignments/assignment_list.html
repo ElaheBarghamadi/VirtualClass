@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}تکالیف — {{ classroom.title }}{% endblock %}
+{% block content %}
+<div class="page-head">
+    <div>
+        <h1>تکالیف</h1>
+        <p class="muted">{{ classroom.title }} · کد: <code>{{ classroom.room_code }}</code></p>
+    </div>
+    <a class="btn btn-ghost" href="{% url 'dashboard' %}">بازگشت به داشبورد</a>
+</div>
+
+{% if is_owner %}
+    <div class="card form-card">
+        <h2 class="section-title">تکلیف جدید</h2>
+        <form method="post" novalidate>
+            {% csrf_token %}
+            <label for="a-title">عنوان</label>
+            <input id="a-title" type="text" name="title" maxlength="200" required>
+            <label for="a-desc">شرح تکلیف</label>
+            <textarea id="a-desc" name="description" rows="3"></textarea>
+            <div class="two-col">
+                <div>
+                    <label for="a-due">مهلت ارسال</label>
+                    <input id="a-due" type="datetime-local" name="due_at" required>
+                </div>
+                <div>
+                    <label for="a-max">بارم کل</label>
+                    <input id="a-max" type="number" name="max_score" min="1" max="100" value="20">
+                </div>
+            </div>
+            <div class="card-actions">
+                <button type="submit" class="btn btn-primary">ساخت تکلیف</button>
+            </div>
+        </form>
+    </div>
+{% endif %}
+
+<h2 class="section-title">تکلیف‌های این کلاس</h2>
+{% if assignments %}
+    <div class="card">
+        <ul class="session-list">
+            {% for a in assignments %}
+                <li>
+                    <strong>{{ a.title }}</strong>
+                    <span class="badge {% if a.is_open %}badge-success{% else %}badge-muted{% endif %}">
+                        {% if a.is_open %}باز{% else %}مهلت تمام{% endif %}
+                    </span>
+                    <span class="muted">مهلت: {{ a.due_at|date:"Y/m/d H:i" }} · بارم {{ a.max_score }}</span>
+                    {% if not is_owner %}
+                        {% for aid, s in my_submissions.items %}
+                            {% if aid == a.id %}
+                                <span class="badge {% if s.graded_at %}badge-info{% else %}badge-warn{% endif %}">
+                                    {% if s.graded_at %}نمره: {{ s.score }}{% else %}ارسال شده{% endif %}
+                                </span>
+                            {% endif %}
+                        {% endfor %}
+                    {% endif %}
+                    <a class="btn btn-sm btn-primary" href="{% url 'assignments_manage:detail' classroom.room_code a.id %}">
+                        {% if is_owner %}تصحیح{% else %}مشاهده / ارسال{% endif %}
+                    </a>
+                    {% if is_owner %}
+                        <form method="post" onsubmit="return confirm('این تکلیف با همهٔ ارسال‌ها حذف شود؟');">
+                            {% csrf_token %}
+                            <button type="submit" name="delete_assignment" value="{{ a.id }}"
+                                    class="btn btn-sm btn-danger" aria-label="حذف تکلیف">حذف</button>
+                        </form>
+                    {% endif %}
+                </li>
+            {% endfor %}
+        </ul>
+    </div>
+{% else %}
+    <div class="empty-state card">
+        <p>{% if is_owner %}هنوز تکلیفی نساخته‌اید.{% else %}تکلیفی ثبت نشده است.{% endif %}</p>
+    </div>
+{% endif %}
+{% endblock %}

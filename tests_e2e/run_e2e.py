@@ -82,7 +82,7 @@ def login_and_join(pw, base: str, user: str, code: str):
         "--use-fake-ui-for-media-stream",
         "--autoplay-policy=no-user-gesture-required",
     ])
-    pg = b.new_page()
+    pg = b.new_context().new_page()  # explicit context: extra pages can share it
     errs: list[str] = []
     pg.on("pageerror", lambda e: errs.append(str(e)))
     pg.on("console", lambda m: errs.append(f"console.{m.type}: {m.text}") if m.type == "error" else None)
@@ -232,6 +232,50 @@ def run(base: str, code: str) -> int:
         check("whiteboard stroke rendered",
               pg_o.evaluate("() => { const c = document.getElementById('whiteboard-canvas'); return c ? c.toDataURL().length > 5000 : false; }"))
 
+        # ---------- live quiz (author via management UI, run in room) ----------
+        mg = pg_o.context.new_page()  # share the owner's login session
+        mg.goto(f"{base}/classrooms/{code}/quizzes/", timeout=20000)
+        mg.fill("#quiz-title", "آزمون E2E")
+        mg.click("#quiz-create-submit")
+        mg.wait_for_url("**/quizzes/*/", timeout=10000)
+        mg.fill('[name=text]', "۲ + ۲ = ؟")
+        mg.fill('#q-points', "2")
+        mg.fill('[name=option_1]', "۳")
+        mg.fill('[name=option_2]', "۴")
+        mg.check('[name=correct][value="2"]')
+        mg.click("button[name=add_question]")
+        mg.wait_for_timeout(800)
+        check("quiz authoring UI creates quiz + question",
+              mg.locator(".quiz-question-card").count() == 1)
+        mg.close()
+        pg_o.reload(timeout=20000)  # quiz list is server-rendered on room load
+        pg_o.wait_for_selector("#room-side", state="attached", timeout=40000)
+        pg_o.wait_for_timeout(1500)
+        pg_o.click('.side-tab[data-tab="quiz"]'); pg_o.wait_for_timeout(500)
+        pg_o.click(".quiz-start"); pg_o.wait_for_timeout(1500)
+        try:
+            pg_s.wait_for_selector("#quiz-dialog[open]", timeout=6000)
+            modal_ok = True
+        except Exception:
+            modal_ok = False
+        check("quiz modal opens for student", modal_ok)
+        pg_s.click(".quiz-option >> nth=1")  # «۴» — the correct option
+        pg_s.wait_for_timeout(1500)
+        prog = pg_o.text_content("#quiz-progress") or ""
+        check("host sees live answer progress", "۱" in prog or "1" in prog, prog)
+        pg_o.click("#quiz-end"); pg_o.wait_for_timeout(1500)
+        stu_result = pg_s.evaluate("""() =>
+            document.getElementById('quiz-results')?.innerText || ''""")
+        check("student sees own result after end", "۲ از ۲" in stu_result or "2 از 2" in stu_result,
+              stu_result[:40].replace("\n", " "))
+        own_result = pg_o.evaluate("""() =>
+            document.getElementById('quiz-results')?.innerText || ''""")
+        check("host sees scoreboard", "سارا" in own_result or "stu1" in own_result,
+              own_result[:40].replace("\n", " "))
+        pg_s.evaluate("() => document.getElementById('quiz-dialog')?.close()")
+        pg_o.evaluate("() => document.getElementById('quiz-dialog')?.close()")
+        pg_o.wait_for_timeout(400)
+
         # ---------- camera + PiP ----------
         pg_s.click("#btn-camera"); pg_s.wait_for_timeout(2500)
         check("student camera produced a track",
@@ -246,6 +290,40 @@ def run(base: str, code: str) -> int:
             pg_s.click('[data-act="ok"]')
         pg_s.wait_for_timeout(2500)
         check("exit leaves the room", "/room/" not in pg_s.url, pg_s.url)
+
+        # ---------- mobile viewport smoke ----------
+        b_m = pw.chromium.launch(args=[
+            "--use-fake-device-for-media-stream",
+            "--use-fake-ui-for-media-stream",
+            "--autoplay-policy=no-user-gesture-required",
+        ])
+        ctx = b_m.new_context(
+            viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True,
+        )
+        pm = ctx.new_page()
+        merr: list[str] = []
+        pm.on("pageerror", lambda e: merr.append(str(e)))
+        pm.goto(base + "/accounts/login/", timeout=20000)
+        pm.fill("#id_username", "stu1")
+        pm.fill("#id_password", PASSWORD)
+        pm.click("button[type=submit]")
+        pm.wait_for_url("**/dashboard/**", timeout=20000)
+        pm.goto(f"{base}/class/{code}/lobby/", timeout=20000)
+        if "/room/" not in pm.url:
+            if pm.locator("input[name=display_name]").count():
+                pm.fill("input[name=display_name]", "stu1")
+            pm.click("#btn-to-devices")
+            pm.wait_for_timeout(600)
+            pm.click("#join-form button[type=submit]")
+        pm.wait_for_selector("#room-side", state="attached", timeout=40000)
+        pm.wait_for_timeout(1500)
+        check("room loads at 390x844", pm.locator(".side-tabs").count() == 1)
+        pm.click("#btn-chat")  # drawer toggle
+        pm.wait_for_timeout(600)
+        check("side drawer opens on mobile",
+              pm.evaluate("() => document.querySelector('.room-side')?.classList.contains('drawer-open')") is True)
+        check("no page errors (mobile)", not merr, ";".join(merr[:3]))
+        b_m.close()
 
         check("no page errors (owner)", not oerr, ";".join(oerr[:3]))
         check("no page errors (student)", not serr, ";".join(serr[:3]))

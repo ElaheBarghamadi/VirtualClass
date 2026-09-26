@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}{{ quiz.title }} — آزمون{% endblock %}
+{% block content %}
+<div class="page-head">
+    <div>
+        <h1>{{ quiz.title }}</h1>
+        <p class="muted">{{ questions|length }} پرسش · مجموع {{ quiz.total_points }} نمره</p>
+    </div>
+    <a class="btn btn-ghost" href="{% url 'quizzes_manage:list' classroom.room_code %}">بازگشت</a>
+</div>
+
+<div class="two-col">
+    <div>
+        <h2 class="section-title">پرسش‌ها</h2>
+        {% for q in questions %}
+            <div class="card form-card quiz-question-card">
+                <div class="page-head">
+                    <div>
+                        <h3>پرسش {{ forloop.counter }} <span class="badge badge-info">{{ q.points }} نمره</span></h3>
+                        <p>{{ q.text }}</p>
+                    </div>
+                    <form method="post" onsubmit="return confirm('این پرسش حذف شود؟');">
+                        {% csrf_token %}
+                        <button type="submit" name="delete_question" value="{{ q.id }}"
+                                class="btn btn-sm btn-danger" aria-label="حذف پرسش {{ forloop.counter }}">حذف</button>
+                    </form>
+                </div>
+                <ul class="option-list">
+                    {% for o in q.options.all %}
+                        <li class="{% if o.is_correct %}option-correct{% endif %}">
+                            {{ o.text }}{% if o.is_correct %} <span class="badge badge-success">✓ صحیح</span>{% endif %}
+                        </li>
+                    {% endfor %}
+                </ul>
+            </div>
+        {% empty %}
+            <div class="empty-state card"><p>هنوز پرسشی اضافه نشده است.</p></div>
+        {% endfor %}
+
+        <h2 class="section-title">افزودن پرسش</h2>
+        <div class="card form-card">
+            <form method="post" novalidate>
+                {% csrf_token %}
+                <label for="q-text">متن پرسش</label>
+                <textarea id="q-text" name="text" rows="2" required></textarea>
+                <label for="q-points">بارم (۱ تا ۱۰۰)</label>
+                <input id="q-points" type="number" name="points" min="1" max="100" value="1">
+                <fieldset class="options-fieldset">
+                    <legend>گزینه‌ها (حداقل دو گزینه؛ گزینهٔ صحیح را علامت بزنید)</legend>
+                    {% for i in "1234" %}
+                        <div class="option-row">
+                            <input type="radio" name="correct" value="{{ i }}" id="correct-{{ i }}"
+                                   {% if forloop.first %}required{% endif %}
+                                   aria-label="گزینهٔ {{ forloop.counter }} صحیح است">
+                            <input type="text" name="option_{{ i }}" maxlength="300"
+                                   placeholder="گزینهٔ {{ forloop.counter }}"
+                                   {% if forloop.first or forloop.counter == 2 %}required{% endif %}>
+                        </div>
+                    {% endfor %}
+                </fieldset>
+                <div class="card-actions">
+                    <button type="submit" name="add_question" value="1" class="btn btn-primary">افزودن پرسش</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div>
+        <h2 class="section-title">اجراهای آزمون</h2>
+        <div class="card form-card">
+            <p class="muted">برای شروع آزمون، وارد جلسهٔ کلاس شوید و از تب «آزمون» آن را شروع کنید.</p>
+            <a class="btn btn-primary" href="{% url 'room:room' classroom.room_code %}">ورود به جلسه</a>
+            <form method="post" onsubmit="return confirm('کل آزمون با تمام نتایج حذف شود؟');" style="margin-top:.6rem">
+                {% csrf_token %}
+                <button type="submit" name="delete_quiz" value="1" class="btn btn-danger">حذف آزمون</button>
+            </form>
+        </div>
+        {% for run in runs %}
+            <div class="card form-card">
+                <div class="page-head">
+                    <div>
+                        <h3>اجرای {{ run.started_at|date:"m/d H:i" }}</h3>
+                        <p class="muted">
+                            {% if run.ended_at %}پایان: {{ run.ended_at|date:"H:i" }}{% else %}در جریان{% endif %}
+                        </p>
+                    </div>
+                </div>
+                {% if run.results %}
+                    <ul class="option-list">
+                        {% for r in run.results %}
+                            <li>{{ r.name }} — <strong>{{ r.score }}</strong> از {{ r.max }}</li>
+                        {% endfor %}
+                    </ul>
+                {% elif run.ended_at %}
+                    <p class="muted">پاسخی ثبت نشد.</p>
+                {% endif %}
+            </div>
+        {% endfor %}
+    </div>
+</div>
+{% endblock %}

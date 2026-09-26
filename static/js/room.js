@@ -15,6 +15,7 @@ import { ChatClient } from './chat.js';
 import { Whiteboard } from './whiteboard.js';
 import { Presentation } from './presentation.js';
 import { Media } from './media.js';
+import { QuizClient } from './quiz.js';
 import { toast } from './toast.js';
 import { confirmDialog, infoDialog } from './modal.js';
 
@@ -423,6 +424,15 @@ function handleEvent(data) {
         case 'presentation_changed':
             applyPresentation(data);
             break;
+        case 'quiz_started':
+            QuizClient.handleStarted(data);
+            break;
+        case 'quiz_answered':
+            QuizClient.handleProgress(data);
+            break;
+        case 'quiz_ended':
+            QuizClient.handleEnded(data);
+            break;
         case 'waiting_room_entry':
             // New pending participant (visible to hosts via next snapshot too).
             if (PRIVILEGED) presence.upsert(data.participant);
@@ -490,6 +500,7 @@ function applyClassroomState(state) {
             has_pdf: state.current_file_has_pdf,
         });
     }
+    if (state.active_quiz) QuizClient.handleStarted(state.active_quiz);
 }
 
 function showLockBadge(locked) {
@@ -657,8 +668,89 @@ function initControls() {
                 await api(`/sessions/${sid}/end/`);
             }
         });
+        initRecording();
         initSettingsModal();
     }
+}
+
+// ---------------------------------------------------------------------------
+// Session recording — host-side only, file saved locally in the browser.
+// Records whatever the host publishes: microphone audio plus screen share
+// when active, otherwise the camera.  Nothing is uploaded to the server.
+// ---------------------------------------------------------------------------
+function initRecording() {
+    const btn = document.getElementById('btn-record');
+    if (!btn) return;
+    let recorder = null;
+    let chunks = [];
+    let timer = null;
+    let startedAt = 0;
+
+    const pad = (n) => String(n).padStart(2, '0');
+    const tick = () => {
+        const s = Math.floor((Date.now() - startedAt) / 1000);
+        const label = document.getElementById('rec-timer');
+        if (label) label.textContent = `${pad(Math.floor(s / 60))}:${pad(s % 60)}`;
+    };
+
+    btn.addEventListener('click', () => {
+        if (recorder && recorder.state === 'recording') {
+            recorder.stop();
+            return;
+        }
+        const impl = Media.impl;
+        const local = impl?.localStream || null;
+        const screen = impl?.screenStream || null;
+        const mixed = new MediaStream();
+        if (screen && screen.getVideoTracks().length) {
+            mixed.addTrack(screen.getVideoTracks()[0]);
+        } else if (local && local.getVideoTracks().length) {
+            mixed.addTrack(local.getVideoTracks()[0]);
+        }
+        if (local && local.getAudioTracks().length) {
+            mixed.addTrack(local.getAudioTracks()[0]);
+        }
+        if (!mixed.getTracks().length) {
+            toast('برای ضبط، ابتدا میکروفون یا دوربین خود را روشن کنید.', 'warning');
+            return;
+        }
+        const mime = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm']
+            .find((m) => window.MediaRecorder?.isTypeSupported?.(m)) || '';
+        try {
+            recorder = mime ? new MediaRecorder(mixed, { mimeType: mime }) : new MediaRecorder(mixed);
+        } catch (e) {
+            toast('مرورگر شما از ضبط پشتیبانی نمی‌کند.', 'error');
+            return;
+        }
+        chunks = [];
+        recorder.ondataavailable = (ev) => { if (ev.data.size) chunks.push(ev.data); };
+        recorder.onstop = () => {
+            clearInterval(timer);
+            btn.classList.remove('recording');
+            btn.setAttribute('aria-pressed', 'false');
+            document.getElementById('rec-timer')?.classList.add('hidden');
+            const blob = new Blob(chunks, { type: recorder.mimeType || 'video/webm' });
+            chunks = [];
+            if (blob.size < 1024) { toast('ضبط خیلی کوتاه بود؛ فایلی ذخیره نشد.', 'warning'); return; }
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
+            a.href = url;
+            a.download = `classroom-${ROOM_CODE}-${stamp}.webm`;
+            a.click();
+            setTimeout(() => URL.revokeObjectURL(url), 4000);
+            toast('فایل ضبط در دستگاه شما ذخیره شد.', 'success');
+        };
+        recorder.start(1000);
+        startedAt = Date.now();
+        btn.classList.add('recording');
+        btn.setAttribute('aria-pressed', 'true');
+        const label = document.getElementById('rec-timer');
+        label?.classList.remove('hidden');
+        tick();
+        timer = setInterval(tick, 1000);
+        toast('ضبط شروع شد — فایل در پایان روی دستگاه شما ذخیره می‌شود.', 'info');
+    });
 }
 
 function switchView(view) {
@@ -1201,6 +1293,7 @@ try {
         canPresent: PERMISSIONS.can_present,
         api,
     });
+    QuizClient.init({ api, identity: IDENTITY, privileged: PRIVILEGED });
 } catch (err) {
     console.warn('[whiteboard] init failed:', err);
     Whiteboard.unavailable = true;

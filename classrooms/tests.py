@@ -548,3 +548,37 @@ class OfficeConversionTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         sf = SharedFile.objects.get(id=resp.json()["id"])
         self.assertFalse(sf.pdf_version)  # graceful: download-only
+
+
+class GuestBanByIpTests(TestCase):
+    """A kicked guest cannot rejoin from the same IP while banned."""
+
+    def setUp(self):
+        from django.core.cache import cache
+        cache.clear()
+        self.owner = make_user("ban_owner")
+        self.classroom = create_classroom(self.owner, title="Ban room")
+
+    def tearDown(self):
+        from django.core.cache import cache
+        cache.clear()
+
+    def test_banned_guest_ip_blocked(self):
+        from django.utils import timezone
+        from datetime import timedelta
+        from .services import UserBanned, join_classroom_guest
+        guest = join_classroom_guest(self.classroom, "Ali", ip="203.0.113.9")
+        self.assertEqual(guest.guest_ip, "203.0.113.9")
+        # host kicks with a temporary ban
+        guest.banned_until = timezone.now() + timedelta(minutes=10)
+        guest.is_active = False
+        guest.save(update_fields=["banned_until", "is_active"])
+        with self.assertRaises(UserBanned):
+            join_classroom_guest(self.classroom, "Ali", ip="203.0.113.9")
+        # a different IP (or expired ban) is not affected
+        other = join_classroom_guest(self.classroom, "Bob", ip="198.51.100.7")
+        self.assertTrue(other.is_active)
+        guest.banned_until = timezone.now() - timedelta(minutes=1)
+        guest.save(update_fields=["banned_until"])
+        again = join_classroom_guest(self.classroom, "Ali", ip="203.0.113.9")
+        self.assertTrue(again.is_active)
