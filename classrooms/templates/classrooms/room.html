@@ -134,6 +134,10 @@
                 </div>
 
                 <div class="stage-view hidden" id="view-whiteboard">
+                    <div class="wb-nodraw-hint hidden" id="wb-nodraw-hint" role="note">
+                        ✋ فقط میزبان و ارائه‌دهنده می‌توانند روی تخته بنویسند —
+                        از میزبان بخواهید نقش شما را به «ارائه‌دهنده» تغییر دهد.
+                    </div>
                     <div class="wb-toolbar" role="toolbar" aria-label="ابزار تخته سفید">
                         <button type="button" class="wb-tool active" data-tool="pen" title="قلم" aria-label="قلم">✏️</button>
                         <button type="button" class="wb-tool" data-tool="highlighter" title="هایلایت" aria-label="هایلایت">🖍️</button>
@@ -255,13 +259,18 @@
                             </div>
                             <span class="file-presenting-pill" title="این فایل اکنون ارائه می‌شود">📽 در حال ارائه</span>
                             <div class="file-actions">
-                                <a class="btn btn-sm btn-primary file-download"
+                                {% if permissions.can_present %}
+                                    <button type="button" class="btn btn-sm btn-primary file-present"
+                                            data-present="{{ f.id }}"
+                                            title="ارائهٔ این فایل برای همه" aria-label="ارائهٔ {{ f.original_name }}">📽 ارائه</button>
+                                {% endif %}
+                                <a class="btn btn-sm btn-ghost file-download"
                                    href="{% url 'room:file_download' classroom.room_code f.id %}"
-                                   download title="دانلود این فایل"
-                                   aria-label="دانلود {{ f.original_name }}">⬇ دانلود</a>
+                                   download title="دانلود {{ f.original_name }}"
+                                   aria-label="دانلود {{ f.original_name }}">⬇</a>
                                 {% if is_privileged or f.uploader_id == user.id %}
                                     <button type="button" class="file-delete" data-delete="{{ f.id }}"
-                                            title="حذف فایل" aria-label="حذف {{ f.original_name }}">🗑</button>
+                                            title="حذف فایل" aria-label="حذف {{ f.original_name }}">🗑 حذف</button>
                                 {% endif %}
                             </div>
                         </li>

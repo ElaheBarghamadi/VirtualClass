@@ -1174,8 +1174,13 @@ function addFileItem(file) {
         </div>
         <span class="file-presenting-pill" title="این فایل اکنون ارائه می‌شود">📽 در حال ارائه</span>
         <div class="file-actions">
-            <a class="btn btn-sm btn-primary file-download" href="${file.url}" download
-               title="دانلود این فایل" aria-label="دانلود">⬇ دانلود</a>
+            ${PERMISSIONS.can_present
+                ? `<button type="button" class="btn btn-sm btn-primary file-present"
+                           data-present="${Number(file.id)}"
+                           title="ارائهٔ این فایل برای همه" aria-label="ارائهٔ این فایل">📽 ارائه</button>`
+                : ''}
+            <a class="btn btn-sm btn-ghost file-download" href="${file.url}" download
+               title="دانلود این فایل" aria-label="دانلود این فایل">⬇</a>
         </div>`;
     li.querySelector('.file-icon').textContent = file.icon || iconForName(file.name);
     li.querySelector('.file-name').textContent = file.name;
@@ -1195,7 +1200,7 @@ function addFileItem(file) {
         del.dataset.delete = String(file.id);
         del.title = 'حذف فایل';
         del.setAttribute('aria-label', `حذف ${file.name}`);
-        del.textContent = '🗑';
+        del.textContent = '🗑 حذف';
         li.querySelector('.file-actions').appendChild(del);
     }
     list.prepend(li);

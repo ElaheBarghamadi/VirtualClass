@@ -159,6 +159,16 @@ def run(base: str, code: str) -> int:
         released = pg_s.evaluate("() => window.__media?.impl?.localStream?.getAudioTracks?.().length ?? -1")
         check("force-mute released the mic device", released in (0, -1), str(released))
 
+        # ---------- whiteboard permission feedback (student cannot draw) ----------
+        pg_s.evaluate("() => window.__switchView('whiteboard')")
+        pg_s.wait_for_timeout(900)
+        check("non-drawer sees whiteboard explanation hint",
+              pg_s.evaluate("() => !document.getElementById('wb-nodraw-hint')?.classList.contains('hidden')"))
+        check("non-drawer toolbar greyed out",
+              pg_s.evaluate("() => document.querySelector('.wb-toolbar')?.classList.contains('no-draw')") is True)
+        pg_s.evaluate("() => window.__switchView('media')")
+        pg_s.wait_for_timeout(400)
+
         # ---------- promotion ----------
         pg_o.click(f"{sel} .hc-btn >> nth=3")
         pg_s.wait_for_load_state("load", timeout=20000)
@@ -182,8 +192,8 @@ def run(base: str, code: str) -> int:
         check("student received the file live", True)
         check("non-uploader presenter sees no delete button",
               pg_s.locator(".file-item .file-delete").count() == 0)
-        pg_s.click(".file-item .file-info"); pg_s.wait_for_timeout(3000)
-        check("promoted student presents via row click",
+        pg_s.click(".file-item .file-present"); pg_s.wait_for_timeout(3000)
+        check("promoted student presents via explicit button",
               pg_s.evaluate("() => document.querySelector('.stage-view:not(.hidden)')?.id") == "view-presentation")
         check("presenting badge synced to owner",
               pg_o.evaluate("() => document.querySelector('.file-item')?.classList.contains('presenting')") is True)

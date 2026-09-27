@@ -49,6 +49,12 @@ class WhiteboardImpl {
     init({ roomCode, identity, canDraw }) {
         this.identity = identity;
         this.canDraw = canDraw;
+        // Clear, permanent feedback for viewers who may not draw — instead of
+        // a toolbar that looks usable but silently does nothing.
+        if (!canDraw) {
+            document.querySelector('.wb-toolbar')?.classList.add('no-draw');
+            document.getElementById('wb-nodraw-hint')?.classList.remove('hidden');
+        }
         if (typeof fabric === 'undefined') {
             // library failed to load — degrade, don't crash the room
             this.unavailable = true;
@@ -285,7 +291,7 @@ class WhiteboardImpl {
         this.canvas.on('mouse:up', () => this._up());
     }
 
-    _deny(reason = 'شما اجازهٔ استفاده از تخته را ندارید.') {
+    _deny(reason = 'فقط میزبان و ارائه‌دهنده می‌توانند روی تخته بنویسند.') {
         if (!this._warned) {
             import('./toast.js').then(({ toast }) => toast(reason, 'warning'));
             this._warned = true;

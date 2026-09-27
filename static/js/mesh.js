@@ -238,9 +238,17 @@ class MeshMedia {
      */
     _deviceError(err) {
         const name = err && err.name;
-        if (name === 'NotAllowedError') toast('دسترسی به دوربین/میکروفون توسط مرورگر مسدود شده است.', 'error');
-        else if (name === 'NotFoundError') toast('دوربین یا میکروفونی پیدا نشد.', 'error');
-        else toast(`خطای دستگاه: ${name || 'نامشخص'}`, 'error');
+        const embedded = window.self !== window.top;
+        if (name === 'NotAllowedError' || name === 'SecurityError') {
+            toast(embedded
+                ? 'مرورگر دسترسی دوربین/میکروفون را در این پنجرهٔ توکار مسدود کرده — صفحه را در تب جدید باز کنید و اجازهٔ دسترسی بدهید.'
+                : 'دسترسی دوربین/میکروفون مسدود شده — روی آیکون قفل کنار آدرس صفحه، اجازهٔ دوربین و میکروفون را فعال کنید.',
+                'error', 6000);
+        } else if (name === 'NotFoundError') {
+            toast('دوربین یا میکروفونی پیدا نشد.', 'error');
+        } else {
+            toast(`خطای دستگاه: ${name || 'نامشخص'}`, 'error');
+        }
     }
 
     /** Put a fresh track into the shared local stream (replacing its kind). */
@@ -286,6 +294,10 @@ class MeshMedia {
     }
 
     async _acquire(constraints) {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            toast('برای دوربین/میکروفون صفحه باید با HTTPS یا localhost باز شود (روی HTTP معمولی مرورگر اجازه نمی‌دهد).', 'error', 6000);
+            return null;
+        }
         try {
             return await navigator.mediaDevices.getUserMedia(constraints);
         } catch (err) {

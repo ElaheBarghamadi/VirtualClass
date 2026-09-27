@@ -64,6 +64,9 @@ function setCamState(icon, text) {
 
 function friendlyMediaError(err) {
   const name = (err && err.name) || "";
+  if (window.self !== window.top && (name === "NotAllowedError" || name === "SecurityError")) {
+    return "مرورگر دسترسی دوربین/میکروفون را داخل این پنجرهٔ توکار مسدود کرده است. صفحه را در یک تب جدید باز کنید و اجازهٔ دسترسی بدهید.";
+  }
   if (name === "NotAllowedError" || name === "SecurityError") {
     return "دسترسی به دوربین/میکروفون توسط مرورگر مسدود شده است. روی آیکون قفل کنار نوار آدرس کلیک کنید، دسترسی را «مجاز» کنید و دوباره تلاش کنید.";
   }
