@@ -536,3 +536,42 @@ class PresentationAnnotationTests(TransactionTestCase):
 
         async_to_sync(scenario)()
         assert not WhiteboardEvent.objects.filter(operation__id="bad").exists()
+
+
+class OpValidationTests(TransactionTestCase):
+    """Unit tests for the consumer's op validator (pure function)."""
+
+    def setUp(self):
+        from whiteboard.consumers import WhiteboardConsumer
+        self.valid = WhiteboardConsumer._valid_op
+
+    def test_pen_points_ok(self):
+        self.assertTrue(self.valid({
+            "type": "draw", "tool": "pen", "norm": 1,
+            "points": [[0.1, 0.2], [0.3, 0.4]], "color": "#000000", "width": 3,
+            "id": "x-1", "page": 1,
+        }))
+
+    def test_rectangle_geometry_ok(self):
+        # normalised rect (w/h) — previously REJECTED for missing points
+        self.assertTrue(self.valid({
+            "type": "draw", "tool": "rectangle", "norm": 1,
+            "left": 0.1, "top": 0.2, "w": 0.3, "h": 0.4,
+            "color": "#000000", "width": 3, "id": "x-2", "page": 1,
+        }))
+
+    def test_circle_geometry_ok(self):
+        self.assertTrue(self.valid({
+            "type": "draw", "tool": "circle", "norm": 1,
+            "left": 0.1, "top": 0.2, "rx": 0.15, "ry": 0.1,
+            "color": "#000000", "width": 3, "id": "x-3", "page": 1,
+        }))
+
+    def test_rectangle_missing_geometry_rejected(self):
+        self.assertFalse(self.valid({"type": "draw", "tool": "rectangle", "id": "x", "page": 1}))
+
+    def test_pen_without_points_rejected(self):
+        self.assertFalse(self.valid({"type": "draw", "tool": "pen", "id": "x", "page": 1}))
+
+    def test_unknown_tool_rejected(self):
+        self.assertFalse(self.valid({"type": "draw", "tool": "spray", "points": [], "id": "x", "page": 1}))

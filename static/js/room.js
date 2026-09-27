@@ -764,6 +764,7 @@ function switchView(view) {
 }
 window.__switchView = switchView; // used by presentation module below
 window.__media = Media;           // debugging + automated smoke tests
+window.__wb = Whiteboard;         // debugging + automated smoke tests
 
 function refreshControlStates() {
     const micBtn = document.getElementById('btn-mic');
@@ -804,7 +805,8 @@ function initMoreMenu() {
         window.UITheme.set(next);
         toast(`پوسته: ${{ system: 'خودکار', light: 'روشن', dark: 'تیره' }[next]}`, 'info', 1800);
     });
-    bind('menu-settings', () => document.getElementById('settings-dialog')?.showModal());
+        bind('menu-settings', () => document.getElementById('settings-dialog')?.showModal());
+        bind('btn-settings', () => document.getElementById('settings-dialog')?.showModal());
     bind('menu-shortcuts', showShortcuts);
     bind('menu-help', showHelp);
     bind('menu-report', showReport);

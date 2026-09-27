@@ -613,6 +613,7 @@ SETTING_FIELDS = (
     "allow_student_screen_share",
     "allow_student_whiteboard",
     "allow_file_upload",
+    "allow_guests",
     "chat_disabled",
 )
 

@@ -170,10 +170,26 @@ class WhiteboardConsumer(AsyncJsonWebsocketConsumer):
                 return False
         except (TypeError, ValueError):
             return False
-        if op["type"] == "draw" and op.get("tool") not in VALID_TOOLS:
-            return False
-        if op["type"] == "draw" and not isinstance(op.get("points"), list):
-            return False
+        if op["type"] == "draw":
+            tool = op.get("tool")
+            if tool not in VALID_TOOLS:
+                return False
+            num = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool)  # noqa: E731
+            if tool in {"rectangle", "circle"}:
+                # geometry ops carry left/top + size, not a points list
+                # (legacy rect ops stored size in width/height)
+                if not num(op.get("left")) or not num(op.get("top")):
+                    return False
+                if tool == "rectangle":
+                    w = op.get("w", op.get("width"))
+                    h = op.get("h", op.get("height"))
+                    if not num(w) or not num(h):
+                        return False
+                else:
+                    if not num(op.get("rx")) or not num(op.get("ry")):
+                        return False
+            elif not isinstance(op.get("points"), list):
+                return False
         if op["type"] == "text" and not isinstance(op.get("text"), str):
             return False
         if op["type"] == "text" and len(op.get("text", "")) > 500:

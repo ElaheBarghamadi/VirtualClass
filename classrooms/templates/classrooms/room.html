@@ -350,6 +350,11 @@
             <button type="button" class="ctrl-btn host-only" id="btn-lock" title="قفل کلاس" aria-label="قفل کلاس">
                 <svg class="ic" viewBox="0 0 24 24"><use href="#i-lock"/></svg>
             </button>
+            <button type="button" class="ctrl-btn host-only" id="btn-settings" title="تنظیمات کلاس" aria-label="تنظیمات کلاس">
+                <svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="2"/>
+                    <path d="M12 3v2.4M12 18.6V21M3 12h2.4M18.6 12H21M5.6 5.6l1.7 1.7M16.7 16.7l1.7 1.7M18.4 5.6l-1.7 1.7M7.3 16.7l-1.7 1.7"
+                          stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            </button>
             <button type="button" class="ctrl-btn host-only" id="btn-session" title="شروع/پایان جلسه" aria-label="مدیریت جلسه">
                 <svg class="ic" viewBox="0 0 24 24"><use href="#i-session"/></svg>
             </button>
@@ -445,6 +450,7 @@
             <label class="switch-row"><input type="checkbox" name="allow_student_screen_share" {% if classroom.allow_student_screen_share %}checked{% endif %}> اشتراک صفحهٔ دانش‌آموزان</label>
             <label class="switch-row"><input type="checkbox" name="allow_student_whiteboard" {% if classroom.allow_student_whiteboard %}checked{% endif %}> تختهٔ دانش‌آموزان</label>
             <label class="switch-row"><input type="checkbox" name="allow_file_upload" {% if classroom.allow_file_upload %}checked{% endif %}> بارگذاری فایل توسط غیرمالک</label>
+            <label class="switch-row"><input type="checkbox" name="allow_guests" {% if classroom.allow_guests %}checked{% endif %}> ورود مهمان با لینک (بدون حساب کاربری)</label>
             <label class="switch-row"><input type="checkbox" name="chat_disabled" {% if classroom.chat_disabled %}checked{% endif %}> قطع کامل گفتگو</label>
             <label class="switch-row"><input type="checkbox" name="is_locked" {% if classroom.is_locked %}checked{% endif %}> 🔒 قفل کردن کلاس (ورود اعضای جدید مسدود)</label>
         </div>

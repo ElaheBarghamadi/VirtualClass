@@ -92,6 +92,9 @@ class WhiteboardImpl {
         return this.canvas?.wrapperEl?.parentElement || null;
     }
 
+    _w() { return (this.canvas && this.canvas.getWidth()) || 1; }
+    _h() { return (this.canvas && this.canvas.getHeight()) || 1; }
+
     // ------------------------------------------------------------ transport
     _connect(roomCode) {
         const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -121,6 +124,8 @@ class WhiteboardImpl {
                 this._applyOp(data.op, data.actor_name);
                 this.remote = false;
                 this._updatePageUI();
+            } else if (data.type === 'error') {
+                import('./toast.js').then(({ toast }) => toast(data.message || 'خطا در تخته.', 'error'));
             }
         };
     }
@@ -289,6 +294,8 @@ class WhiteboardImpl {
         this.canvas.on('mouse:down', (opt) => this._down(opt));
         this.canvas.on('mouse:move', (opt) => this._move(opt));
         this.canvas.on('mouse:up', () => this._up());
+        // releasing outside the canvas must still finish the stroke
+        window.addEventListener('mouseup', () => this._up());
     }
 
     _deny(reason = 'فقط میزبان و ارائه‌دهنده می‌توانند روی تخته بنویسند.') {
@@ -309,7 +316,9 @@ class WhiteboardImpl {
             const text = prompt('متن مورد نظر:');
             if (text && text.trim()) {
                 const op = {
-                    type: 'text', id: this._id(), page: this.page, x: p.x, y: p.y,
+                    type: 'text', id: this._id(), page: this.page,
+                    x: +(p.x / this._w()).toFixed(4), y: +(p.y / this._h()).toFixed(4),
+                    norm: 1,
                     text: text.slice(0, 500), color: this.color, size: 18 + this.width * 2,
                 };
                 this._applyOp(op);
@@ -347,9 +356,12 @@ class WhiteboardImpl {
             const now = Date.now();
             if (now - this._lastLaser < 60) return; // ~16 Hz max
             this._lastLaser = now;
-            const p = { x: Math.round(opt.pointer.x), y: Math.round(opt.pointer.y) };
+            const p = { x: opt.pointer.x, y: opt.pointer.y };
             this._showLaser(p.x, p.y);
-            this._sendOp({ type: 'laser', page: this.page, x: p.x, y: p.y });
+            this._sendOp({
+                type: 'laser', page: this.page, norm: 1,
+                x: +(p.x / this._w()).toFixed(4), y: +(p.y / this._h()).toFixed(4),
+            });
             return;
         }
         if (!this.drawing || !this.liveShape) return;
@@ -441,37 +453,47 @@ class WhiteboardImpl {
     }
 
     _serialize(obj) {
+        // Coordinates travel NORMALISED (0..1 of the sender's canvas) so the
+        // same op renders in the same relative place on any screen size.
+        // `norm:1` marks new ops; legacy pixel ops render 1:1.
+        const W = this._w(), H = this._h();
+        const nx = (v) => +(v / W).toFixed(4);
+        const ny = (v) => +(v / H).toFixed(4);
         const tool = obj._wbTool || 'pen';
-        const common = { id: obj.data?.opId || this._id(), tool };
+        const common = {
+            id: obj.data?.opId || this._id(), tool, norm: 1,
+            width: +((obj.strokeWidth) * (WhiteboardImpl.REF_H / H)).toFixed(2),
+        };
         if (obj.type === 'polyline') {
             return {
                 type: 'draw', ...common,
-                points: obj.points.map((p) => [Math.round(p.x), Math.round(p.y)]),
+                points: obj.points.map((p) => [nx(p.x), ny(p.y)]),
                 color: tool === 'eraser' ? null : obj.stroke,
-                width: obj.strokeWidth,
             };
         }
         if (obj.type === 'line') {
             return {
                 type: 'draw', ...common,
-                points: [[Math.round(obj.x1), Math.round(obj.y1)], [Math.round(obj.x2), Math.round(obj.y2)]],
-                color: obj.stroke, width: obj.strokeWidth,
+                points: [[nx(obj.x1), ny(obj.y1)], [nx(obj.x2), ny(obj.y2)]],
+                color: obj.stroke,
             };
         }
         if (obj.type === 'rect') {
+            // NB: shape size uses w/h — the `width` key is the STROKE width
+            // (a legacy duplicate-key bug had collapsed the two).
             return {
                 type: 'draw', ...common,
-                left: Math.round(obj.left), top: Math.round(obj.top),
-                width: Math.round(obj.width), height: Math.round(obj.height),
-                color: obj.stroke, width: obj.strokeWidth,
+                left: nx(obj.left), top: ny(obj.top),
+                w: nx(obj.width), h: ny(obj.height),
+                color: obj.stroke,
             };
         }
         if (obj.type === 'ellipse') {
             return {
                 type: 'draw', ...common,
-                left: Math.round(obj.left), top: Math.round(obj.top),
-                rx: Math.round(obj.rx), ry: Math.round(obj.ry),
-                color: obj.stroke, width: obj.strokeWidth,
+                left: nx(obj.left), top: ny(obj.top),
+                rx: nx(obj.rx), ry: ny(obj.ry),
+                color: obj.stroke,
             };
         }
         return null;
@@ -488,7 +510,15 @@ class WhiteboardImpl {
 
         // ---- view ops (not page content) --------------------------------
         if (op.type === 'laser') {
-            if (!this._replaying && pg === this.page) this._showLaser(op.x, op.y);
+            if (!this._replaying && pg === this.page) {
+                let { x, y } = op;
+                if (op.norm) {
+                    const r = this._wrapEl()?.getBoundingClientRect();
+                    if (!r) return;
+                    x *= r.width; y *= r.height;
+                }
+                this._showLaser(x, y);
+            }
             return;
         }
         if (op.type === 'page_go') {
@@ -558,9 +588,13 @@ class WhiteboardImpl {
     /** Canvas-level rendering of a single op (current page assumed). */
     _paintOp(op) {
         if (op.type === 'text') {
+            const W = this._w(), H = this._h(), n = !!op.norm;
             const text = new fabric.Text(op.text, {
-                left: op.x, top: op.y, fill: op.color,
-                fontSize: op.size || 20, selectable: false,
+                left: n ? op.x * W : op.x,
+                top: n ? op.y * H : op.y,
+                fill: op.color,
+                fontSize: (op.size || 20) * (n ? H / WhiteboardImpl.REF_H : 1),
+                selectable: false,
             });
             text.set('data', { opId: op.id });
             this.canvas.add(text);
@@ -578,9 +612,14 @@ class WhiteboardImpl {
 
     _opToShape(op) {
         const isEraser = op.tool === 'eraser';
+        // Denormalise: new ops (norm:1) carry 0..1 coordinates and are
+        // scaled to THIS canvas; legacy ops carry pixels and render 1:1.
+        const W = this._w(), H = this._h();
+        const n = !!op.norm;
+        const px = (v, dim) => (n ? v * dim : v);
         const common = {
             stroke: isEraser ? this._pageColor() : (op.color || '#000'),
-            strokeWidth: op.width || 3,
+            strokeWidth: n ? (op.width || 3) * (H / WhiteboardImpl.REF_H) : (op.width || 3),
             fill: '',
             selectable: false,
             objectCaching: false,
@@ -589,7 +628,7 @@ class WhiteboardImpl {
             case 'pen':
             case 'highlighter':
             case 'eraser': {
-                const pts = (op.points || []).map(([x, y]) => ({ x, y }));
+                const pts = (op.points || []).map(([x, y]) => ({ x: px(x, W), y: px(y, H) }));
                 if (pts.length < 2) return null;
                 return new fabric.Polyline(pts, {
                     ...common,
@@ -599,27 +638,32 @@ class WhiteboardImpl {
             case 'line':
             case 'arrow': {
                 const [a, b] = op.points || [[0, 0], [0, 0]];
-                const line = new fabric.Line([a[0], a[1], b[0], b[1]], common);
-                if (op.tool === 'arrow') this._addArrowHead(op, common);
+                const A = { x: px(a[0], W), y: px(a[1], H) };
+                const B = { x: px(b[0], W), y: px(b[1], H) };
+                const line = new fabric.Line([A.x, A.y, B.x, B.y], common);
+                if (op.tool === 'arrow') this._addArrowHead([A, B], common, op.id);
                 return line;
             }
-            case 'rectangle':
-                return new fabric.Rect({ left: op.left, top: op.top, width: op.width, height: op.height, ...common });
+            case 'rectangle': {
+                const w = op.w !== undefined ? px(op.w, W) : op.width;
+                const h = op.h !== undefined ? px(op.h, H) : op.height;
+                return new fabric.Rect({ left: px(op.left, W), top: px(op.top, H), width: w, height: h, ...common });
+            }
             case 'circle':
-                return new fabric.Ellipse({ left: op.left, top: op.top, rx: op.rx, ry: op.ry, ...common });
+                return new fabric.Ellipse({ left: px(op.left, W), top: px(op.top, H), rx: px(op.rx, W), ry: px(op.ry, H), ...common });
             default:
                 return null;
         }
     }
 
-    _addArrowHead(op, common) {
-        const [a, b] = op.points;
-        const angle = Math.atan2(b[1] - a[1], b[0] - a[0]);
-        const size = 8 + (op.width || 3) * 2;
-        const p1 = { x: b[0] - size * Math.cos(angle - Math.PI / 7), y: b[1] - size * Math.sin(angle - Math.PI / 7) };
-        const p2 = { x: b[0] - size * Math.cos(angle + Math.PI / 7), y: b[1] - size * Math.sin(angle + Math.PI / 7) };
+    _addArrowHead(pts, common, opId) {
+        const [a, b] = pts;
+        const angle = Math.atan2(b.y - a.y, b.x - a.x);
+        const size = 8 + (common.strokeWidth || 3) * 2;
+        const p1 = { x: b.x - size * Math.cos(angle - Math.PI / 7), y: b.y - size * Math.sin(angle - Math.PI / 7) };
+        const p2 = { x: b.x - size * Math.cos(angle + Math.PI / 7), y: b.y - size * Math.sin(angle + Math.PI / 7) };
         const head = new fabric.Polygon([b, p1, p2], { fill: common.stroke, stroke: common.stroke, selectable: false });
-        head.set('data', { opId: op.id }); // removed together with the line
+        head.set('data', { opId }); // removed together with the line
         this.canvas.add(head);
     }
 
@@ -670,7 +714,14 @@ class WhiteboardImpl {
         if (!wrap || wrap.offsetParent === null) return;
         const rect = wrap.getBoundingClientRect();
         if (rect.width < 10 || rect.height < 10) return;
+        const sizeChanged =
+            Math.abs(this.canvas.getWidth() - rect.width) > 1 ||
+            Math.abs(this.canvas.getHeight() - rect.height) > 1;
         this.canvas.setDimensions({ width: rect.width, height: rect.height });
+        // Normalised ops must be re-scaled to the new size — repaint the
+        // page from its ops.  Skip mid-stroke so an in-progress line is
+        // not erased under the user's pointer.
+        if (sizeChanged && !this.drawing) this._repaintPage();
         this.canvas.requestRenderAll();
     }
 
@@ -678,5 +729,8 @@ class WhiteboardImpl {
         this.canDraw = canDraw;
     }
 }
+
+/** Reference canvas height used to normalise stroke/text sizes. */
+WhiteboardImpl.REF_H = 700;
 
 export const Whiteboard = new WhiteboardImpl();

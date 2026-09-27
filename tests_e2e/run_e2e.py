@@ -241,6 +241,50 @@ def run(base: str, code: str) -> int:
         pg_o.wait_for_timeout(1200)
         check("whiteboard stroke rendered",
               pg_o.evaluate("() => { const c = document.getElementById('whiteboard-canvas'); return c ? c.toDataURL().length > 5000 : false; }"))
+        # --- regression: ops must be viewport-normalised (0..1) so they
+        # land in the same relative spot on ANY window size ---
+        norm = pg_o.evaluate("""() => {
+            const ops = (window.__wb._pageOps.get(window.__wb.page) || []);
+            const d = ops.filter(o => o.type === 'draw').pop();
+            if (!d) return null;
+            const vals = (d.points || []).flat();
+            return { norm: d.norm === 1, max: vals.length ? Math.max(...vals) : 0 };
+        }""")
+        check("whiteboard ops normalised 0..1",
+              bool(norm) and norm["norm"] and 0 < norm["max"] <= 1.05, f"{norm}")
+        # rectangle must survive the server validator and sync cross-viewport
+        pg_o.locator('[data-tool="rectangle"]').click()
+        pg_o.mouse.move(box["x"] + 60, box["y"] + 60); pg_o.mouse.down()
+        pg_o.mouse.move(box["x"] + 240, box["y"] + 160, steps=6); pg_o.mouse.up()
+        pg_o.locator('[data-tool="pen"]').click()
+        pg_o.wait_for_timeout(1200)
+        pg_s.set_viewport_size({"width": 1500, "height": 950}); pg_s.wait_for_timeout(2000)
+        pg_s.evaluate("() => window.__switchView('whiteboard')"); pg_s.wait_for_timeout(1500)
+        frac = pg_s.evaluate("""() => {
+            const c = document.getElementById('whiteboard-canvas');
+            const ctx = c.getContext('2d');
+            const d = ctx.getImageData(0, 0, Math.floor(c.width * 0.45), Math.floor(c.height * 0.35)).data;
+            let dark = 0;
+            for (let i = 0; i < d.length; i += 4) if (d[i] < 200 || d[i+1] < 200 || d[i+2] < 200) dark++;
+            return dark / (d.length / 4);
+        }""")
+        check("whiteboard syncs across different window sizes",
+              frac is not None and frac > 0.002, f"dark fraction {frac:.4f}" if frac is not None else "no canvas")
+        # --- host settings button + full settings modal ---
+        pg_o.click("#btn-settings"); pg_o.wait_for_timeout(600)
+        check("host settings button opens modal",
+              pg_o.evaluate("() => document.getElementById('settings-dialog')?.open === true"))
+        guest_initial = pg_o.is_checked('input[name=allow_guests]')
+        pg_o.check('input[name=allow_guests]')
+        pg_o.click("#settings-save"); pg_o.wait_for_timeout(1500)
+        msg = " | ".join(pg_o.locator(".toast .toast-text").all_text_contents())
+        check("allow_guests saves via settings modal",
+              pg_o.evaluate("() => document.getElementById('settings-dialog')?.open === false")
+              and "ذخیره شد" in msg, msg.strip())
+        pg_o.click("#btn-settings"); pg_o.wait_for_timeout(500)  # restore seed state
+        if not guest_initial:
+            pg_o.uncheck('input[name=allow_guests]')
+        pg_o.click("#settings-save"); pg_o.wait_for_timeout(1200)
 
         # ---------- live quiz (author via management UI, run in room) ----------
         mg = pg_o.context.new_page()  # share the owner's login session
