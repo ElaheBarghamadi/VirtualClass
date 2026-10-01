@@ -143,7 +143,7 @@ code { background: var(--primary-soft); color: var(--text); padding: .1rem .4rem
 }
 .page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; margin: 1.5rem 0 1rem; flex-wrap: wrap; }
 .action-bar { display: flex; gap: .6rem; flex-wrap: wrap; margin-bottom: 1.5rem; }
-.card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1rem; }
+.card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr)); gap: 1rem; }
 .section-title { margin: 1.5rem 0 .75rem; font-size: 1.05rem; }
 .form-card { max-width: 640px; }
 .empty-state { text-align: center; padding: 2rem; color: var(--muted); }
@@ -221,6 +221,7 @@ code { background: var(--primary-soft); color: var(--text); padding: .1rem .4rem
 .lobby-guest-note a { font-weight: 600; }
 
 /* ---------- data table ---------- */
+.table-wrap { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .data-table { width: 100%; border-collapse: collapse; font-size: .92rem; }
 .data-table th, .data-table td { padding: var(--row-padding); text-align: right; border-bottom: 1px solid var(--border); }
 .data-table th { color: var(--muted); font-weight: 600; }
@@ -258,6 +259,10 @@ code { background: var(--primary-soft); color: var(--text); padding: .1rem .4rem
 .switch-row input { width: 18px; height: 18px; accent-color: var(--primary); }
 
 .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; align-items: start; }
+/* grid children default to min-width:auto — a wide table in either column
+   would then force the whole track (and page) past the viewport in RTL.
+   min-width:0 lets the track shrink and .table-wrap scroll instead. */
+.two-col > * { min-width: 0; }
 @media (max-width: 860px) { .two-col { grid-template-columns: 1fr; } }
 
 .session-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .5rem; }

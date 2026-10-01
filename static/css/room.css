@@ -66,18 +66,26 @@ body.full-page .messages {
 .conn-quality.q-lost, .conn-quality.q-reconnecting { color: var(--danger); }
 
 /* ---------- body ---------- */
-.room-body { flex: 1; display: grid; grid-template-columns: 1fr 330px; min-height: 0; }
-/* bottom padding keeps content clear of the floating control bar */
-.room-main { padding: .8rem .8rem 4.75rem; min-width: 0; display: flex; }
+.room-body { flex: 1; display: grid; grid-template-columns: 1fr 330px; min-height: 0; position: relative; }
+/* position:relative → the mobile drawer anchors below the room header
+   (its top edge starts at the body, not at the top of .room) */
+/* bottom padding keeps content clear of the floating control bar — the bar
+   is 1..3 rows depending on viewport, so --bar-space is synced to its real
+   measured height by room.js (syncBarSpace) on load/resize */
+.room-main { padding: .8rem .8rem var(--bar-space, 4.75rem); min-width: 0; display: flex; }
 .stage { flex: 1; display: flex; flex-direction: column; min-height: 0; position: relative; }
 .stage-view { flex: 1; display: flex; flex-direction: column; min-height: 0; gap: .5rem; }
 .hidden { display: none !important; }
 
 /* ---------- stage toolbar / layouts (floating pill over the stage) ---------- */
+/* left:0 + right:0 + width:max-content keeps the pill centred at its natural
+   width (up to the stage) — left:50% would halve the available width and
+   wrap the buttons into extra rows on narrow stages. */
 .stage-toolbar {
-    position: absolute; top: .6rem; left: 50%; transform: translateX(-50%);
+    position: absolute; top: .6rem; left: 0; right: 0;
+    width: max-content; max-width: calc(100% - 1rem); margin-inline: auto;
     z-index: 6;
-    display: flex; gap: .2rem;
+    display: flex; gap: .2rem; flex-wrap: wrap;
     padding: .2rem;
     background: color-mix(in srgb, var(--room-surface) 82%, transparent);
     backdrop-filter: blur(10px);
@@ -153,7 +161,7 @@ body.full-page .messages {
    presentation, screen share) so the speaker stays visible. */
 .cam-pip {
     position: fixed;
-    bottom: 96px;
+    bottom: calc(var(--bar-space, 96px) + 4px);
     left: 16px;
     z-index: 60;
     width: 220px;
@@ -189,7 +197,7 @@ body.full-page .messages {
 .cam-pip-close:hover { background: color-mix(in srgb, #000 75%, transparent); }
 .cam-pip-close:focus-visible { outline: 2px solid var(--accent); }
 @media (max-width: 640px) {
-    .cam-pip { width: 140px; bottom: 84px; left: 8px; }
+    .cam-pip { width: 140px; left: 8px; } /* height/bottom follows --bar-space */
 }
 
 /* ---------- fullscreen ---------- */
@@ -468,12 +476,18 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
 .file-list.can-present .file-info:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 
 /* ---------- control bar (floating, minimal) ---------- */
+/* NOTE: left:50% + translateX(-50%) would cap the shrink-to-fit width at
+   ~half the viewport (abs-pos available space), forcing an extra wrap row
+   on phones — anchor with left/right:0 + width:max-content instead. */
 .room-controls {
     position: absolute;
     bottom: 1rem;
-    left: 50%;
-    transform: translateX(-50%);
-    z-index: 30;
+    left: 0;
+    right: 0;
+    width: max-content;
+    margin-inline: auto;
+    z-index: 45; /* stays above the side drawer (35) so the bar — including
+                    the drawer's own toggle buttons — is never covered */
     display: flex; justify-content: center; align-items: center; gap: .35rem;
     padding: .5rem .7rem;
     background: color-mix(in srgb, var(--room-surface) 86%, transparent);
@@ -610,10 +624,14 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
         position: absolute; inset-block: 0; inset-inline-end: 0; width: min(330px, 86%);
         transform: translateX(100%); transition: transform .22s ease; z-index: 35;
         border-inline-start: 1px solid var(--room-border);
-        padding-bottom: 4.5rem; /* clear the floating control bar */
+        padding-bottom: var(--bar-space, 6rem); /* clear the floating control bar */
     }
     [dir="rtl"] .room-side { transform: translateX(-100%); }
     .room-side.drawer-open { transform: none !important; box-shadow: var(--shadow-lg); }
+    .room-controls { gap: .25rem; } /* keep the bar on one row as long as possible */
+    /* comfortable touch targets on coarse/narrow screens */
+    .chip { padding: .4rem .85rem; font-size: .78rem; }          /* ≈36px tall */
+    .layout-btn { padding: .4rem .8rem; font-size: .75rem; }      /* ≈36px tall */
 }
 @media (min-width: 901px) {
     .side-toggle { display: none; }
@@ -628,7 +646,7 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
     .tiles.has-focus { grid-template-columns: 1fr 90px; }
     .more-menu { inset-inline-end: .5rem; min-width: 190px; }
     .stage-toolbar { gap: .1rem; padding: .15rem; }
-    .layout-btn { padding: .2rem .55rem; font-size: .68rem; }
+    .layout-btn { padding: .4rem .65rem; font-size: .7rem; }
 }
 
 /* office files with a server-side PDF conversion */
@@ -740,3 +758,16 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
 }
 .wb-toolbar.no-draw { opacity: .45; filter: grayscale(.6); }
 .wb-toolbar.no-draw .wb-tool.active { outline: none; }
+
+/* ===== extra-small phones (≤360px): squeeze the control bar to two rows =====
+   Must come AFTER the 560px block (same specificity, later source wins):
+   zero gap + no decorative separators saves ~50px of wrapped content. */
+@media (max-width: 360px) {
+    .room-controls { gap: 0; }
+    .ctrl-sep { display: none; }
+    /* 13×40 + exit 52 = 572px wraps to 3 rows at 296px available; 36px
+       buttons + a 46px exit fit 7 + 7 = 2 rows (targets stay ≥36px) */
+    .ctrl-btn { width: 36px; height: 36px; }
+    .ctrl-btn .ic { width: 17px; height: 17px; }
+    .ctrl-exit { width: 46px; }
+}

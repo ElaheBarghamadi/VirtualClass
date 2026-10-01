@@ -89,6 +89,7 @@
     <div>
         <h2 class="section-title">جلسات</h2>
         <div class="card">
+            <div class="table-wrap">
             <table class="data-table">
                 <thead><tr><th>عنوان</th><th>وضعیت</th><th>شروع</th><th>حضور</th></tr></thead>
                 <tbody>
@@ -108,10 +109,12 @@
                     {% endfor %}
                 </tbody>
             </table>
+            </div>
         </div>
 
         <h2 class="section-title">شرکت‌کنندگان ({{ members|length }})</h2>
         <div class="card">
+            <div class="table-wrap">
             <table class="data-table">
                 <thead><tr><th>کاربر</th><th>نقش</th><th>زمان عضویت</th></tr></thead>
                 <tbody>
@@ -129,6 +132,7 @@
                     {% endfor %}
                 </tbody>
             </table>
+            </div>
             <p class="muted small">مدیریت زندهٔ نقش‌ها، بی‌صدا کردن، اتاق انتظار و سطح دسترسی شرکت‌کنندگان از داخل صفحهٔ کلاس (پنل میزبان) انجام می‌شود.</p>
         </div>
     </div>

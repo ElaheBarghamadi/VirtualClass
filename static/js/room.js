@@ -574,6 +574,17 @@ function initTabs() {
     document.querySelectorAll('.side-tab').forEach((tab) => {
         tab.addEventListener('click', () => activateTab(tab.dataset.tab));
     });
+
+    // Mobile drawer: tapping anywhere outside it (stage, header, dialogs…)
+    // closes it — the toggle buttons live under the floating control bar,
+    // so an explicit outside gesture guarantees the drawer can always exit.
+    document.addEventListener('click', (e) => {
+        if (!window.matchMedia('(max-width: 900px)').matches) return;
+        const side = document.getElementById('room-side');
+        if (!side || !side.classList.contains('drawer-open')) return;
+        if (e.target.closest('.room-side, .room-controls, dialog, .toast-container, .messages')) return;
+        side.classList.remove('drawer-open');
+    });
 }
 
 function activateTab(name) {
@@ -628,13 +639,22 @@ function initControls() {
         presence.send({ action: 'whiteboard_state', open: !showing });
     });
     bind('btn-chat', () => {
+        const side = document.getElementById('room-side');
+        const open = side.classList.contains('drawer-open');
+        const onChat = document.querySelector('.side-tab[data-tab="chat"]')?.classList.contains('active');
+        // open if closed; switch tab if open on another tab; close only when
+        // re-pressing the toggle for the tab that is already showing
         activateTab('chat');
-        document.getElementById('room-side').classList.toggle('drawer-open');
-        document.getElementById('chat-input').focus();
+        const show = !(open && onChat); // close only when re-pressing the active tab's toggle
+        side.classList.toggle('drawer-open', show);
+        if (show) document.getElementById('chat-input').focus();
     });
     bind('btn-people', () => {
+        const side = document.getElementById('room-side');
+        const open = side.classList.contains('drawer-open');
+        const onPeople = document.querySelector('.side-tab[data-tab="participants"]')?.classList.contains('active');
         activateTab('participants');
-        document.getElementById('room-side').classList.toggle('drawer-open');
+        side.classList.toggle('drawer-open', !(open && onPeople));
     });
     bind('btn-exit-screen', () => switchView('media'));
     bind('btn-exit-presentation', () => switchView('media'));
@@ -794,7 +814,14 @@ function initMoreMenu() {
         }
     });
     document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape') toggleMoreMenu(false);
+        if (e.key !== 'Escape') return;
+        const menu = document.getElementById('more-menu');
+        const menuWasOpen = !menu.classList.contains('hidden');
+        toggleMoreMenu(false);
+        // Escape also dismisses the mobile drawer (when no menu was open)
+        if (!menuWasOpen && window.matchMedia('(max-width: 900px)').matches) {
+            document.getElementById('room-side')?.classList.remove('drawer-open');
+        }
     });
 
     const bind = (id, fn) => document.getElementById(id)?.addEventListener('click', () => { toggleMoreMenu(false); fn(); });
@@ -1261,6 +1288,21 @@ function initClock() {
 }
 
 // ---------------------------------------------------------------------------
+// Control-bar space reservation
+// ---------------------------------------------------------------------------
+// The floating bar wraps to 1–3 rows depending on viewport; expose its real
+// occupied height (plus margin) as --bar-space so the stage, drawer and
+// camera PiP always reserve exactly the right amount of clearance.
+function syncBarSpace() {
+    const bar = document.querySelector('.room-controls');
+    if (!bar) return;
+    const r = bar.getBoundingClientRect();
+    if (!r.height) return;
+    const gap = Math.max(0, window.innerHeight - r.top) + 12;
+    document.documentElement.style.setProperty('--bar-space', `${Math.round(gap)}px`);
+}
+
+// ---------------------------------------------------------------------------
 // Boot
 //
 // Order matters: every UI binding happens FIRST, so a failure in any
@@ -1270,6 +1312,10 @@ function initClock() {
 initTabs();
 initLayouts();
 initControls();
+syncBarSpace();
+window.addEventListener('resize', syncBarSpace);
+window.addEventListener('load', syncBarSpace);
+setTimeout(syncBarSpace, 400); // re-measure after webfonts settle
 initFullscreen();
 initMoreMenu();
 initDevicesDialog();

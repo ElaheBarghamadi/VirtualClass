@@ -247,9 +247,7 @@
                         <li class="file-item{% if classroom.current_file_id == f.id %} presenting{% endif %}"
                             data-file-id="{{ f.id }}">
                             <span class="file-icon" aria-hidden="true">{{ f.type_icon }}</span>
-                            {# The file itself presents (for presenters); download is
-                               the primary action of the row.  Delete is management —
-                               only for privileged members or the uploader. #}
+                            {# File row presents for presenters; download is the row's primary action; delete is management-only. #}
                             <div class="file-info"
                                  {% if permissions.can_present %}data-present="{{ f.id }}" role="button" tabindex="0" title="کلیک: ارائهٔ این فایل"{% endif %}>
                                 <span class="file-name">{{ f.original_name }}
@@ -309,8 +307,7 @@
         </aside>
     </div>
 
-    {# Picture-in-picture camera for the full-stage views (whiteboard /
-       presentation / screen share). Filled by media.js / mesh.js. #}
+    {# Picture-in-picture camera for full-stage views (whiteboard / presentation / screen share); filled by media.js / mesh.js. #}
     <div id="cam-pip" class="cam-pip hidden" aria-label="تصویر کوچک دوربین">
         <video id="cam-pip-video" autoplay playsinline muted></video>
         <span id="cam-pip-label" class="cam-pip-label"></span>
