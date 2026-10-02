@@ -36,6 +36,13 @@
         <g id="i-lock"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></g>
         <g id="i-muteall"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></g>
         <g id="i-session"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></g>
+        <g id="i-sliders"><line x1="4" y1="8" x2="20" y2="8"/><circle cx="9" cy="8" r="2.2"/><line x1="4" y1="16" x2="20" y2="16"/><circle cx="15" cy="16" r="2.2"/></g>
+        <g id="i-palette"><path d="M12 21a9 9 0 1 1 9-9c0 2-2 3-4 3h-1.5a2 2 0 0 0-1.4 3.4A1.9 1.9 0 0 1 12 21z"/><circle cx="8" cy="10" r="1"/><circle cx="12" cy="7.5" r="1"/><circle cx="16" cy="10" r="1"/></g>
+        <g id="i-cog"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v2.6M12 18.9v2.6M2.5 12h2.6M18.9 12h2.6M5.4 5.4l1.8 1.8M16.8 16.8l1.8 1.8M18.6 5.4l-1.8 1.8M7.2 16.8l-1.8 1.8"/></g>
+        <g id="i-list"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/></g>
+        <g id="i-keyboard"><rect x="2" y="6" width="20" height="12" rx="2.5"/><line x1="6" y1="10" x2="6" y2="10"/><line x1="10" y1="10" x2="10" y2="10"/><line x1="14" y1="10" x2="14" y2="10"/><line x1="18" y1="10" x2="18" y2="10"/><line x1="8" y1="14" x2="16" y2="14"/></g>
+        <g id="i-help"><circle cx="12" cy="12" r="9.5"/><path d="M9.2 9.3a2.9 2.9 0 0 1 5.6 1c0 2-2.8 2.4-2.8 4.2"/><line x1="12" y1="17.6" x2="12" y2="17.6"/></g>
+        <g id="i-flag"><path d="M5 21V4"/><path d="M5 4.6h11.5l-1.8 3.4 1.8 3.4H5"/></g>
     </defs>
 </svg>
 <div class="room" id="classroom-root"
@@ -188,6 +195,8 @@
                 <button class="side-tab" data-tab="quiz" role="tab" aria-selected="false">
                     آزمون <span class="live-pill hidden" id="quiz-live-pill">زنده</span>
                 </button>
+                <button type="button" class="drawer-close" id="drawer-close"
+                        aria-label="بستن پنل" title="بستن">✕</button>
             </div>
 
             <!-- ===== participants ===== -->
@@ -247,9 +256,9 @@
                         <li class="file-item{% if classroom.current_file_id == f.id %} presenting{% endif %}"
                             data-file-id="{{ f.id }}">
                             <span class="file-icon" aria-hidden="true">{{ f.type_icon }}</span>
-                            {# The file itself presents (for presenters); download is
+                            {% comment %} The file itself presents (for presenters); download is
                                the primary action of the row.  Delete is management —
-                               only for privileged members or the uploader. #}
+                               only for privileged members or the uploader. {% endcomment %}
                             <div class="file-info"
                                  {% if permissions.can_present %}data-present="{{ f.id }}" role="button" tabindex="0" title="کلیک: ارائهٔ این فایل"{% endif %}>
                                 <span class="file-name">{{ f.original_name }}
@@ -309,8 +318,8 @@
         </aside>
     </div>
 
-    {# Picture-in-picture camera for the full-stage views (whiteboard /
-       presentation / screen share). Filled by media.js / mesh.js. #}
+    {% comment %} Picture-in-picture camera for the full-stage views (whiteboard /
+       presentation / screen share). Filled by media.js / mesh.js. {% endcomment %}
     <div id="cam-pip" class="cam-pip hidden" aria-label="تصویر کوچک دوربین">
         <video id="cam-pip-video" autoplay playsinline muted></video>
         <span id="cam-pip-label" class="cam-pip-label"></span>
@@ -318,6 +327,9 @@
     </div>
 
     <footer class="room-controls">
+        {% comment %} One row on every screen: the rail scrolls sideways instead of
+           wrapping into a stack of rows. {% endcomment %}
+        <div class="ctrl-scroll" id="ctrl-scroll" role="toolbar" aria-label="کنترل‌های جلسه">
         <button type="button" class="ctrl-btn" id="btn-mic" title="میکروفون (M)" aria-label="میکروفون" aria-pressed="false">
             <svg class="ic icon-on" viewBox="0 0 24 24"><use href="#i-mic"/></svg>
             <svg class="ic icon-off" viewBox="0 0 24 24"><use href="#i-mic-off"/></svg>
@@ -373,19 +385,51 @@
             <svg class="ic" viewBox="0 0 24 24"><use href="#i-leave"/></svg>
         </button>
 
+        </div><!-- /.ctrl-scroll -->
+
         <!-- ===== more menu ===== -->
         <div class="more-menu hidden" id="more-menu" role="menu" aria-label="منوی بیشتر">
-            <button type="button" role="menuitem" id="menu-devices">تنظیمات دستگاه‌ها</button>
-            <button type="button" role="menuitem" id="menu-theme">تغییر پوسته</button>
+            <div class="menu-group" role="group" aria-label="ظاهر و دستگاه‌ها">
+                <button type="button" role="menuitem" id="menu-devices">
+                    <svg class="mi" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-sliders"/></svg>
+                    <span>تنظیمات دستگاه‌ها</span>
+                </button>
+                <button type="button" role="menuitem" id="menu-theme">
+                    <svg class="mi" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-palette"/></svg>
+                    <span>تغییر پوسته</span>
+                </button>
+            </div>
             {% if is_privileged %}
-                <button type="button" role="menuitem" id="menu-settings">تنظیمات کلاس</button>
-                <button type="button" role="menuitem" id="menu-manage" data-href="{% url 'classrooms:detail' classroom.room_code %}">صفحهٔ مدیریت کلاس</button>
+                <div class="menu-group" role="group" aria-label="مدیریت کلاس">
+                    <button type="button" role="menuitem" id="menu-settings">
+                        <svg class="mi" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-cog"/></svg>
+                        <span>تنظیمات کلاس</span>
+                    </button>
+                    <button type="button" role="menuitem" id="menu-manage" data-href="{% url 'classrooms:detail' classroom.room_code %}">
+                        <svg class="mi" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-list"/></svg>
+                        <span>صفحهٔ مدیریت کلاس</span>
+                    </button>
+                </div>
             {% endif %}
-            <button type="button" role="menuitem" id="menu-shortcuts">کلیدهای میان‌بر</button>
-            <button type="button" role="menuitem" id="menu-help">راهنما</button>
-            <button type="button" role="menuitem" id="menu-report">گزارش مشکل</button>
+            <div class="menu-group" role="group" aria-label="راهنما و پشتیبانی">
+                <button type="button" role="menuitem" id="menu-shortcuts">
+                    <svg class="mi" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-keyboard"/></svg>
+                    <span>کلیدهای میان‌بر</span>
+                </button>
+                <button type="button" role="menuitem" id="menu-help">
+                    <svg class="mi" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-help"/></svg>
+                    <span>راهنما</span>
+                </button>
+                <button type="button" role="menuitem" id="menu-report" class="danger">
+                    <svg class="mi" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-flag"/></svg>
+                    <span>گزارش مشکل</span>
+                </button>
+            </div>
         </div>
     </footer>
+
+    {# Touch backdrop for the side-panel drawer (tap/Escape to close). #}
+    <div class="drawer-backdrop" id="drawer-backdrop" aria-hidden="true"></div>
 </div>
 
 <!-- ===== devices dialog ===== -->

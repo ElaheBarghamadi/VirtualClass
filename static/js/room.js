@@ -348,6 +348,14 @@ function handleEvent(data) {
                 Whiteboard.setPermission(PERMISSIONS.can_use_whiteboard);
                 Presentation.setPermission(PERMISSIONS.can_use_whiteboard);
                 if (data.permission === 'can_present') applyFilePresentability();
+                // A revoked right must switch the device off right now, not at
+                // the next toggle.
+                if (data.permission === 'can_use_microphone' && !data.value) {
+                    Media.applyModerationState({ muted: true, camera_disabled: PERMISSIONS.can_use_camera === false });
+                }
+                if (data.permission === 'can_use_camera' && !data.value) {
+                    Media.applyModerationState({ muted: PERMISSIONS.can_use_microphone === false, camera_disabled: true });
+                }
                 refreshControlStates();
             }
             break;
@@ -361,15 +369,19 @@ function handleEvent(data) {
             break;
         case 'participant_muted':
             presence.upsert({ identity: data.identity, muted: data.muted, member_id: data.member_id });
-            if (data.identity === IDENTITY && data.muted) {
-                toast('میکروفون شما توسط مدیر بی‌صدا شد.', 'warning');
-                Media.forceMute();
+            if (data.identity === IDENTITY) {
+                // Cut the device *and* revoke the local right to re-enable it,
+                // otherwise the button silently turns the mic back on.
+                Media.applyModerationState({ muted: data.muted, camera_disabled: false });
+                if (data.muted) toast('میکروفون شما توسط مدیر بی‌صدا شد.', 'warning');
+                else toast('میزبان اجازهٔ میکروفون را به شما برگرداند.', 'success');
+                refreshControlStates();
             }
             break;
         case 'mute_all':
             if (data.except_member_id !== MEMBER_ID) {
                 toast('همهٔ شرکت‌کنندگان بی‌صدا شدند.', 'warning');
-                Media.forceMute();
+                Media.applyModerationState({ muted: true, camera_disabled: false });
                 const me = presence.participants.get(IDENTITY);
                 if (me) presence.upsert({ ...me, muted: true });
             }
@@ -477,7 +489,8 @@ function handleNotification(data) {
             setTimeout(() => { location.href = EXIT_URL; }, 1600);
             break;
         case 'muted':
-            Media.forceMute();
+            Media.applyModerationState({ muted: true, camera_disabled: false });
+            refreshControlStates();
             break;
         case 'unmute_requested':
             confirmDialog('درخواست میزبان', 'میزبان از شما خواست میکروفون را روشن کنید. روشن شود؟', { okLabel: 'روشن کردن' })
@@ -576,6 +589,79 @@ function initTabs() {
     });
 }
 
+// ---------------------------------------------------------------------------
+// Control-bar height → --bar-h
+//
+// The floating bar wraps to several rows on narrow screens (a host sees up
+// to 14 controls).  The stage and the PiP reserve exactly that much room so
+// nothing — tiles, chat input, camera preview — hides underneath it.
+// ---------------------------------------------------------------------------
+function trackControlBarHeight() {
+    const bar = document.querySelector('.room-controls');
+    if (!bar) return;
+    const rail = document.getElementById('ctrl-scroll');
+    // Fade the edge that hides more controls, so the sideways scroll is
+    // discoverable (the scrollbar itself is hidden).
+    const fades = () => {
+        if (!rail) return;
+        const max = rail.scrollWidth - rail.clientWidth;
+        const pos = Math.abs(rail.scrollLeft);
+        bar.classList.toggle('can-scroll-start', max > 2 && pos > 2);
+        bar.classList.toggle('can-scroll-end', max > 2 && pos < max - 2);
+    };
+    const apply = () => {
+        const h = Math.round(bar.getBoundingClientRect().height);
+        if (h > 0) root.style.setProperty('--bar-h', `${h}px`);
+        fades();
+    };
+    apply();
+    if (window.ResizeObserver) {
+        new ResizeObserver(apply).observe(bar);
+    } else {
+        window.addEventListener('resize', apply);
+    }
+    // Safe-guard: a font/permission change can resize the bar later on.
+    window.addEventListener('load', apply);
+    document.addEventListener('fullscreenchange', apply);
+    if (rail) {
+        rail.addEventListener('scroll', fades, { passive: true });
+        new ResizeObserver(fades).observe(rail);
+        // Keyboard users must see the button they just tabbed to.
+        rail.addEventListener('focusin', (e) => {
+            e.target.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+        });
+        // Re-centre the rail after an orientation change.
+        window.addEventListener('orientationchange', () => { rail.scrollLeft = 0; fades(); });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Mobile drawer: backdrop + Escape + auto-close on wide screens
+// ---------------------------------------------------------------------------
+function setDrawer(open) {
+    const side = document.getElementById('room-side');
+    const backdrop = document.getElementById('drawer-backdrop');
+    if (!side) return;
+    side.classList.toggle('drawer-open', open);
+    if (backdrop) backdrop.classList.toggle('open', open);
+}
+
+function initDrawer() {
+    document.getElementById('drawer-close')?.addEventListener('click', () => setDrawer(false));
+    const backdrop = document.getElementById('drawer-backdrop');
+    if (backdrop) backdrop.addEventListener('click', () => setDrawer(false));
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') setDrawer(false);
+    });
+    // Rotating or resizing back to the docked layout must not leave a
+    // stale full-screen drawer (and its backdrop) over the stage.
+    const reset = () => {
+        if (window.matchMedia('(min-width: 901px)').matches) setDrawer(false);
+    };
+    window.addEventListener('resize', reset);
+    window.addEventListener('orientationchange', reset);
+}
+
 function activateTab(name) {
     document.querySelectorAll('.side-tab').forEach((t) => {
         const on = t.dataset.tab === name;
@@ -628,13 +714,17 @@ function initControls() {
         presence.send({ action: 'whiteboard_state', open: !showing });
     });
     bind('btn-chat', () => {
+        const side = document.getElementById('room-side');
+        const wasOpen = side.classList.contains('drawer-open');
         activateTab('chat');
-        document.getElementById('room-side').classList.toggle('drawer-open');
+        setDrawer(!wasOpen);
         document.getElementById('chat-input').focus();
     });
     bind('btn-people', () => {
+        const side = document.getElementById('room-side');
+        const wasOpen = side.classList.contains('drawer-open');
         activateTab('participants');
-        document.getElementById('room-side').classList.toggle('drawer-open');
+        setDrawer(!wasOpen);
     });
     bind('btn-exit-screen', () => switchView('media'));
     bind('btn-exit-presentation', () => switchView('media'));
@@ -779,16 +869,28 @@ function refreshControlStates() {
 function toggleMoreMenu(force) {
     const menu = document.getElementById('more-menu');
     const btn = document.getElementById('btn-more');
-    const show = force !== undefined ? force : menu.classList.contains('hidden');
-    menu.classList.toggle('hidden', !show);
+    const show = force !== undefined ? force : !menu.classList.contains('show');
+    // On phones the side panel is a full-height drawer stacked above the
+    // control bar, so an open drawer would cover the menu completely.
+    if (show) setDrawer(false);
     btn.setAttribute('aria-expanded', String(show));
-    if (show) menu.querySelector('button')?.focus();
+    if (show) {
+        menu.classList.remove('hidden');
+        // Next frame so the spring-in transition actually runs.
+        requestAnimationFrame(() => menu.classList.add('show'));
+        menu.querySelector('button')?.focus();
+    } else {
+        menu.classList.remove('show');
+        window.setTimeout(() => {
+            if (!menu.classList.contains('show')) menu.classList.add('hidden');
+        }, 220);
+    }
 }
 
 function initMoreMenu() {
     document.addEventListener('click', (e) => {
         const menu = document.getElementById('more-menu');
-        if (!menu.classList.contains('hidden') &&
+        if (menu.classList.contains('show') &&
             !menu.contains(e.target) && e.target.closest('#btn-more') === null) {
             toggleMoreMenu(false);
         }
@@ -856,39 +958,67 @@ function showReport() {
 // ---------------------------------------------------------------------------
 // Devices dialog — change devices mid-class, no rejoin
 // ---------------------------------------------------------------------------
-async function openDevicesDialog() {
-    const dialog = document.getElementById('devices-dialog');
+/**
+ * Browsers hide device names until access is granted.  Ask for a throw-away
+ * stream (and release it at once) so the dropdowns show real names instead of
+ * "میکروفون ۱" — otherwise nobody can tell which device they are picking.
+ */
+async function ensureDeviceLabels() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+    let devices = [];
+    try { devices = await navigator.mediaDevices.enumerateDevices(); } catch (e) { return; }
+    if (devices.some((d) => d.kind !== 'audiooutput' && d.label)) return;   // unlocked
+    for (const constraints of [{ audio: true, video: true }, { audio: true }, { video: true }]) {
+        let tmp = null;
+        try { tmp = await navigator.mediaDevices.getUserMedia(constraints); } catch (e) { /* denied */ }
+        if (tmp) { tmp.getTracks().forEach((t) => t.stop()); return; }
+    }
+}
+
+async function fillDeviceSelects() {
     const camSel = document.getElementById('dev-camera');
     const micSel = document.getElementById('dev-mic');
     const spkSel = document.getElementById('dev-speaker');
-    const feedback = document.getElementById('dev-feedback');
-
+    if (!camSel || !micSel || !spkSel) return;
     const devices = await Media.listDevices();
-    const fill = (sel, kind, fallback) => {
+    const fill = (sel, kind, fallback, allowed) => {
         const current = sel.value;
         sel.innerHTML = '';
         const items = devices.filter((d) => d.kind === kind);
+        if (!items.length) {
+            const opt = document.createElement('option');
+            opt.value = '';                       // never send a label as an id
+            opt.disabled = true;
+            opt.textContent = `بدون ${fallback}`;
+            sel.appendChild(opt);
+            sel.disabled = true;
+            return;
+        }
+        sel.disabled = !allowed;
         items.forEach((d, i) => {
             const opt = document.createElement('option');
             opt.value = d.deviceId;
             opt.textContent = d.label || `${fallback} ${i + 1}`;
             sel.appendChild(opt);
         });
-        if (!items.length) {
-            const opt = document.createElement('option');
-            opt.textContent = `بدون ${fallback}`;
-            sel.appendChild(opt);
-        }
-        if (current) sel.value = current;
+        if (current && items.some((d) => d.deviceId === current)) sel.value = current;
     };
-    fill(camSel, 'videoinput', 'دوربین');
-    fill(micSel, 'audioinput', 'میکروفون');
-    fill(spkSel, 'audiooutput', 'بلندگو');
+    fill(camSel, 'videoinput', 'دوربین', PERMISSIONS.can_use_camera !== false);
+    fill(micSel, 'audioinput', 'میکروفون', PERMISSIONS.can_use_microphone !== false);
+    fill(spkSel, 'audiooutput', 'بلندگو', true);
     if (!('setSinkId' in HTMLAudioElement.prototype)) {
         spkSel.disabled = true;
         spkSel.title = 'انتخاب بلندگو در این مرورگر پشتیبانی نمی‌شود';
     }
-    feedback.textContent = '';
+}
+
+async function openDevicesDialog() {
+    const dialog = document.getElementById('devices-dialog');
+    const feedback = document.getElementById('dev-feedback');
+    if (feedback) { feedback.textContent = 'در حال دریافت فهرست دستگاه‌ها…'; feedback.className = 'muted small'; }
+    await ensureDeviceLabels();
+    await fillDeviceSelects();
+    if (feedback) feedback.textContent = '';
     dialog.showModal();
 }
 
@@ -897,20 +1027,38 @@ function initDevicesDialog() {
     document.getElementById('devices-close').addEventListener('click', () => dialog.close());
     document.getElementById('devices-apply').addEventListener('click', async () => {
         const feedback = document.getElementById('dev-feedback');
+        feedback.className = 'muted small';
         feedback.textContent = 'در حال اعمال…';
+        const cam = document.getElementById('dev-camera').value;
+        const mic = document.getElementById('dev-mic').value;
+        const spk = document.getElementById('dev-speaker').value;
         try {
-            const cam = document.getElementById('dev-camera').value;
-            const mic = document.getElementById('dev-mic').value;
-            const spk = document.getElementById('dev-speaker').value;
-            if (cam) await Media.setCameraDevice(cam);
-            if (mic) await Media.setMicDevice(mic);
-            if (spk) await Media.setOutputDevice(spk);
-            feedback.textContent = '✅ دستگاه‌ها اعمال شد.';
-            setTimeout(() => dialog.close(), 700);
+            // Empty value == the "no device" placeholder: skip it, and report
+            // the real per-device outcome instead of always claiming success.
+            const results = [];
+            if (cam) results.push(['دوربین', await Media.setCameraDevice(cam)]);
+            if (mic) results.push(['میکروفون', await Media.setMicDevice(mic)]);
+            if (spk) results.push(['بلندگو', await Media.setOutputDevice(spk)]);
+            const failed = results.filter(([, ok]) => !ok).map(([name]) => name);
+            if (!results.length) {
+                feedback.textContent = 'دستگاهی برای اعمال انتخاب نشده است.';
+            } else if (failed.length) {
+                feedback.textContent = `⚠️ ${failed.join(' و ')} اعمال نشد — دستگاه در دسترس نیست.`;
+            } else {
+                feedback.textContent = '✅ دستگاه‌ها اعمال شد.';
+                setTimeout(() => dialog.close(), 700);
+            }
         } catch (err) {
             feedback.textContent = `اعمال ناموفق بود: ${err.message || ''}`;
         }
     });
+
+    // Plugging in a headset mid-class should be visible immediately.
+    if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+        navigator.mediaDevices.addEventListener('devicechange', () => {
+            if (dialog.open) fillDeviceSelects();
+        });
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1268,6 +1416,8 @@ function initClock() {
 // leave the page with dead controls.  Each risky init is isolated.
 // ---------------------------------------------------------------------------
 initTabs();
+initDrawer();
+trackControlBarHeight();
 initLayouts();
 initControls();
 initFullscreen();
