@@ -30,6 +30,20 @@ const DEFAULT_ICE_SERVERS = [
 ];
 let ICE_SERVERS = DEFAULT_ICE_SERVERS;
 
+// How long we give a peer link to come up before declaring it unreachable,
+// and how patient we are with a transient network drop before restarting ICE.
+const CONNECT_TIMEOUT_MS = 10000;
+const DISCONNECT_GRACE_MS = 3000;
+
+/** Does the deployment provide a TURN relay?  Without one, strict NATs
+ *  (corporate / mobile networks) can never be traversed and the failure
+ *  message has to say so instead of hinting at a mystery. */
+function hasTurnServer() {
+    return ICE_SERVERS.some((s) => []
+        .concat(s.urls || [])
+        .some((u) => String(u).startsWith('turn')));
+}
+
 class PeerLink {
     constructor(mesh, peer) {
         this.mesh = mesh;
@@ -37,10 +51,14 @@ class PeerLink {
         this.polite = mesh.self.memberId < peer.member_id;
         this.makingOffer = false;
         this.ignoreOffer = false;
-        this.pc = this._makePc(false);
         this.screenPc = null;                  // created on demand
         this.remoteStream = null;
         this.remoteScreenStream = null;
+        this.failed = false;                   // gave up — shown in the UI
+        this.retried = false;                  // one automatic ICE restart
+        this._watchdog = null;
+        this._recovery = null;
+        this.pc = this._makePc(false);
     }
 
     _makePc(isScreen) {
@@ -65,18 +83,94 @@ class PeerLink {
                 this.makingOffer = true;
                 await pc.setLocalDescription(await pc.createOffer());
                 this.mesh._signal(this.peer.member_id, { sdp: pc.localDescription, screen: isScreen });
+                if (!isScreen) this.armWatchdog();
             } catch (err) {
                 console.warn('[mesh] negotiation failed:', err);
             } finally {
                 this.makingOffer = false;
             }
         };
+        pc.oniceconnectionstatechange = () => { if (!isScreen) this._onConnectState(pc); };
         pc.onconnectionstatechange = () => {
-            if (['failed', 'closed'].includes(pc.connectionState) && !isScreen) {
+            if (isScreen) return;
+            // A closed PC is gone for good; a failed one may still recover
+            // (network change, ICE restart) so it goes through _recover().
+            if (pc.connectionState === 'closed') {
                 this.mesh._onPeerGone(this.peer.identity);
+                return;
             }
+            this._onConnectState(pc);
         };
         return pc;
+    }
+
+    _isUp(pc) {
+        return pc.connectionState === 'connected'
+            || pc.iceConnectionState === 'connected'
+            || pc.iceConnectionState === 'completed';
+    }
+
+    /**
+     * Arm the "did this ever connect?" timer.  Only armed once we are really
+     * negotiating — a silent link (nobody publishing, no data channel) is not
+     * a failure, it is just idle.
+     */
+    armWatchdog() {
+        if (this._watchdog || this._isUp(this.pc)) return;
+        this._watchdog = setTimeout(() => {
+            this._watchdog = null;
+            if (!this._isUp(this.pc)) this._recover();
+        }, CONNECT_TIMEOUT_MS);
+    }
+
+    /** Success: cancel every timer and clear any failure badge. */
+    _settle() {
+        clearTimeout(this._watchdog); this._watchdog = null;
+        clearTimeout(this._recovery); this._recovery = null;
+        this.retried = false;
+        if (this.failed) {
+            this.failed = false;
+            this.mesh._onPeerRecovered(this.peer);
+        }
+    }
+
+    _onConnectState(pc) {
+        if (this._isUp(pc)) { this._settle(); return; }
+        if (pc.connectionState === 'failed') { this._recover(); return; }
+        if (pc.connectionState === 'disconnected') {
+            // Often transient (Wi-Fi hiccup, laptop wake) — wait, then act.
+            clearTimeout(this._recovery);
+            this._recovery = setTimeout(() => {
+                this._recovery = null;
+                if (!this._isUp(this.pc)) this._recover();
+            }, DISCONNECT_GRACE_MS);
+        }
+    }
+
+    /**
+     * Try one ICE restart (this is what recovers after a network change),
+     * then give up and let the UI explain what is wrong.
+     */
+    _recover() {
+        if (!this.retried) {
+            this.retried = true;
+            try { this.pc.restartIce(); } catch (e) { /* not supported */ }
+            clearTimeout(this._watchdog); this._watchdog = null;
+            this.armWatchdog();
+            return;
+        }
+        clearTimeout(this._watchdog); this._watchdog = null;
+        clearTimeout(this._recovery); this._recovery = null;
+        if (this.failed) return;
+        this.failed = true;
+        this.mesh._onPeerFailed(this.peer);
+    }
+
+    /** User pressed "try again" on the failed tile. */
+    retryNow() {
+        this.failed = false;
+        this.retried = false;
+        this._recover();
     }
 
     async handleSignal(data) {
@@ -89,6 +183,7 @@ class PeerLink {
             this.ignoreOffer = !this.polite && offerCollision;
             if (this.ignoreOffer) return;
             await pc.setRemoteDescription(description);
+            if (!isScreen) this.armWatchdog();
             if (description.type === 'offer') {
                 await pc.setLocalDescription(await pc.createAnswer());
                 this.mesh._signal(this.peer.member_id, { sdp: pc.localDescription, screen: isScreen });
@@ -118,6 +213,8 @@ class PeerLink {
     }
 
     close() {
+        clearTimeout(this._watchdog); this._watchdog = null;
+        clearTimeout(this._recovery); this._recovery = null;
         try { this.pc.close(); } catch (e) { /* already closed */ }
         if (this.screenPc) { try { this.screenPc.close(); } catch (e) { /* noop */ } }
     }
@@ -155,6 +252,11 @@ class MeshMedia {
         this.currentView = 'media';
         this._pipView = null;
         this._pipClosed = false;
+        this._micDeviceId = null;         // remembered across acquisitions
+        this._camDeviceId = null;
+        this._toggling = { mic: false, camera: false };   // double-tap guard
+        this._lastError = null;           // set by _acquire so callers can skip a 2nd toast
+        this._deviceChangeBound = null;
     }
 
     async init({ roomCode, self, permissions, signal, onStateChange, onQualityChange, iceServers }) {
@@ -178,6 +280,7 @@ class MeshMedia {
         // periodic real-stats quality + active-speaker evaluation
         this._statsTimer = setInterval(() => this._evaluateQuality(), 4000);
         this._speakerTimer = setInterval(() => this._evaluateSpeaker(), 700);
+        this._watchDevices();
     }
 
     // ------------------------------------------------------------ roster
@@ -229,6 +332,62 @@ class MeshMedia {
         if (this.links.has(identity)) this._removePeer(identity);
     }
 
+    /**
+     * A peer link never came up.  Silence here is the worst possible answer:
+     * the teacher sees an empty tile and assumes the student has no camera.
+     * Say what happened and — when no relay is configured — say why.
+     */
+    _onPeerFailed(peer) {
+        const tile = this._ensureTile(peer);
+        tile.classList.add('conn-failed');
+        if (tile.querySelector('.tile-conn')) return;
+        const box = document.createElement('div');
+        box.className = 'tile-conn';
+        const title = document.createElement('p');
+        title.textContent = `ارتباط با ${peer.name || 'هم‌کلاسی'} برقرار نشد`;
+        const hint = document.createElement('small');
+        hint.textContent = hasTurnServer()
+            ? 'اتصال شبکه برقرار نشد؛ وضعیت اینترنت را بررسی کنید.'
+            : 'شبکهٔ شما یا هم‌کلاسی‌تان اجازهٔ ارتباط مستقیم نمی‌دهد (NAT/فایروال). برای رفعِ دائمی به سرور TURN نیاز است.';
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn btn-sm';
+        btn.textContent = 'تلاشِ دوباره';
+        btn.addEventListener('click', (e) => { e.stopPropagation(); this.retryPeer(peer.identity); });
+        box.append(title, hint, btn);
+        tile.appendChild(box);
+        this._reportConnFailure();
+        this._layout();
+    }
+
+    _onPeerRecovered(peer) {
+        const tile = this.tiles.get(peer.identity);
+        if (!tile) return;
+        tile.classList.remove('conn-failed');
+        tile.querySelector('.tile-conn')?.remove();
+        this._layout();
+    }
+
+    /** One nudge per session — the tile itself keeps explaining per peer. */
+    _reportConnFailure() {
+        if (this._connWarned) return;
+        this._connWarned = true;
+        toast(hasTurnServer()
+            ? 'ارتباط تصویری با بعضی هم‌کلاسی‌ها برقرار نشد؛ اتصال شبکه را بررسی کنید.'
+            : 'ارتباط تصویری با بعضی هم‌کلاسی‌ها برقرار نشد. پشت شبکهٔ شرکتی/موبایل تنظیمِ سرور TURN لازم است (راهنما در README).',
+            'warning', 8000);
+    }
+
+    /** Re-run ICE for one peer after the user asked for another attempt. */
+    retryPeer(identity) {
+        const link = this.links.get(identity);
+        if (!link) return;
+        const tile = this.tiles.get(identity);
+        tile?.classList.remove('conn-failed');
+        tile?.querySelector('.tile-conn')?.remove();
+        link.retryNow();
+    }
+
     // ------------------------------------------------------------ local
     /**
      * Device handling philosophy: "off" means OFF.  The track is fully
@@ -244,8 +403,12 @@ class MeshMedia {
                 ? 'مرورگر دسترسی دوربین/میکروفون را در این پنجرهٔ توکار مسدود کرده — صفحه را در تب جدید باز کنید و اجازهٔ دسترسی بدهید.'
                 : 'دسترسی دوربین/میکروفون مسدود شده — روی آیکون قفل کنار آدرس صفحه، اجازهٔ دوربین و میکروفون را فعال کنید.',
                 'error', 6000);
-        } else if (name === 'NotFoundError') {
-            toast('دوربین یا میکروفونی پیدا نشد.', 'error');
+        } else if (name === 'NotFoundError' || name === 'OverconstrainedError') {
+            toast('دوربین یا میکروفون درخواستی پیدا نشد (شاید جدا شده باشد).', 'error');
+        } else if (name === 'NotReadableError' || name === 'AbortError' || name === 'TrackStartError') {
+            toast('دستگاه در اختیار برنامهٔ دیگری است (مثلاً یک جلسهٔ دیگر). آن برنامه را ببندید و دوباره تلاش کنید.', 'error', 6000);
+        } else if (name === 'TypeError') {
+            toast('مرورگر اجازهٔ دسترسی به دستگاه‌ها را نداد — صفحه باید با HTTPS یا localhost باز شود.', 'error', 6000);
         } else {
             toast(`خطای دستگاه: ${name || 'نامشخص'}`, 'error');
         }
@@ -293,67 +456,181 @@ class MeshMedia {
         }
     }
 
+    /** Classroom-grade audio processing — the same defaults Meet/Zoom rely on. */
+    _audioConstraints(deviceId) {
+        const base = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+        return deviceId ? { ...base, deviceId: { exact: deviceId } } : base;
+    }
+
+    _videoConstraints(deviceId) {
+        const base = { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } };
+        return deviceId ? { ...base, deviceId: { exact: deviceId } } : base;
+    }
+
     async _acquire(constraints) {
+        this._lastError = null;
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
             toast('برای دوربین/میکروفون صفحه باید با HTTPS یا localhost باز شود (روی HTTP معمولی مرورگر اجازه نمی‌دهد).', 'error', 6000);
+            this._lastError = new Error('unsupported');
             return null;
         }
         try {
             return await navigator.mediaDevices.getUserMedia(constraints);
         } catch (err) {
+            // The chosen device may have vanished (unplugged / taken by another
+            // app): retry once with the OS default before giving up, so a lost
+            // headset never leaves the class without sound.
+            if (err && (err.name === 'OverconstrainedError' || err.name === 'NotFoundError')) {
+                const relaxed = { ...constraints };
+                if (relaxed.audio && relaxed.audio.deviceId) relaxed.audio = this._audioConstraints(null);
+                if (relaxed.video && relaxed.video.deviceId) relaxed.video = this._videoConstraints(null);
+                if (JSON.stringify(relaxed) !== JSON.stringify(constraints)) {
+                    try {
+                        const stream = await navigator.mediaDevices.getUserMedia(relaxed);
+                        toast('دستگاه انتخاب‌شده در دسترس نبود؛ از دستگاه پیش‌فرض استفاده شد.', 'warning');
+                        return stream;
+                    } catch (e) { /* report the original error below */ }
+                }
+            }
             this._deviceError(err);
+            this._lastError = err;
             return null;
         }
     }
 
     async toggleMicrophone() {
+        if (this._toggling.mic) return false;          // ignore rapid double taps
         if (this.permissions.can_use_microphone === false) {
-            toast('شما اجازهٔ استفاده از میکروفون را ندارید.', 'warning');
+            toast(this._mutedByHost
+                ? 'میکروفون شما توسط مدیر بی‌صدا شده است.'
+                : 'شما اجازهٔ استفاده از میکروفون را ندارید.', 'warning');
             return false;
         }
-        if (this.micOn) {
-            this._stopLocalLevel();
-            this._dropLocalTrack('audio');
-            this.micOn = false;
+        this._toggling.mic = true;
+        try {
+            if (this.micOn) {
+                this._stopLocalLevel();
+                this._dropLocalTrack('audio');
+                this.micOn = false;
+                this._republishLocal();
+                this._afterLocalChange();
+                return true;
+            }
+            const stream = await this._acquire({ audio: this._audioConstraints(this._micDeviceId) });
+            const track = stream && stream.getAudioTracks()[0];
+            if (!track) {
+                if (stream) stream.getTracks().forEach((t) => t.stop());
+                // _acquire already explained *why*; don't stack a second toast.
+                if (!this._lastError) toast('میکروفونی یافت نشد.', 'warning');
+                return false;
+            }
+            this._watchLocalTrack(track, 'audio');
+            this._mergeLocalTrack(track);
+            this.micOn = true;
             this._republishLocal();
+            this._startLocalLevel();
             this._afterLocalChange();
             return true;
+        } finally {
+            this._toggling.mic = false;
         }
-        const stream = await this._acquire({
-            audio: this._micDeviceId ? { deviceId: { exact: this._micDeviceId } } : true,
-        });
-        const track = stream && stream.getAudioTracks()[0];
-        if (!track) { if (stream) stream.getTracks().forEach((t) => t.stop()); toast('میکروفونی یافت نشد.', 'warning'); return false; }
-        this._mergeLocalTrack(track);
-        this.micOn = true;
-        this._republishLocal();
-        this._startLocalLevel();
-        this._afterLocalChange();
-        return true;
     }
 
     async toggleCamera() {
+        if (this._toggling.camera) return false;       // ignore rapid double taps
         if (this.permissions.can_use_camera === false) {
-            toast('شما اجازهٔ استفاده از دوربین را ندارید.', 'warning');
+            toast(this._cameraOffByHost
+                ? 'دوربین شما توسط مدیر غیرفعال شده است.'
+                : 'شما اجازهٔ استفاده از دوربین را ندارید.', 'warning');
             return false;
         }
-        if (this.cameraOn) {
-            this._dropLocalTrack('video');
-            this.cameraOn = false;
+        this._toggling.camera = true;
+        try {
+            if (this.cameraOn) {
+                this._dropLocalTrack('video');
+                this.cameraOn = false;
+                this._republishLocal();
+                this._afterLocalChange();
+                return true;
+            }
+            const stream = await this._acquire({ video: this._videoConstraints(this._camDeviceId) });
+            const track = stream && stream.getVideoTracks()[0];
+            if (!track) {
+                if (stream) stream.getTracks().forEach((t) => t.stop());
+                if (!this._lastError) toast('دوربینی یافت نشد.', 'warning');
+                return false;
+            }
+            this._watchLocalTrack(track, 'video');
+            this._mergeLocalTrack(track);
+            this.cameraOn = true;
             this._republishLocal();
             this._afterLocalChange();
             return true;
+        } finally {
+            this._toggling.camera = false;
         }
-        const videoConstraints = { width: { ideal: 1280 }, height: { ideal: 720 } };
-        if (this._camDeviceId) videoConstraints.deviceId = { exact: this._camDeviceId };
-        const stream = await this._acquire({ video: videoConstraints });
-        const track = stream && stream.getVideoTracks()[0];
-        if (!track) { if (stream) stream.getTracks().forEach((t) => t.stop()); toast('دوربینی یافت نشد.', 'warning'); return false; }
-        this._mergeLocalTrack(track);
-        this.cameraOn = true;
-        this._republishLocal();
-        this._afterLocalChange();
-        return true;
+    }
+
+    /**
+     * A device can disappear mid-class (unplugged, or claimed by another
+     * app).  Without this the UI keeps claiming "mic on" while nothing is
+     * being transmitted.
+     */
+    _watchLocalTrack(track, kind) {
+        track.addEventListener('ended', () => {
+            const stillOurs = Boolean(this.localStream && this.localStream.getTracks().includes(track));
+            if (!stillOurs) return;            // we stopped it on purpose
+            if (kind === 'audio') {
+                this._stopLocalLevel();
+                this._dropLocalTrack('audio');
+                this.micOn = false;
+            } else {
+                this._dropLocalTrack('video');
+                this.cameraOn = false;
+            }
+            this._republishLocal();
+            this._afterLocalChange();
+            toast(kind === 'audio'
+                ? 'میکروفون قطع شد. دستگاه را وصل کنید و دوباره روی دکمهٔ میکروفون بزنید.'
+                : 'دوربین قطع شد. دستگاه را وصل کنید و دوباره روی دکمهٔ دوربین بزنید.', 'warning', 5000);
+        });
+    }
+
+    /** Refresh device lists and recover when the in-use device disappears. */
+    _watchDevices() {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.addEventListener) return;
+        this._deviceChangeBound = () => {
+            if (this.onDeviceChange) this.onDeviceChange();
+            // Did the device we are actively using just go away?
+            const kinds = [['audio', 'mic'], ['video', 'camera']];
+            for (const [kind] of kinds) {
+                const track = this.localStream && this.localStream.getTracks().find((t) => t.kind === kind);
+                if (track && track.readyState === 'ended') this._watchLocalTrackEnded(kind);
+            }
+        };
+        navigator.mediaDevices.addEventListener('devicechange', this._deviceChangeBound);
+    }
+
+    _watchLocalTrackEnded(kind) {
+        const track = this.localStream && this.localStream.getTracks().find((t) => t.kind === kind);
+        if (track) track.dispatchEvent(new Event('ended'));
+    }
+
+    _playSafe(el) {
+        if (!el) return;
+        const p = el.play();
+        if (p && typeof p.catch === 'function') {
+            p.catch(() => {
+                // Autoplay policy: retry on the first real user gesture.
+                const retry = () => {
+                    el.play().catch(() => {});
+                    document.removeEventListener('pointerdown', retry);
+                    document.removeEventListener('keydown', retry);
+                };
+                document.addEventListener('pointerdown', retry, { once: true });
+                document.addEventListener('keydown', retry, { once: true });
+            });
+        }
     }
 
     /** Re-render tile/UI/pip after any local device change. */
@@ -465,41 +742,72 @@ class MeshMedia {
         this._afterLocalChange();
     }
 
+    /** Host moderation reached us: cut the device AND revoke the local right
+     *  to switch it back on, otherwise the button silently lies. */
+    applyModerationState({ muted, camera_disabled } = {}) {
+        this._mutedByHost = Boolean(muted);
+        this._cameraOffByHost = Boolean(camera_disabled);
+        if (muted) this.forceMute();
+        if (camera_disabled) this.forceCameraOff();
+        this.permissions.can_use_microphone = !muted && this.permissions.can_use_microphone !== false;
+        this.permissions.can_use_camera = !camera_disabled && this.permissions.can_use_camera !== false;
+        this._syncLocalUI();
+    }
+
+    /** Remember the choice; return whether it is actually in use right now. */
     async setMicDevice(deviceId) {
+        if (!deviceId) return false;
         this._micDeviceId = deviceId; // remembered for the next acquisition
-        if (!this.micOn || !this.localStream) return;
-        const fresh = await this._acquire({ audio: { deviceId: { exact: deviceId } } });
+        if (!this.micOn || !this.localStream) return true;   // used next time
+        const fresh = await this._acquire({ audio: this._audioConstraints(deviceId) });
         const newTrack = fresh && fresh.getAudioTracks()[0];
-        if (!newTrack) return;
+        if (!newTrack) return false;
         for (const pc of this._allPcs()) {
             const sender = pc.getSenders().find((s) => s.track && s.track.kind === 'audio');
             if (sender) { try { await sender.replaceTrack(newTrack); } catch (e) { /* noop */ } }
         }
+        this._watchLocalTrack(newTrack, 'audio');
         this._mergeLocalTrack(newTrack);
         this._startLocalLevel(); // re-point the meter at the new track
+        this._syncLocalUI();
+        return true;
     }
 
     async setCameraDevice(deviceId) {
+        if (!deviceId) return false;
         this._camDeviceId = deviceId;
-        if (!this.cameraOn || !this.localStream) return;
-        const fresh = await this._acquire({ video: { deviceId: { exact: deviceId } } });
+        if (!this.cameraOn || !this.localStream) return true;   // used next time
+        const fresh = await this._acquire({ video: this._videoConstraints(deviceId) });
         const newTrack = fresh && fresh.getVideoTracks()[0];
-        if (!newTrack) return;
+        if (!newTrack) return false;
         for (const pc of this._allPcs()) {
             const sender = pc.getSenders().find((s) => s.track && s.track.kind === 'video');
             if (sender) { try { await sender.replaceTrack(newTrack); } catch (e) { /* noop */ } }
         }
+        this._watchLocalTrack(newTrack, 'video');
         this._mergeLocalTrack(newTrack);
         this._renderLocalTile();
         this.updatePip(this.currentView);
+        return true;
     }
 
     async setOutputDevice(deviceId) {
-        for (const el of this._audioEls.values()) {
-            if (el.setSinkId) { try { await el.setSinkId(deviceId); } catch (e) { /* unsupported */ } }
+        if (!deviceId) return false;
+        const supported = typeof HTMLAudioElement !== 'undefined' && 'setSinkId' in HTMLAudioElement.prototype;
+        if (!supported) return false;
+        // Remember it: peers who join later get the choice applied too —
+        // otherwise picking a speaker before anyone speaks does nothing.
+        this._sinkId = deviceId;
+        await this._applySinkId();
+        return true;
+    }
+
+    async _applySinkId(el) {
+        if (!this._sinkId) return;
+        const targets = el ? [el] : [...this._audioEls.values(), document.querySelector('#screen-holder video')];
+        for (const t of targets) {
+            if (t && t.setSinkId) { try { await t.setSinkId(this._sinkId); } catch (e) { /* unsupported */ } }
         }
-        const sv = document.querySelector('#screen-holder video');
-        if (sv && sv.setSinkId) { try { await sv.setSinkId(deviceId); } catch (e) { /* unsupported */ } }
     }
 
     async listDevices() {
@@ -554,8 +862,9 @@ class MeshMedia {
             document.body.appendChild(audio);
             this._audioEls.set(peer.identity, audio);
         }
+        this._applySinkId(audio);
         audio.srcObject = stream;
-        audio.play().catch(() => {});
+        this._playSafe(audio);
         const tile = this._ensureTile(peer);
         const video = tile.querySelector('video');
         const camTrack = stream.getVideoTracks()[0];
@@ -623,9 +932,14 @@ class MeshMedia {
         const tile = document.createElement('div');
         tile.className = 'tile';
         tile.dataset.identity = peer.identity;
+        if (peer.identity === this.self.identity) tile.dataset.self = '1';
         const video = document.createElement('video');
         video.autoplay = true;
         video.playsInline = true;
+        // Sound is rendered by the per-peer <audio> element (which is also the
+        // one an output-device change re-routes).  A second, unmuted copy of
+        // the same track here would double every voice.
+        video.muted = true;
         const overlay = document.createElement('div');
         overlay.className = 'tile-overlay';
         overlay.innerHTML = '<span class="tile-name"></span><span class="tile-icons"><i class="t-mic" title="میکروفون">🎤</i></span>'
@@ -780,7 +1094,6 @@ class MeshMedia {
         if (this.cameraOn && camTrack) {
             stream = this.localStream;
             name = `${this.self.name} (شما)`;
-            vid.muted = true;
         } else {
             const link = this.activeSpeaker && this.links.get(this.activeSpeaker);
             const rs = link && link.remoteStream;
@@ -788,9 +1101,12 @@ class MeshMedia {
             if (rt) {
                 stream = rs;
                 name = (link.peer && link.peer.name) || '';
-                vid.muted = false;
             }
         }
+        // Always silent: the tile's <audio> element already plays every remote
+        // voice, and our own mic must never be echoed back to us.
+        vid.muted = true;
+        pip.classList.toggle('is-local', Boolean(stream && stream === this.localStream));
         if (!stream) {
             pip.classList.add('hidden');
             vid.srcObject = null;
@@ -799,7 +1115,7 @@ class MeshMedia {
         if (vid.srcObject !== stream) vid.srcObject = stream;
         if (label) label.textContent = name;
         pip.classList.remove('hidden');
-        vid.play().catch(() => {});
+        this._playSafe(vid);
     }
 
     closePip() {
@@ -865,6 +1181,24 @@ class MeshMedia {
 
     _signal(toMemberId, data) {
         this.signal({ action: 'rtc_signal', to_member_id: toMemberId, data });
+    }
+
+    /** Release everything: devices, timers, listeners, peer connections. */
+    dispose() {
+        if (this._statsTimer) clearInterval(this._statsTimer);
+        if (this._speakerTimer) clearInterval(this._speakerTimer);
+        this._statsTimer = this._speakerTimer = null;
+        if (this._deviceChangeBound && navigator.mediaDevices?.removeEventListener) {
+            navigator.mediaDevices.removeEventListener('devicechange', this._deviceChangeBound);
+            this._deviceChangeBound = null;
+        }
+        this._stopLocalLevel();
+        if (this.localStream) {
+            this.localStream.getTracks().forEach((t) => t.stop());
+            this.localStream = null;
+        }
+        if (this.screenStream) this.stopScreenShare();
+        for (const identity of Array.from(this.links.keys())) this._removePeer(identity);
     }
 }
 

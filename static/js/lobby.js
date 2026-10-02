@@ -42,6 +42,7 @@ const supports = {
 let localStream = null;
 let audioCtx = null;
 let analyser = null;
+let micSource = null;
 let micRaf = 0;
 
 function showBrowserWarning() {
@@ -149,7 +150,11 @@ function wireMicMeter() {
   try {
     audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
     if (audioCtx.state === "suspended") audioCtx.resume();
+    // Switching devices re-enters here: drop the previous tap, otherwise every
+    // change leaks a MediaStreamSource that keeps the old device alive.
+    if (micSource) { try { micSource.disconnect(); } catch { /* noop */ } micSource = null; }
     const src = audioCtx.createMediaStreamSource(localStream);
+    micSource = src;
     analyser = audioCtx.createAnalyser();
     analyser.fftSize = 512;
     src.connect(analyser);
@@ -158,7 +163,7 @@ function wireMicMeter() {
       analyser.getByteTimeDomainData(buf);
       let peak = 0;
       for (let i = 0; i < buf.length; i++) peak = Math.max(peak, Math.abs(buf[i] - 128));
-      const pct = Math.min(100, Math.round((peak / 96) * 100));
+      const pct = Math.min(100, Math.round((peak / 90) * 100));
       micLevel.style.width = pct + "%";
       micRaf = requestAnimationFrame(tick);
     };
@@ -183,7 +188,7 @@ async function micTest() {
   await new Promise((resolve) => {
     const check = () => {
       const width = parseFloat(micLevel.style.width || "0");
-      if (width > 8) sawSignal = true;
+      if (width > 5) sawSignal = true;   // matches the in-room meter's gate
       if (sawSignal || Date.now() - started > 3000) return resolve();
       setTimeout(check, 120);
     };

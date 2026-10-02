@@ -418,7 +418,9 @@ class LivekitMedia {
             return false;
         }
         if (!this.permissions.can_use_microphone) {
-            toast('شما اجازهٔ استفاده از میکروفون را ندارید.', 'warning');
+            toast(this._mutedByHost
+                ? 'میکروفون شما توسط مدیر بی‌صدا شده است.'
+                : 'شما اجازهٔ استفاده از میکروفون را ندارید.', 'warning');
             return false;
         }
         await this.room.localParticipant.setMicrophoneEnabled(!this.micOn);
@@ -432,7 +434,9 @@ class LivekitMedia {
             return false;
         }
         if (!this.permissions.can_use_camera) {
-            toast('شما اجازهٔ استفاده از دوربین را ندارید.', 'warning');
+            toast(this._cameraOffByHost
+                ? 'دوربین شما توسط مدیر غیرفعال شده است.'
+                : 'شما اجازهٔ استفاده از دوربین را ندارید.', 'warning');
             return false;
         }
         await this.room.localParticipant.setCameraEnabled(!this.cameraOn);
@@ -477,10 +481,15 @@ class LivekitMedia {
 
     async setOutputDevice(deviceId) {
         // Supported only in some browsers; fails silently elsewhere.
+        if (!deviceId) return false;
+        const supported = typeof HTMLAudioElement !== 'undefined' && 'setSinkId' in HTMLAudioElement.prototype;
+        if (!supported) return false;
+        this._sinkId = deviceId;   // applied to audio elements created later too
         const audios = document.querySelectorAll('audio');
         for (const a of audios) {
             if (a.setSinkId) { try { await a.setSinkId(deviceId); } catch (e) { /* unsupported */ } }
         }
+        return true;
     }
 
     /** Enforced when the host mutes us: the SFU token no longer allows it
@@ -517,10 +526,13 @@ class LivekitMedia {
     }
 
     /** Called by room.js when the roster reports our forced states. */
-    applyModerationState({ muted, camera_disabled }) {
-        if (muted && this.micOn) this.forceMute();
-        if (camera_disabled && this.cameraOn) this.forceCameraOff();
+    applyModerationState({ muted, camera_disabled } = {}) {
+        this._mutedByHost = Boolean(muted);
+        this._cameraOffByHost = Boolean(camera_disabled);
+        if (muted) this.forceMute();
+        if (camera_disabled) this.forceCameraOff();
         this.permissions.can_use_microphone = !muted && this.permissions.can_use_microphone !== false;
+        this.permissions.can_use_camera = !camera_disabled && this.permissions.can_use_camera !== false;
         this._syncLocalUI();
     }
 
@@ -575,6 +587,10 @@ class MediaFacade {
     async toggleScreenShare() { return this.impl ? this.impl.toggleScreenShare() : false; }
     async forceMute() { return this.impl && this.impl.forceMute(); }
     async forceCameraOff() { return this.impl && this.impl.forceCameraOff(); }
+    applyModerationState(state) { if (this.impl && this.impl.applyModerationState) this.impl.applyModerationState(state); }
+    dispose() { if (this.impl && this.impl.dispose) this.impl.dispose(); }
+    onDeviceChange(fn) { if (this.impl) this.impl.onDeviceChange = fn; }
+    retryPeer(identity) { if (this.impl && this.impl.retryPeer) this.impl.retryPeer(identity); }
     async setMicDevice(id) { return this.impl && this.impl.setMicDevice(id); }
     async setCameraDevice(id) { return this.impl && this.impl.setCameraDevice(id); }
     async setOutputDevice(id) { return this.impl && this.impl.setOutputDevice(id); }
