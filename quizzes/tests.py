@@ -4,9 +4,8 @@ import json
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
-from django.utils import timezone
 
-from classrooms.models import Classroom, ClassroomMember
+from classrooms.models import ClassroomMember
 from classrooms.permissions import Role
 from classrooms.services import create_classroom
 
@@ -86,6 +85,27 @@ class QuizFlowTests(TestCase):
         late = self._post("answer", self.student, run_id=run_id,
                           question_id=self.q2.id, option_id=self.q2_ok.id)
         self.assertEqual(late.status_code, 400)
+
+    def test_scoreboard_uses_the_roster_name(self):
+        """Accounts with only a username used to render as a blank row.
+
+        ``User.get_full_name()`` is empty unless first/last name is set, so
+        the scoreboard must read the roster name (display name → username).
+        """
+        bare = User.objects.create_user(username="q_bare", password="Pass-12345")
+        bare_member = ClassroomMember.objects.create(
+            classroom=self.classroom, user=bare, role=Role.STUDENT,
+        )
+        resp = self._post("start", self.owner, quiz_id=self.quiz.id)
+        run_id = resp.json()["run_id"]
+        self._post("answer", bare, run_id=run_id,
+                   question_id=self.q1.id, option_id=self.q1_ok.id)
+        self._post("end", self.owner, run_id=run_id)
+
+        run = QuizRun.objects.get(id=run_id)
+        rows = {row["identity"]: row for row in results_payload(run)}
+        self.assertEqual(rows[bare_member.identity]["name"], "q_bare")
+        self.assertEqual(rows[bare_member.identity]["score"], 2)
 
     def test_student_cannot_end(self):
         run_id = self._post("start", self.owner, quiz_id=self.quiz.id).json()["run_id"]

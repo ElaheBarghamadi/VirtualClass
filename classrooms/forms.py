@@ -81,7 +81,7 @@ class GuestJoinForm(forms.Form):
         try:
             return validate_display_name(self.cleaned_data["display_name"])
         except ValidationError as exc:
-            raise forms.ValidationError(exc.message) from exc
+            raise forms.ValidationError(exc.messages or str(exc)) from exc
 
     def clean_password(self) -> str:
         value = self.cleaned_data.get("password", "")

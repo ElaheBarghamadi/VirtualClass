@@ -19,7 +19,6 @@ import shutil
 import subprocess
 import tempfile
 
-from django.conf import settings
 from django.core.files import File
 
 logger = logging.getLogger("classrooms.office")
@@ -83,7 +82,7 @@ def convert_to_pdf(shared_file) -> bool:
         except (subprocess.TimeoutExpired, OSError) as exc:
             logger.warning("office_convert_failed", extra={"reason": str(exc)})
             return False
-        pdf_path = os.path.join(outdir, f"source.pdf")
+        pdf_path = os.path.join(outdir, "source.pdf")
         if proc.returncode != 0 or not os.path.isfile(pdf_path):
             logger.warning("office_convert_failed",
                            extra={"rc": proc.returncode, "err": proc.stderr[:300]})

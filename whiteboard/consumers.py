@@ -29,7 +29,7 @@ import re
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 
-from classrooms.models import Classroom, ClassroomMember
+from classrooms.models import ClassroomMember
 from classrooms.permissions import effective_permissions
 from classrooms.services import resolve_scope_member
 from classrooms.ws_security import RateLimiter, ws_origin_allowed

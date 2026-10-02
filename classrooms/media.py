@@ -21,7 +21,6 @@ from datetime import timedelta
 from django.conf import settings
 
 from .models import Classroom
-from .permissions import Role
 
 try:  # livekit-api is a hard dependency; guard only improves error messages.
     from livekit import api as livekit_api

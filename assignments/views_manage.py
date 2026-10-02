@@ -125,7 +125,8 @@ def _submit(request, assignment: Assignment, member, submission: Submission | No
         try:
             stored_name = validate_upload(uploaded, MAX_SUBMISSION_BYTES)
         except Exception as exc:  # ValidationError & friends → user-facing
-            messages.error(request, str(getattr(exc, "message", exc)))
+            details = getattr(exc, "messages", None)
+            messages.error(request, details[0] if details else str(exc))
             return
     else:
         stored_name = None

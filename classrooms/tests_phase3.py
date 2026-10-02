@@ -545,7 +545,7 @@ class RtcSignalRelayTests(TransactionTestCase):
             owner_ws = await self._connected(self.owner)
             stu_ws = await self._connected(self.student)
             await stu_ws.send_json_to({"action": "whiteboard_state", "open": True})
-            msg = await self._receive_typed(stu_ws, "error")
+            await self._receive_typed(stu_ws, "error")
             await owner_ws.disconnect()
             await stu_ws.disconnect()
 

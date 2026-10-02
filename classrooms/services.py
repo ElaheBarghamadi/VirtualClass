@@ -764,31 +764,29 @@ def attendance_leave(classroom: Classroom, member: ClassroomMember) -> None:
 
 
 def attendance_summary(session: ClassroomSession) -> list[dict]:
-    """Per-participant totals for a session (multiple intervals aggregated)."""
-    from django.db.models import Count
+    """Per-participant totals for a session (multiple intervals aggregated).
 
-    rows = (
+    One query for every interval (members pre-joined) — the previous version
+    issued two extra queries per participant, which is slow for full classes.
+    """
+    now = timezone.now()
+    grouped: dict[int, dict] = {}
+    records = (
         session.attendance.select_related("member", "member__user")
-        .values("member_id")
-        .annotate(joins=Count("id"))
-        .order_by("member_id")
+        .order_by("member_id", "joined_at")
     )
-    result = []
-    for row in rows:
-        member = ClassroomMember.objects.filter(id=row["member_id"]).select_related("user").first()
-        intervals = list(
-            AttendanceRecord.objects.filter(session=session, member_id=row["member_id"]).values_list(
-                "joined_at", "left_at"
-            )
+    for record in records:
+        row = grouped.setdefault(
+            record.member_id,
+            {
+                "member_id": record.member_id,
+                "username": record.member.participant_name if record.member_id else "—",
+                "joins": 0,
+                "total_seconds": 0,
+            },
         )
-        total = 0
-        for joined, left in intervals:
-            end = left or timezone.now()
-            total += int((end - joined).total_seconds())
-        result.append({
-            "member_id": row["member_id"],
-            "username": member.participant_name if member else "—",
-            "joins": row["joins"],
-            "total_seconds": total,
-        })
-    return result
+        row["joins"] += 1
+        end = record.left_at or now
+        if end > record.joined_at:
+            row["total_seconds"] += int((end - record.joined_at).total_seconds())
+    return [grouped[key] for key in sorted(grouped)]

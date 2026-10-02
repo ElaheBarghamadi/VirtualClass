@@ -66,6 +66,5 @@ class Submission(models.Model):
 
     @property
     def student_name(self) -> str:
-        if self.member.display_name:
-            return self.member.display_name
-        return self.member.user.get_full_name() if self.member.user else "?"
+        """Roster-consistent name: guest name → account name → "مهمان"."""
+        return self.member.participant_name

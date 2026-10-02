@@ -351,7 +351,15 @@ class SharedFile(models.Model):
 # ---------------------------------------------------------------------------
 @receiver(post_delete, sender=SharedFile)
 def _remove_shared_file_from_storage(sender, instance: SharedFile, **kwargs) -> None:
-    try:
-        instance.file.delete(save=False)
-    except Exception:  # storage hiccup must not break the delete itself
-        pass
+    """Remove BOTH physical copies: the upload and the converted PDF.
+
+    Only deleting ``instance.file`` orphaned the LibreOffice-generated PDF
+    on disk forever (the row — the last reference to it — is already gone).
+    """
+    for field in ("file", "pdf_version"):
+        try:
+            stored = getattr(instance, field, None)
+            if stored:
+                stored.delete(save=False)
+        except Exception:  # storage hiccup must not break the delete itself
+            pass

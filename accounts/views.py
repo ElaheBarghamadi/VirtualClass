@@ -5,7 +5,6 @@ from django.contrib.auth import views as auth_views
 from django.contrib.auth.decorators import login_required
 from django.core.cache import cache
 from django.shortcuts import redirect, render
-from django.urls import reverse_lazy
 from django.views.decorators.http import require_http_methods
 
 from core.ratelimit import clear as rl_clear

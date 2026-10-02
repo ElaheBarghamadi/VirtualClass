@@ -30,7 +30,6 @@ from .serializers import (
 )
 from .services import (
     PermissionDenied,
-    active_members,
     attendance_summary,
     create_classroom,
     end_session,

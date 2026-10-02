@@ -5,7 +5,6 @@ import base64
 import io
 import json
 import zipfile
-from datetime import timedelta
 
 from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -28,8 +27,6 @@ from .services import (
     set_member_permission,
     set_member_role,
     set_member_muted,
-    mute_all,
-    remove_member,
     start_session,
 )
 
@@ -423,7 +420,7 @@ class FileUploadTests(TestCase):
         shared = SharedFile.objects.first()
         url = reverse("room:file_download", args=[self.classroom.room_code, shared.id])
 
-        outsider = make_user("f_outsider")
+        make_user("f_outsider")
         self.client.login(username="f_outsider", password=PASSWORD)
         self.assertEqual(self.client.get(url).status_code, 404)
 
@@ -485,7 +482,7 @@ class MediaTokenTests(TestCase):
         self.assertNotIn("microphone", claims["video"].get("canPublishSources") or [])
 
     def test_non_member_denied(self):
-        outsider = make_user("m_outsider")
+        make_user("m_outsider")
         self.client.login(username="m_outsider", password=PASSWORD)
         self.assertEqual(self.client.get(self.url).status_code, 403)
 
