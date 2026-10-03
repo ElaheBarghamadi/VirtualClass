@@ -1,0 +1,46 @@
+# TURN relay for VirtualClass
+# ===========================
+# In mesh mode (no LiveKit) browsers talk to each other directly.  That works
+# on a home network, but a corporate firewall or a mobile carrier that blocks
+# UDP leaves the classroom silent with no visible reason.  A TURN server is
+# the relay that fixes it — without touching the application code.
+#
+# Quick start:
+#   cp .env.example .env
+#   python3 -c "import secrets; print(secrets.token_hex(16))"   # -> TURN_SECRET
+#   $EDITOR .env          # paste the secret, set TURN_EXTERNAL_IP
+#   docker compose up -d
+#   docker compose logs -f
+#
+# Then publish the relay to Django:
+#   WEBRTC_ICE_SERVERS=[{"urls":["stun:turn.example.com:3478"]}, \
+#     {"urls":["turn:turn.example.com:3478?transport=udp","turn:turn.example.com:3478?transport=tcp"], \
+#      "username":"classroom","credential":"<TURN_SECRET>"}]
+#
+# Verify from a browser before a class: open
+#   https://webrtc.github.io/samples/src/content/peerconnection/trickle-ice/
+# enter only the turn: URI above and press "Gather candidates" — a candidate
+# of type "relay" must appear.
+
+services:
+  coturn:
+    image: coturn/coturn:latest
+    container_name: virtualclass-turn
+    restart: unless-stopped
+
+    # TURN needs one port for signalling plus a wide UDP range for media.
+    # Host networking keeps that simple; if you cannot use it, replace with:
+    #   ports: ["3478:3478/udp", "3478:3478/tcp", "49152-65535:49152-65535/udp"]
+    network_mode: host
+
+    # Port range must also be open in the host firewall (ufw / security group).
+    volumes:
+      - ./turnserver.conf:/etc/coturn/turnserver.conf:ro
+    command:
+      - -c=/etc/coturn/turnserver.conf
+      # The password lives in .env, never in this file.
+      - --user=classroom:${TURN_SECRET:?set TURN_SECRET in deploy/coturn/.env}
+      - --realm=${TURN_REALM:-turn.example.com}
+      # Behind NAT? Uncomment "external-ip" in turnserver.conf (an empty
+      # --external-ip= would make coturn refuse to start, so it is not a flag).
+      # Not needed when the host has a public IP directly on its interface.

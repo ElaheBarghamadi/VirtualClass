@@ -14,7 +14,7 @@ from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.db.models import Count, Q
-from django.http import FileResponse, Http404, HttpResponse, JsonResponse
+from django.http import FileResponse, Http404, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_http_methods, require_POST
 
@@ -29,7 +29,7 @@ from .forms import (
 )
 from .media import generate_media_token, media_config_payload, media_enabled
 from .models import Classroom, ClassroomSession, SharedFile
-from .permissions import PRIVILEGED_ROLES, Role, effective_permissions, is_privileged
+from .permissions import Role, effective_permissions, is_privileged
 from .services import (
     MAX_FILES_PER_CLASSROOM,
     ClassroomAccessError,
@@ -409,6 +409,18 @@ def _json_error(exc: Exception, status: int = 403) -> JsonResponse:
     return JsonResponse({"detail": str(exc)}, status=status)
 
 
+def _validation_message(exc: Exception) -> str:
+    """First user-facing message of a validator error.
+
+    ``ValidationError.message`` is deprecated (and gone in newer Django);
+    ``str(exc)`` on its own renders the whole list ("['…']") to the user.
+    """
+    messages = getattr(exc, "messages", None)
+    if messages:
+        return messages[0]
+    return str(exc)
+
+
 def _json_body(request) -> dict:
     """Parse a JSON request body safely.
 
@@ -491,11 +503,12 @@ def member_remove_view(request, room_code: str, member_id: int):
     try:
         body = _json_body(request)
         ban_minutes = int(body.get("ban_minutes") or 0)
+    except (TypeError, ValueError):
+        return JsonResponse({"detail": "ban_minutes نامعتبر است."}, status=400)
+    try:
         remove_member(classroom, request.user, member_id, ban_minutes=ban_minutes)
     except PermissionDenied as exc:
         return _json_error(exc)
-    except ValueError:
-        return JsonResponse({"detail": "ban_minutes نامعتبر است."}, status=400)
     return JsonResponse({"ok": True})
 
 
@@ -551,7 +564,11 @@ def presentation_view(request, room_code: str):
     classroom = get_object_or_404(Classroom, room_code=room_code)
     try:
         body = _json_body(request)
-        set_presentation(classroom, request.user, body.get("file_id"), int(body.get("page") or 1))
+        page = int(body.get("page") or 1)
+    except (TypeError, ValueError):
+        return JsonResponse({"detail": "page نامعتبر است."}, status=400)
+    try:
+        set_presentation(classroom, request.user, body.get("file_id"), page)
     except PermissionDenied as exc:
         return _json_error(exc)
     except ClassroomAccessError as exc:
@@ -571,7 +588,7 @@ def session_start_view(request, room_code: str):
     try:
         body = _json_body(request)
         session_id = int(body.get("session_id") or 0)
-    except ValueError:
+    except (TypeError, ValueError):
         return JsonResponse({"detail": "session_id نامعتبر است."}, status=400)
     session = None
     if session_id:
@@ -644,7 +661,7 @@ def file_upload_view(request, room_code: str):
     try:
         safe_name = validate_upload(upload, settings.MAX_UPLOAD_MB * 1024 * 1024)
     except Exception as exc:  # ValidationError from the validator
-        return JsonResponse({"detail": getattr(exc, "message", str(exc))}, status=400)
+        return JsonResponse({"detail": _validation_message(exc)}, status=400)
 
     shared = SharedFile.objects.create(
         classroom=classroom,

@@ -31,13 +31,20 @@ h2 { font-size: var(--fs-lg); }
 .small { font-size: var(--fs-sm); }
 code { background: var(--primary-soft); color: var(--text); padding: .1rem .4rem; border-radius: 6px; font-size: .85em; }
 
+/* Visually hidden until focused.  Using clip (instead of a huge negative
+   offset) keeps the element inside the viewport, so it can never create a
+   phantom horizontal scrollbar in RTL layouts. */
 .skip-link {
-    position: absolute; inset-inline-start: -9999px; top: 0;
+    position: absolute; inset-inline-start: 0; top: 0;
+    clip-path: inset(50%); width: 1px; height: 1px; overflow: hidden;
+    white-space: nowrap;
     background: var(--surface); color: var(--text); padding: .5rem 1rem;
     border-radius: 0 0 var(--radius-sm) var(--radius-sm); z-index: 100;
     box-shadow: var(--shadow);
 }
-.skip-link:focus { inset-inline-start: 0; }
+.skip-link:focus {
+    clip-path: none; width: auto; height: auto; overflow: visible; white-space: normal;
+}
 
 :where(a, button, input, select, textarea, [tabindex]):focus-visible {
     outline: none;
@@ -96,6 +103,51 @@ code { background: var(--primary-soft); color: var(--text); padding: .1rem .4rem
 .btn-block { width: 100%; margin-top: .5rem; }
 
 /* ---------- forms ---------- */
+/* Base control styling.  Zero-specificity selectors (`:where`) mean any
+   component rule (`.field input`, room panel inputs, …) still wins, but a
+   bare <input>/<textarea>/<select> dropped straight into a template is
+   never left unstyled — that shadowed the quiz/assignment authoring pages
+   and made them unusable in dark mode and on touch screens. */
+:where(input, textarea, select):where(
+    :not([type="checkbox"]):not([type="radio"]):not([type="range"])
+    :not([type="color"]):not([type="file"]):not([type="submit"])
+    :not([type="button"]):not([type="reset"]):not([type="hidden"])
+) {
+    font: inherit;
+    font-size: .95rem;
+    color: var(--text);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: .55rem .75rem;
+    min-height: var(--control-height-sm);
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    box-sizing: border-box;
+}
+:where(textarea) { min-height: 4rem; line-height: 1.6; resize: vertical; }
+:where(select) { cursor: pointer; }
+:where(input, textarea, select):where(
+    :not([type="checkbox"]):not([type="radio"]):not([type="range"])
+    :not([type="color"]):not([type="file"]):not([type="submit"])
+    :not([type="button"]):not([type="reset"]):not([type="hidden"])
+):focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+    border-color: var(--accent);
+}
+
+/* Labels dropped straight into a template (quiz/assignment authoring)
+   looked like plain body text next to their input.  Zero-specificity so
+   `.field label`, `.switch-row` and `.btn` keep their own styling. */
+:where(label:not(.switch-row):not(.switch):not(.btn)) {
+    display: block;
+    font-weight: 600;
+    font-size: .9rem;
+    margin: .75rem 0 .3rem;
+}
+
 .field { margin-bottom: 1rem; display: flex; flex-direction: column; }
 .field label { font-weight: 600; font-size: .9rem; margin-bottom: .3rem; }
 .field input, .field textarea, .field select {
@@ -135,6 +187,7 @@ code { background: var(--primary-soft); color: var(--text); padding: .1rem .4rem
 
 /* ---------- cards / layout ---------- */
 .card {
+    min-width: 0;
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius);
@@ -143,7 +196,10 @@ code { background: var(--primary-soft); color: var(--text); padding: .1rem .4rem
 }
 .page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; margin: 1.5rem 0 1rem; flex-wrap: wrap; }
 .action-bar { display: flex; gap: .6rem; flex-wrap: wrap; margin-bottom: 1.5rem; }
-.card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr)); gap: 1rem; }
+/* min() keeps the track from ever exceeding the container — without it a
+   300px minimum overflows phones narrower than ~332px (RTL: the overflow
+   lands off-screen to the left, where a scrollbar cannot reach it). */
+.card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); gap: 1rem; }
 .section-title { margin: 1.5rem 0 .75rem; font-size: 1.05rem; }
 .form-card { max-width: 640px; }
 .empty-state { text-align: center; padding: 2rem; color: var(--muted); }
@@ -167,9 +223,10 @@ code { background: var(--primary-soft); color: var(--text); padding: .1rem .4rem
 
 .link-box { display: flex; gap: .5rem; }
 .link-box input {
-    flex: 1; font: inherit; font-size: .82rem; padding: .45rem .6rem;
+    flex: 1 1 auto; min-width: 0; font: inherit; font-size: .82rem; padding: .45rem .6rem;
     border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--background);
     color: var(--muted); direction: ltr; text-align: left;
+    text-overflow: ellipsis;
 }
 .copy-btn { flex: none; }
 .copy-btn.copied { color: var(--success); border-color: var(--success); }
@@ -187,7 +244,7 @@ code { background: var(--primary-soft); color: var(--text); padding: .1rem .4rem
 .alert-info { background: var(--info-soft); color: var(--info); border-color: var(--info); }
 .alert-warning { background: var(--warning-soft); color: var(--warning); border-color: var(--warning); }
 
-.stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 1rem; margin-bottom: 1rem; }
+.stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr)); gap: 1rem; margin-bottom: 1rem; }
 .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem 1.25rem; display: flex; flex-direction: column; }
 .stat-value { font-size: 1.6rem; font-weight: 800; color: var(--primary); }
 .stat-label { color: var(--muted); font-size: var(--fs-sm); }
@@ -221,8 +278,11 @@ code { background: var(--primary-soft); color: var(--text); padding: .1rem .4rem
 .lobby-guest-note a { font-weight: 600; }
 
 /* ---------- data table ---------- */
-.table-wrap { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
-.data-table { width: 100%; border-collapse: collapse; font-size: .92rem; }
+/* Wrapped in .table-wrap so wide tables scroll on their own instead of
+   dragging the whole page sideways on a phone. */
+.table-wrap { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: 100%; min-width: 0; }
+.data-table { width: 100%; border-collapse: collapse; font-size: .92rem; min-width: 30rem; }
+.table-wrap caption { text-align: right; }
 .data-table th, .data-table td { padding: var(--row-padding); text-align: right; border-bottom: 1px solid var(--border); }
 .data-table th { color: var(--muted); font-weight: 600; }
 .data-table tr:hover td { background: var(--surface-2); }
@@ -232,7 +292,7 @@ code { background: var(--primary-soft); color: var(--text); padding: .1rem .4rem
 .hero h1 { font-size: clamp(1.5rem, 4vw, 2.3rem); }
 .hero-sub { color: var(--muted); max-width: 560px; margin: .5rem auto 1.5rem; }
 .hero-actions { display: flex; gap: .75rem; justify-content: center; flex-wrap: wrap; }
-.hero-features { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-top: 3rem; }
+.hero-features { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)); gap: 1rem; margin-top: 3rem; }
 .feature { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem; font-size: .9rem; }
 .feature span { display: block; font-size: 1.4rem; margin-bottom: .3rem; }
 
@@ -242,9 +302,19 @@ code { background: var(--primary-soft); color: var(--text); padding: .1rem .4rem
 .status-page h1 { margin: .75rem 0 .25rem; }
 .status-page .status-actions { margin-top: 1.5rem; display: flex; gap: .6rem; justify-content: center; flex-wrap: wrap; }
 
+/* ---------- mobile chrome ---------- */
 @media (max-width: 640px) {
-    .header-inner { flex-direction: column; align-items: flex-start; }
-    .main-nav { gap: .8rem; }
+    .header-inner { flex-wrap: wrap; gap: .35rem .75rem; padding: .55rem 0; }
+    .brand { font-size: 1rem; }
+    .main-nav { width: 100%; justify-content: flex-start; gap: .15rem .5rem; }
+    /* 44px tap targets: bare inline links were only ~26px tall. */
+    .main-nav a,
+    .main-nav .link-button {
+        display: inline-flex; align-items: center;
+        min-height: 44px; padding: 0 .35rem;
+    }
+    .main-nav .btn { min-height: 40px; padding: .4rem .9rem; }
+    .brand { min-height: 44px; }
 }
 
 /* ==========================================================================
@@ -259,10 +329,11 @@ code { background: var(--primary-soft); color: var(--text); padding: .1rem .4rem
 .switch-row input { width: 18px; height: 18px; accent-color: var(--primary); }
 
 .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; align-items: start; }
-/* grid children default to min-width:auto — a wide table in either column
-   would then force the whole track (and page) past the viewport in RTL.
-   min-width:0 lets the track shrink and .table-wrap scroll instead. */
+/* Grid items default to min-width:auto, so a wide child (e.g. a data table)
+   used to stretch the column past the viewport in RTL — 0 lets it shrink
+   and .table-wrap scroll instead. */
 .two-col > * { min-width: 0; }
+.card-grid > *, .stat-row > * { min-width: 0; }
 @media (max-width: 860px) { .two-col { grid-template-columns: 1fr; } }
 
 .session-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .5rem; }
@@ -278,6 +349,7 @@ code { background: var(--primary-soft); color: var(--text); padding: .1rem .4rem
 .lobby-preview video {
     width: 220px; height: 145px; object-fit: cover; background: var(--surface-3);
     border-radius: var(--radius); border: 1px solid var(--border); display: block;
+    transform: scaleX(-1);   /* pre-join preview is a mirror, like every other app */
 }
 .cam-state {
     position: absolute; inset-inline: 6px; bottom: 6px;
@@ -324,3 +396,66 @@ code { background: var(--primary-soft); color: var(--text); padding: .1rem .4rem
 .option-row { display: flex; gap: .5rem; align-items: center; margin-top: .45rem; }
 .option-row input[type=text] { flex: 1; }
 .grade-form { margin-top: .6rem; border-top: 1px dashed var(--border); padding-top: .6rem; }
+
+/* ==========================================================================
+   Small-screen pass — every page must stay usable down to 320px.
+   Touch-friendly targets, no content wider than the viewport, and buttons
+   that fill the row instead of sitting in a cramped cluster.
+   ========================================================================== */
+@media (max-width: 480px) {
+    .container { width: min(1100px, 100% - 1.5rem); }
+
+    /* inline text links get a thumb-sized hit area without shifting layout */
+    .auth-alt a,
+    .lobby-guest-note a,
+    .empty-state a { display: inline-block; padding: .45rem .25rem; margin: -.45rem -.25rem; }
+
+    h1 { font-size: 1.35rem; }
+    .page-head { margin: 1rem 0 .75rem; gap: .5rem; }
+
+    .card { padding: 1rem; }
+    .empty-state { padding: 1.25rem .75rem; }
+    .stat-row { gap: .5rem; }
+    .stat-card { padding: .75rem .9rem; }
+    .stat-value { font-size: 1.35rem; }
+
+    /* action rows become a comfortable 2-up grid instead of a tight row */
+    .action-bar { gap: .5rem; }
+    .action-bar > .btn,
+    .action-bar > form { flex: 1 1 calc(50% - .25rem); }
+    .action-bar > form > .btn { width: 100%; }
+    .card-actions { gap: .4rem; }
+    .card-actions .btn { flex: 1 1 calc(50% - .2rem); }
+
+    /* form controls: full-width, thumb-sized, 16px text (no iOS zoom-on-focus) */
+    .btn { min-height: 44px; }
+    .btn-sm { min-height: 38px; padding: .4rem .8rem; }
+    .btn-lg { min-height: 48px; }
+    .field input, .field textarea, .field select { font-size: 1rem; padding: .6rem .75rem; }
+    .switch-row { min-height: 44px; padding: .6rem 0; }
+    .switch-row input { width: 20px; height: 20px; }
+
+    .auth-card { padding: 1.25rem 1rem; margin: 1.25rem auto; }
+    .status-page { margin: 1.5rem auto; padding-inline: .5rem; }
+    .lobby-wrapper { padding: 1.25rem 0; }
+    .hero { padding: 2.25rem 0 1.5rem; }
+    .hero-actions .btn { flex: 1 1 100%; }
+
+    .meta-list dt { min-width: 5.5rem; }
+    .data-table { font-size: .86rem; }
+    .session-list li { gap: .4rem .6rem; }
+    .link-box { flex-wrap: nowrap; }
+    .copy-btn { flex: none; }
+
+    .option-row { flex-wrap: nowrap; }
+    .option-row input[type="text"] { min-width: 0; }
+    .quiz-nav { gap: .5rem; }
+    .quiz-nav .btn { flex: 1; }
+}
+
+/* Very narrow / landscape phones: keep the primary row actions visible. */
+@media (max-width: 360px) {
+    .action-bar > .btn,
+    .action-bar > form,
+    .card-actions .btn { flex: 1 1 100%; }
+}

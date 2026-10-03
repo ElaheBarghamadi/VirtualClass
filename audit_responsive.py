@@ -187,17 +187,36 @@ def room_interactive(page, vp_name, shots):
                 # d) Escape closes the drawer
                 page.keyboard.press("Escape"); page.wait_for_timeout(350)
                 check("Escape closes drawer", False)
-                # e) outside click (visible stage area, right of the drawer) closes it
+                # e) outside click closes it.  The drawer opens a dimmed
+                # backdrop over the stage (z-index above it), so the real
+                # outside-click surface — and what a user actually taps —
+                # is the backdrop.  On very narrow phones (≤420px) the
+                # drawer is a full-width sheet: no outside surface exists
+                # there, so verify its dedicated ✕ instead.
                 page.click("#btn-people", timeout=2500); page.wait_for_timeout(300)
-                box = page.locator(".stage").bounding_box()
-                page.click(".stage", position={"x": box["width"] - 12, "y": 220}, timeout=2500)
-                page.wait_for_timeout(350)
-                check("outside click closes drawer", False)
+                vp_w = page.viewport_size["width"]
+                drawer_w = page.locator("#room-side").bounding_box()["width"]
+                if drawer_w < vp_w - 30:
+                    # exposed backdrop strip beside the drawer (drawer hugs
+                    # the inline-end side in RTL; tap the opposite edge)
+                    page.click("#drawer-backdrop",
+                               position={"x": vp_w - 30, "y": 240}, timeout=2500)
+                    page.wait_for_timeout(350)
+                    check("outside click (backdrop) closes drawer", False)
+                else:
+                    page.click("#drawer-close", timeout=2500)
+                    page.wait_for_timeout(350)
+                    check("close button closes full-width sheet", False)
             except Exception as e:
                 findings.append({"vp": vp_name, "page": "room-drawer-close",
                                  "error": str(e).splitlines()[0][:200]})
-            # ensure closed for the following states
-            page.evaluate("document.getElementById('room-side').classList.remove('drawer-open')")
+            # ensure closed for the following states (also drop the
+            # backdrop the drawer opens — its normal close path in
+            # room.js clears it; this raw cleanup must too)
+            page.evaluate(
+                "document.getElementById('room-side').classList.remove('drawer-open');"
+                "const bd = document.getElementById('drawer-backdrop');"
+                "if (bd) { bd.classList.remove('open'); bd.setAttribute('aria-hidden','true'); }")
             page.wait_for_timeout(300)
         except Exception as e:
             findings.append({"vp": vp_name, "page": "room-drawer", "error": str(e)})

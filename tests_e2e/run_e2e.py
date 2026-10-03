@@ -158,6 +158,15 @@ def run(base: str, code: str) -> int:
               pg_o.evaluate(f"() => document.querySelector('{sel} .s-muted')?.classList.contains('on')") is True)
         released = pg_s.evaluate("() => window.__media?.impl?.localStream?.getAudioTracks?.().length ?? -1")
         check("force-mute released the mic device", released in (0, -1), str(released))
+        # The revoked right must also lock the local control — otherwise the
+        # button silently turns the mic back on against the host's decision.
+        pg_s.click("#btn-mic"); pg_s.wait_for_timeout(1200)
+        relock = pg_s.evaluate("""() => ({
+            tracks: window.__media?.impl?.localStream?.getAudioTracks?.().length ?? 0,
+            off: document.getElementById('btn-mic')?.classList.contains('off'),
+        })""")
+        check("muted member cannot re-enable the mic locally",
+              relock["tracks"] == 0 and relock["off"] is True, str(relock))
 
         # ---------- owner permissions dialog (full per-member control) ----------
         pg_o.click(f"{sel} .hc-btn >> nth=2")
@@ -369,6 +378,29 @@ def run(base: str, code: str) -> int:
         pg_s.click("#btn-camera"); pg_s.wait_for_timeout(2500)
         check("student camera produced a track",
               pg_s.evaluate("() => window.__media?.impl?.localStream?.getVideoTracks?.().length ?? 0") == 1)
+        # The picture must really be on screen, and every voice must have
+        # exactly ONE path to the speakers (the <audio> element), never two.
+        pic = pg_s.evaluate("""() => {
+            const v = document.querySelector('.tile[data-self="1"] video');
+            return {
+                decoded: v ? v.videoWidth : 0,
+                playing: v ? !v.paused && v.readyState > 0 : false,
+                muted: v ? v.muted : false,
+                selfMarked: !!document.querySelector('.tile[data-self="1"]'),
+                allVideosMuted: [...document.querySelectorAll('.tile video')].every(x => x.muted),
+                audible: [...document.querySelectorAll('audio')].filter(a => !a.muted && !a.paused).length,
+                remotes: document.querySelectorAll('.tile:not([data-self="1"])').length,
+            };
+        }""")
+        check("self-view renders real frames", pic["decoded"] > 0, str(pic))
+        check("self-view is playing and muted", pic["playing"] and pic["muted"] is True, str(pic))
+        check("own tile is flagged for mirroring", pic["selfMarked"] is True, str(pic))
+        check("no doubled audio path",
+              pic["allVideosMuted"] and pic["audible"] <= max(1, pic["remotes"]), str(pic))
+        # The reachability watchdog must never fire on a link that IS up —
+        # a false "connection failed" would wreck a perfectly good class.
+        check("no false unreachable-peer notice while connected",
+              pg_s.evaluate("() => !document.querySelector('.tile.conn-failed')"))
         pg_s.evaluate("() => window.__switchView('whiteboard')"); pg_s.wait_for_timeout(1500)
         check("PiP camera visible over whiteboard view",
               pg_s.evaluate("() => !document.getElementById('cam-pip')?.classList.contains('hidden')"))

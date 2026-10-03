@@ -2,6 +2,7 @@
  * toast.js — lightweight notification component (accessible, RTL-aware).
  */
 let container = null;
+let lastToast = { text: '', level: '', at: 0 };
 
 function ensureContainer() {
     if (container) return container;
@@ -20,6 +21,16 @@ function ensureContainer() {
  * @param {number} [ms]
  */
 export function toast(text, level = 'info', ms = 4200) {
+    // Several paths can report the same fact at once (e.g. the server sends a
+    // `notification` *and* a `participant_muted` for one mute).  Collapse
+    // repeats inside a short window instead of stacking identical toasts.
+    if (!text) return;
+    const now = Date.now();
+    if (lastToast.text === text && lastToast.level === level && now - lastToast.at < 1500) {
+        lastToast.at = now;
+        return;
+    }
+    lastToast = { text, level, at: now };
     const box = ensureContainer();
     const el = document.createElement('div');
     el.className = `toast toast-${level}`;

@@ -19,6 +19,10 @@
     background: var(--room-bg);
     color: var(--room-text);
     overflow: hidden;
+    /* Height of the floating control bar.  It wraps to several rows on
+       phones, so room.js measures it and the layout reserves the same
+       space — nothing hides underneath it. */
+    --bar-h: 76px;
     margin: 0;
     border: none;
     border-radius: 0;
@@ -39,8 +43,9 @@ body.full-page .messages {
     padding: .45rem 1rem;
     background: var(--room-surface);
     border-bottom: 1px solid var(--room-border);
-    gap: 1rem;
+    gap: .4rem .75rem;
     flex: none;
+    flex-wrap: wrap;
 }
 .room-title { display: flex; align-items: center; gap: .5rem; min-width: 0; flex-wrap: wrap; }
 .room-title h1 { margin: 0; font-size: .95rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -67,12 +72,14 @@ body.full-page .messages {
 
 /* ---------- body ---------- */
 .room-body { flex: 1; display: grid; grid-template-columns: 1fr 330px; min-height: 0; position: relative; }
-/* position:relative → the mobile drawer anchors below the room header
-   (its top edge starts at the body, not at the top of .room) */
-/* bottom padding keeps content clear of the floating control bar — the bar
-   is 1..3 rows depending on viewport, so --bar-space is synced to its real
-   measured height by room.js (syncBarSpace) on load/resize */
-.room-main { padding: .8rem .8rem var(--bar-space, 4.75rem); min-width: 0; display: flex; }
+/* position:relative → the mobile drawer/backdrop anchor below the room
+   header (their top edge starts at the body, not at the top of .room) */
+/* bottom padding keeps content clear of the floating control bar — --bar-h
+   is synced to the bar's real measured height by room.js */
+.room-main {
+    padding: .8rem .8rem calc(var(--bar-h) + 1.25rem);
+    min-width: 0; display: flex;
+}
 .stage { flex: 1; display: flex; flex-direction: column; min-height: 0; position: relative; }
 .stage-view { flex: 1; display: flex; flex-direction: column; min-height: 0; gap: .5rem; }
 .hidden { display: none !important; }
@@ -133,7 +140,24 @@ body.full-page .messages {
 .tile.mini { grid-row: auto; grid-column: 2; min-height: 80px; }
 .tiles.has-focus .tile.mini { grid-column: 2; }
 .tile.strip-hidden { display: none; }
+.tile.conn-failed { border-color: var(--warning); }
+/* "Could not reach this classmate" — explains itself instead of showing a
+   mysterious empty tile, and offers one more attempt. */
+.tile-conn {
+    position: absolute; inset: 0; z-index: 3;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: .45rem; padding: .9rem; text-align: center;
+    background: color-mix(in srgb, var(--surface-3) 93%, transparent);
+    color: var(--text); font-size: .78rem; line-height: 1.7;
+}
+.tile-conn p { margin: 0; font-weight: 700; }
+.tile-conn small { color: var(--room-muted); font-size: .72rem; max-width: 26ch; }
+.tile-conn .btn { margin-top: .3rem; }
 .tile video { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* Self-view behaves like a mirror (what every conferencing app does); a
+   remote camera is never flipped — that would show mirrored text/hands. */
+.tile[data-self="1"] video,
+.cam-pip.is-local video { transform: scaleX(-1); }
 .tile-placeholder {
     position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
     font-size: 2rem; font-weight: 800; color: var(--accent-contrast);
@@ -155,14 +179,25 @@ body.full-page .messages {
 }
 .tile-fs:hover, .tile:hover .tile-fs { opacity: 1; }
 .tile-fs:focus-visible { outline: 2px solid var(--accent); opacity: 1; }
+/* Touch devices get a thumb-sized fullscreen button that is always
+   visible — a 16×14 hit area is unusable with a finger. */
+@media (hover: none), (max-width: 900px) {
+    .tile-fs {
+        width: 32px; height: 32px; opacity: .8;
+        display: inline-flex; align-items: center; justify-content: center;
+        background: color-mix(in srgb, var(--background) 55%, transparent);
+    }
+}
 
 /* ---------- picture-in-picture camera ---------- */
 /* Floating mini camera shown over the full-stage views (whiteboard,
    presentation, screen share) so the speaker stays visible. */
 .cam-pip {
     position: fixed;
-    bottom: calc(var(--bar-space, 96px) + 4px);
-    left: 16px;
+    bottom: calc(var(--bar-h, 76px) + 1.25rem + env(safe-area-inset-bottom, 0px));
+    /* Logical, not physical: in RTL the side panel sits on the LEFT, so a
+       hard `left` used to park the floating camera on top of the chat. */
+    inset-inline-start: 16px;
     z-index: 60;
     width: 220px;
     border-radius: var(--radius);
@@ -197,7 +232,7 @@ body.full-page .messages {
 .cam-pip-close:hover { background: color-mix(in srgb, #000 75%, transparent); }
 .cam-pip-close:focus-visible { outline: 2px solid var(--accent); }
 @media (max-width: 640px) {
-    .cam-pip { width: 140px; left: 8px; } /* height/bottom follows --bar-space */
+    .cam-pip { width: 130px; inset-inline-start: 8px; }
 }
 
 /* ---------- fullscreen ---------- */
@@ -438,7 +473,7 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
 .file-list { list-style: none; margin: 0; padding: .5rem; overflow-y: auto; flex: 1; display: grid; gap: .4rem; align-content: start; }
 .file-empty {
     padding: 1.2rem .5rem; text-align: center;
-    color: var(--text-muted); font-size: .82rem;
+    color: var(--muted); font-size: .82rem;
     border: 1px dashed var(--room-border); border-radius: var(--radius-sm);
 }
 .file-item {
@@ -455,7 +490,7 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
 .file-delete {
     border: none; background: transparent; cursor: pointer;
     font-size: .9rem; line-height: 1; padding: .3rem;
-    border-radius: var(--radius-sm); color: var(--text-muted);
+    border-radius: var(--radius-sm); color: var(--muted);
     opacity: .55; transition: opacity .12s ease, background .12s ease;
 }
 .file-delete:hover { opacity: 1; background: color-mix(in srgb, var(--danger, #e11d48) 14%, transparent); }
@@ -480,39 +515,77 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
    ~half the viewport (abs-pos available space), forcing an extra wrap row
    on phones — anchor with left/right:0 + width:max-content instead. */
 .room-controls {
+    /* iOS-style floating "island": frosted glass, hairline border, layered
+       shadow.  Buttons never wrap — the rail scrolls sideways instead, so
+       the bar is exactly one row tall on every screen size. */
+    --glass: color-mix(in srgb, var(--room-surface) 62%, transparent);
+    --glass-line: color-mix(in srgb, var(--room-border) 55%, transparent);
     position: absolute;
-    bottom: 1rem;
-    left: 0;
-    right: 0;
-    width: max-content;
+    bottom: calc(.9rem + env(safe-area-inset-bottom, 0px));
+    left: 0; right: 0;
     margin-inline: auto;
-    z-index: 45; /* stays above the side drawer (35) so the bar — including
-                    the drawer's own toggle buttons — is never covered */
-    display: flex; justify-content: center; align-items: center; gap: .35rem;
-    padding: .5rem .7rem;
-    background: color-mix(in srgb, var(--room-surface) 86%, transparent);
-    backdrop-filter: blur(14px);
-    -webkit-backdrop-filter: blur(14px);
-    border: 1px solid var(--room-border);
-    border-radius: var(--radius-pill);
-    box-shadow: var(--shadow-lg);
-    max-width: calc(100vw - 1.5rem);
-    flex-wrap: wrap;
+    width: fit-content;
+    max-width: calc(100% - .75rem);
+    z-index: 30;
+    padding: 5px;
+    background: var(--glass);
+    -webkit-backdrop-filter: blur(26px) saturate(180%);
+    backdrop-filter: blur(26px) saturate(180%);
+    border: .5px solid var(--glass-line);
+    border-radius: 28px;
+    box-shadow:
+        0 1px 0 0 color-mix(in srgb, #fff 22%, transparent) inset,
+        0 1px 2px rgba(0, 0, 0, .10),
+        0 10px 34px rgba(0, 0, 0, .18);
+    overflow: visible; /* the "more" menu pops out of the bar */
 }
+/* Edge fades tell the user the rail continues past the screen. */
+.room-controls::before,
+.room-controls::after {
+    content: ""; position: absolute; top: 5px; bottom: 5px; width: 26px;
+    border-radius: 28px;
+    pointer-events: none; z-index: 2; opacity: 0;
+    transition: opacity .22s ease;
+}
+.room-controls::before { inset-inline-start: 5px; background: linear-gradient(to right, var(--glass), transparent); }
+.room-controls::after  { inset-inline-end: 5px;  background: linear-gradient(to left,  var(--glass), transparent); }
+:dir(rtl) .room-controls::before { background: linear-gradient(to left,  var(--glass), transparent); }
+:dir(rtl) .room-controls::after  { background: linear-gradient(to right, var(--glass), transparent); }
+.room-controls.can-scroll-start::before { opacity: 1; }
+.room-controls.can-scroll-end::after { opacity: 1; }
 .room-controls.screen-active { border-color: var(--success); }
-.ctrl-sep { width: 1px; height: 22px; background: var(--room-border); margin: 0 .15rem; flex: none; }
+
+.ctrl-scroll {
+    display: flex; align-items: center; flex-wrap: nowrap;
+    gap: 5px; padding: 2px;
+    overflow-x: auto; overflow-y: hidden;
+    scroll-behavior: smooth;
+    overscroll-behavior-x: contain;
+    scroll-snap-type: x proximity;
+    scrollbar-width: none; -ms-overflow-style: none;
+    -webkit-overflow-scrolling: touch;
+}
+.ctrl-scroll::-webkit-scrollbar { display: none; }
+.ctrl-sep {
+    width: 1px; height: 24px; flex: none; margin: 0 2px;
+    background: color-mix(in srgb, currentColor 16%, transparent);
+    border-radius: 1px;
+}
 .ctrl-btn {
     position: relative;
-    width: 44px; height: 44px; flex: none;
+    width: 46px; height: 46px; flex: none;
+    scroll-snap-align: center;
     border-radius: 50%;
     background: transparent; border: 1px solid transparent;
     cursor: pointer; color: var(--room-text);
     display: inline-flex; align-items: center; justify-content: center;
-    transition: background var(--speed) var(--ease), color var(--speed) var(--ease), transform .05s ease;
+    /* Apple-ish press physics: quick, springy, never sluggish. */
+    transition: background .16s var(--ease), color .16s var(--ease),
+                transform .22s cubic-bezier(.16, 1, .3, 1), opacity .16s var(--ease);
 }
 .ctrl-btn .ic {
-    width: 20px; height: 20px;
-    fill: none; stroke: currentColor; stroke-width: 2;
+    width: 21px; height: 21px;
+    fill: none; stroke: currentColor; stroke-width: 1.8;
     stroke-linecap: round; stroke-linejoin: round;
 }
 /* on/off icon states (mic/camera): aria-pressed + .active drive them,
@@ -520,11 +593,15 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
 .ctrl-btn .icon-on { display: none; }
 .ctrl-btn.active .icon-on { display: block; }
 .ctrl-btn.active .icon-off { display: none; }
-.ctrl-btn:hover { background: var(--surface-2); }
+.ctrl-btn:hover { background: color-mix(in srgb, currentColor 9%, transparent); }
 .ctrl-btn:focus-visible { outline: none; box-shadow: var(--focus-ring); }
-.ctrl-btn:active { transform: scale(.94); }
-.ctrl-btn.active { background: var(--accent); color: var(--accent-contrast); }
-.ctrl-btn.off { opacity: .38; cursor: not-allowed; }
+.ctrl-btn:active { transform: scale(.88); }
+.ctrl-btn.active {
+    background: var(--accent); color: var(--accent-contrast);
+    box-shadow: 0 1px 0 0 color-mix(in srgb, #fff 28%, transparent) inset,
+                0 3px 10px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.ctrl-btn.off { opacity: .34; cursor: not-allowed; }
 
 /* live microphone volume bar inside the mic button — width follows the
    real speaking level (--mic-level, set by mesh.js/media.js at ~60fps) */
@@ -538,24 +615,69 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
     transition: transform .07s linear;
     pointer-events: none;
 }
-.ctrl-exit { background: var(--danger); color: var(--on-primary); border-radius: var(--radius-pill); width: 52px; }
-.ctrl-exit:hover { background: var(--danger); filter: brightness(.9); }
+.ctrl-exit {
+    background: var(--danger); color: var(--on-primary);
+    border-radius: var(--radius-pill); width: 54px;
+    box-shadow: 0 1px 0 0 color-mix(in srgb, #fff 22%, transparent) inset,
+                0 3px 10px color-mix(in srgb, var(--danger) 38%, transparent);
+}
+.ctrl-exit:hover { background: var(--danger); filter: brightness(1.06); }
+.ctrl-exit:active { filter: brightness(.92); }
 
 /* ---------- more menu ---------- */
+/* iOS context menu: frosted glass, grouped rows, spring-in from the bar. */
 .more-menu {
-    position: absolute; bottom: calc(100% + 8px); inset-inline-end: 1rem;
-    background: var(--room-surface); border: 1px solid var(--room-border);
-    border-radius: var(--radius); box-shadow: var(--shadow-lg);
-    min-width: 220px; padding: .35rem; z-index: 40;
-    display: grid;
+    position: absolute; bottom: calc(100% + 10px); inset-inline-end: 0;
+    z-index: 40;
+    min-width: 268px; padding: 5px;
+    display: grid; gap: 5px;
+    background: color-mix(in srgb, var(--room-surface) 80%, transparent);
+    -webkit-backdrop-filter: blur(30px) saturate(180%);
+    backdrop-filter: blur(30px) saturate(180%);
+    border: .5px solid color-mix(in srgb, var(--room-border) 55%, transparent);
+    border-radius: 18px;
+    box-shadow:
+        0 1px 0 0 color-mix(in srgb, #fff 20%, transparent) inset,
+        0 18px 46px rgba(0, 0, 0, .26),
+        0 2px 8px rgba(0, 0, 0, .16);
+    opacity: 0;
+    transform: translateY(10px) scale(.96);
+    transform-origin: bottom center;
+    transition: opacity .16s ease, transform .34s cubic-bezier(.16, 1, .3, 1);
 }
+.more-menu.show { opacity: 1; transform: none; }
+.menu-group {
+    display: grid; gap: 1px;
+    padding-bottom: 5px;
+    border-bottom: .5px solid color-mix(in srgb, var(--room-border) 60%, transparent);
+}
+.menu-group:last-child { padding-bottom: 0; border-bottom: none; }
 .more-menu button {
+    display: flex; align-items: center; gap: .6rem;
+    width: 100%; min-height: 44px;
     background: none; border: none; color: var(--room-text); font: inherit;
-    font-size: .86rem; text-align: right; padding: .55rem .7rem;
-    border-radius: var(--radius-sm); cursor: pointer;
+    font-size: .88rem; text-align: right; padding: .55rem .7rem;
+    border-radius: 11px; cursor: pointer;
+    transition: background .12s ease, color .12s ease;
 }
-.more-menu button:hover { background: var(--surface-2); }
-.more-menu button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.more-menu button .mi {
+    width: 19px; height: 19px; flex: none;
+    fill: none; stroke: currentColor; stroke-width: 1.8;
+    stroke-linecap: round; stroke-linejoin: round; opacity: .9;
+}
+.more-menu button span { flex: 1; }
+.more-menu button:hover,
+.more-menu button:focus-visible {
+    background: color-mix(in srgb, var(--accent) 15%, transparent);
+    outline: none;
+}
+.more-menu button:focus-visible { box-shadow: var(--focus-ring); }
+.more-menu button:active { background: color-mix(in srgb, var(--accent) 24%, transparent); }
+.more-menu button.danger { color: var(--danger); }
+.more-menu button.danger:hover,
+.more-menu button.danger:focus-visible {
+    background: color-mix(in srgb, var(--danger) 13%, transparent);
+}
 
 /* ---------- dialogs ---------- */
 .app-dialog {
@@ -639,14 +761,43 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
 .toast-close { background: none; border: none; color: var(--muted); font-size: 1.1rem; cursor: pointer; }
 
 /* ---------- responsive ---------- */
+/* Drawer close affordance — only meaningful while the panel is a drawer. */
+.drawer-close {
+    display: none;
+    flex: none; background: none; border: none; cursor: pointer;
+    color: var(--room-muted); font-size: 1rem; line-height: 1;
+    width: 40px; height: 40px; border-radius: var(--radius-sm);
+    align-items: center; justify-content: center;
+}
+.drawer-close:hover { color: var(--room-text); background: var(--surface-2); }
+.drawer-close:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+@media (max-width: 900px) { .drawer-close { display: inline-flex; } }
+
+/* Drawer backdrop — tap (or Escape) anywhere outside the side panel to
+   close it.  Without it the panel was a dead end on touch devices. */
+.drawer-backdrop {
+    position: absolute; inset: 0; z-index: 34;
+    inset-block-end: calc(var(--bar-h) + .75rem + env(safe-area-inset-bottom, 0px));
+    background: color-mix(in srgb, #000 42%, transparent);
+    opacity: 0; pointer-events: none;
+    transition: opacity .22s ease;
+}
+.drawer-backdrop.open { opacity: 1; pointer-events: auto; }
+
 @media (max-width: 900px) {
     .room-body { grid-template-columns: 1fr; grid-template-rows: 1fr; }
     .room-side {
-        position: absolute; inset-block: 0; inset-inline-end: 0; width: min(330px, 86%);
-        transform: translateX(100%); transition: transform .22s ease; z-index: 35;
+        position: absolute;
+        inset-block-start: 0;
+        inset-block-end: calc(var(--bar-h) + 1.25rem + env(safe-area-inset-bottom, 0px));
+        inset-inline-end: 0; width: min(330px, 86%);
+        transform: translateX(100%); z-index: 35;
         border-inline-start: 1px solid var(--room-border);
         padding-bottom: var(--bar-space, 6rem); /* clear the floating control bar */
+        visibility: hidden;
+        transition: transform .22s ease, visibility .22s ease;
     }
+    .room-side.drawer-open { visibility: visible; }
     [dir="rtl"] .room-side { transform: translateX(-100%); }
     .room-side.drawer-open { transform: none !important; box-shadow: var(--shadow-lg); }
     .room-controls { gap: .25rem; } /* keep the bar on one row as long as possible */
@@ -656,18 +807,58 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
 }
 @media (min-width: 901px) {
     .side-toggle { display: none; }
+    .drawer-backdrop { display: none; }
 }
 @media (max-width: 560px) {
-    .room-controls { gap: .15rem; padding: .4rem .5rem; bottom: .6rem; }
-    .ctrl-btn { width: 40px; height: 40px; }
-    .ctrl-btn .ic { width: 18px; height: 18px; }
+    .ctrl-btn { width: 44px; height: 44px; }
+    .ctrl-btn .ic { width: 20px; height: 20px; }
+    .ctrl-exit { width: 50px; }
     .ctrl-sep { margin: 0 .05rem; }
     .room-title h1 { font-size: .85rem; }
+    .room-clock { font-size: .82rem; }
     .conn-pill .conn-text { display: none; }
     .tiles.has-focus { grid-template-columns: 1fr 90px; }
-    .more-menu { inset-inline-end: .5rem; min-width: 190px; }
     .stage-toolbar { gap: .1rem; padding: .15rem; }
     .layout-btn { padding: .4rem .65rem; font-size: .7rem; }
+    /* the menu becomes an iOS action sheet above the bar */
+    .more-menu {
+        bottom: calc(100% + 10px);
+        inset-inline: 0;
+        min-width: 0; width: 100%;
+    }
+    .more-menu button { padding: .7rem .8rem; font-size: .92rem; min-height: 48px; }
+}
+@media (max-width: 420px) {
+    .room-side { width: 100%; border-inline-start: none; }
+}
+
+/* Short/landscape viewports: tiles shrink instead of being clipped. */
+@media (max-height: 520px) {
+    .tile { min-height: 72px; }
+    .room-header { padding: .3rem .75rem; }
+}
+
+/* Dialogs: never taller than the viewport, reachable on a phone. */
+@media (max-width: 640px) {
+    .app-dialog {
+        width: calc(100% - 1rem);
+        max-width: none;
+        max-height: calc(100dvh - 2rem);
+        margin: auto;
+    }
+    .app-dialog-body { max-height: calc(100dvh - 12rem); padding: .5rem 1rem; }
+    .app-dialog-head { padding: .9rem 1rem .3rem; }
+    .app-dialog-actions { padding: .7rem 1rem .9rem; }
+    .app-dialog-actions .btn { flex: 1; min-height: 44px; }
+    .pres-tools { gap: .1rem; }
+    .presentation-nav { flex-wrap: wrap; }
+    .wb-toolbar { gap: .15rem; padding: .3rem .4rem; }
+    .wb-tool, .wb-action { min-width: 38px; min-height: 38px; padding: .3rem .4rem; }
+    .participant { gap: .4rem; }
+    .host-controls { gap: .25rem; }
+    .hc-btn { padding: .35rem .55rem; font-size: .82rem; }
+    .file-item { flex-wrap: wrap; }
+    .file-actions { flex-wrap: wrap; }
 }
 
 /* office files with a server-side PDF conversion */
@@ -740,7 +931,7 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
     padding: .4rem .6rem; background: var(--surface-2); border-radius: var(--radius-md);
     font-size: .9rem;
 }
-.quiz-rank { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.quiz-rank { color: var(--muted); font-variant-numeric: tabular-nums; }
 
 /* ================= recording button ================= */
 #btn-record { position: relative; }

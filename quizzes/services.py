@@ -60,9 +60,10 @@ def results_payload(run: QuizRun) -> list[dict]:
     for ans in answers:
         row = per_member.setdefault(ans.member_id, {
             "identity": ans.member.identity,
-            "name": ans.member.display_name or (
-                ans.member.user.get_full_name() if ans.member.user else "?"
-            ),
+            # participant_name = guest name → account name → "مهمان".
+            # get_full_name() returned "" for users who only set a username,
+            # which left the scoreboard full of blank names.
+            "name": ans.member.participant_name,
             "score": 0,
             "answered": 0,
         })
@@ -160,6 +161,5 @@ def end_quiz(classroom: Classroom, member: ClassroomMember, run_id: int) -> list
 
 
 def _member_name(member: ClassroomMember) -> str:
-    if member.display_name:
-        return member.display_name
-    return member.user.get_full_name() if member.user else "?"
+    """Same identity rules as the roster (see ClassroomMember.participant_name)."""
+    return member.participant_name
