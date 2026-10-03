@@ -138,9 +138,12 @@ class WhiteboardImpl {
 
     // ------------------------------------------------------------ tools
     _bindToolbar() {
-        document.querySelectorAll('.wb-tool').forEach((btn) => {
+        // Scope strictly to OUR toolbar: the presentation toolbar reuses the
+        // .wb-tool/.wb-action classes, and unscoped handlers used to fight
+        // over `active` states (and set this.tool to undefined).
+        document.querySelectorAll('.wb-toolbar .wb-tool').forEach((btn) => {
             btn.addEventListener('click', () => {
-                document.querySelectorAll('.wb-tool').forEach((b) => {
+                document.querySelectorAll('.wb-toolbar .wb-tool').forEach((b) => {
                     b.classList.remove('active');
                     b.setAttribute('aria-pressed', 'false');
                 });
@@ -149,7 +152,7 @@ class WhiteboardImpl {
                 this.tool = btn.dataset.tool;
             });
         });
-        document.querySelectorAll('.wb-action').forEach((btn) => {
+        document.querySelectorAll('.wb-toolbar .wb-action').forEach((btn) => {
             btn.addEventListener('click', () => this.run(btn.dataset.action));
         });
         document.getElementById('wb-color')?.addEventListener('input', (e) => { this.color = e.target.value; });
@@ -670,6 +673,7 @@ class WhiteboardImpl {
     // ------------------------------------------------------------ actions
     run(action) {
         if (action === 'undo') {
+            if (!this.canDraw) return this._deny();
             // undo only touches this user's ops on the CURRENT page
             for (let i = this.myUndo.length - 1; i >= 0; i--) {
                 if (this.myUndo[i].page !== this.page) continue;
@@ -680,6 +684,7 @@ class WhiteboardImpl {
                 return;
             }
         } else if (action === 'redo') {
+            if (!this.canDraw) return this._deny();
             for (let i = this.myRedo.length - 1; i >= 0; i--) {
                 if (this.myRedo[i].page !== this.page) continue;
                 const [op] = this.myRedo.splice(i, 1);
@@ -727,6 +732,11 @@ class WhiteboardImpl {
 
     setPermission(canDraw) {
         this.canDraw = canDraw;
+        // Live grant/revoke must re-style the toolbar + hint immediately —
+        // otherwise a newly-authorized presenter still sees a greyed board
+        // (or a revoked one keeps a falsely enabled toolbar).
+        document.querySelector('.wb-toolbar')?.classList.toggle('no-draw', !canDraw);
+        document.getElementById('wb-nodraw-hint')?.classList.toggle('hidden', canDraw);
     }
 }
 

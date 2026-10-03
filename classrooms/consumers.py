@@ -246,7 +246,7 @@ class ClassroomConsumer(AsyncJsonWebsocketConsumer):
             .order_by("role", "joined_at")
         )
         participants = [
-            participant_payload(m) for m in members
+            participant_payload(m, classroom) for m in members
             if include_waiting or not m.in_waiting_room
         ]
         state = {
@@ -268,7 +268,11 @@ class ClassroomConsumer(AsyncJsonWebsocketConsumer):
     @database_sync_to_async
     def _self_payload(self) -> dict:
         member = ClassroomMember.objects.filter(id=self.member.id).select_related("user").first()
-        return participant_payload(member) if member else {"identity": "", "name": ""}
+        return (
+            participant_payload(member, getattr(self, "classroom", None))
+            if member
+            else {"identity": "", "name": ""}
+        )
 
     @database_sync_to_async
     def _effective_permissions(self) -> dict:

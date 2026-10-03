@@ -24,6 +24,7 @@ const ROOM_CODE = root.dataset.roomCode;
 const IDENTITY = root.dataset.identity;
 const SELF_USER_ID = IDENTITY.startsWith('u:') ? Number(IDENTITY.slice(2)) : null;
 const MEMBER_ID = Number(root.dataset.memberId);
+const SELF_ROLE = root.dataset.role || '';
 const PRIVILEGED = root.dataset.privileged === '1';
 const MEDIA_ENABLED = root.dataset.mediaEnabled === '1';
 const MEDIA_URL = root.dataset.mediaUrl;
@@ -33,6 +34,22 @@ try { ICE_SERVERS = JSON.parse(root.dataset.iceServers || '[]'); } catch { ICE_S
 const SHOW_CHAT = root.dataset.showChat === '1';
 const PERMISSIONS = JSON.parse(document.getElementById('member-permissions').textContent);
 const EXIT_URL = root.dataset.isGuest === '1' ? '/' : '/dashboard/';
+
+// Single source for the per-member permissions panel (order + labels).
+const PERM_ORDER = [
+    'can_use_microphone', 'can_use_camera', 'can_share_screen', 'can_use_whiteboard',
+    'can_send_messages', 'can_upload_files', 'can_raise_hand', 'can_present',
+];
+const PERM_LABELS = {
+    can_use_microphone: 'میکروفون',
+    can_use_camera: 'دوربین',
+    can_share_screen: 'اشتراک صفحه',
+    can_use_whiteboard: 'تختهٔ اشتراکی',
+    can_send_messages: 'ارسال پیام',
+    can_upload_files: 'بارگذاری فایل',
+    can_raise_hand: 'بالا بردن دست',
+    can_present: 'ارائهٔ فایل',
+};
 
 const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]')?.value
     || document.cookie.match(/csrftoken=([^;]+)/)?.[1] || '';
@@ -253,13 +270,17 @@ class PresenceClient {
                 api(`/members/${p.member_id}/mute/`, { muted: !p.muted })),
             btn('درخواست روشن کردن میکروفون', '🎙️', () =>
                 api(`/members/${p.member_id}/mute/`, { request_unmute: true })),
-            btn('دسترسی دوربین', '📹', () =>
-                api(`/members/${p.member_id}/permission/`, { permission: 'can_use_camera', value: false })),
-            btn('ارتقا به ارائه‌دهنده', '🧑‍🏫', () =>
-                api(`/members/${p.member_id}/role/`, { role: 'PRESENTER' })),
-            btn('ارتقا به مدیر', '🛡️', () =>
-                api(`/members/${p.member_id}/role/`, { role: 'MODERATOR' })),
+            btn('دسترسی‌ها و نقش', '⚙️', () => openPermsDialog(p.identity)),
         );
+        // Role assignment is owner-only (the server enforces the same rule).
+        if (SELF_ROLE === 'OWNER' && p.role !== 'OWNER') {
+            box.append(
+                btn('ارتقا به ارائه‌دهنده', '🧑‍🏫', () =>
+                    api(`/members/${p.member_id}/role/`, { role: 'PRESENTER' })),
+                btn('ارتقا به مدیر', '🛡️', () =>
+                    api(`/members/${p.member_id}/role/`, { role: 'MODERATOR' })),
+            );
+        }
 
         const rm = btn('حذف از کلاس', '🚫', async () => {
             if (!await confirmDialog('حذف شرکت‌کننده', `${p.name} از کلاس حذف شود؟`, { danger: true, okLabel: 'حذف' })) return;
@@ -290,6 +311,116 @@ class PresenceClient {
         return li;
     }
 }
+
+// ---------------------------------------------------------------------------
+// Member permissions dialog — the owner's (and moderator's) control center.
+// Shows every capability flag with a live toggle, plus role + mute + remove.
+// State comes from the roster payload (server-computed effective grants).
+// ---------------------------------------------------------------------------
+let permsTargetIdentity = null;
+
+function openPermsDialog(identity) {
+    const p = presence.participants.get(identity);
+    if (!p) return;
+    permsTargetIdentity = identity;
+    document.getElementById('perms-name').textContent = p.name || '';
+    fillPermsDialog(p);
+    document.getElementById('perms-dialog').showModal();
+}
+
+function fillPermsDialog(p) {
+    const list = document.getElementById('perms-list');
+    list.innerHTML = '';
+    const perms = p.permissions || {};
+    for (const key of PERM_ORDER) {
+        if (key === 'can_upload_files' && p.is_guest) continue; // guests never upload
+        const row = document.createElement('label');
+        row.className = 'switch-row perm-row';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.dataset.perm = key;
+        cb.checked = !!perms[key];
+        cb.addEventListener('change', async () => {
+            const want = cb.checked;
+            try {
+                await api(`/members/${p.member_id}/permission/`, { permission: key, value: want });
+                const cached = presence.participants.get(p.identity);
+                if (cached?.permissions) cached.permissions[key] = want;
+            } catch (err) {
+                cb.checked = !want; // server refused — roll the switch back
+            }
+        });
+        const txt = document.createElement('span');
+        txt.textContent = PERM_LABELS[key] || key;
+        row.append(cb, txt);
+        list.appendChild(row);
+    }
+
+    const muteBtn = document.getElementById('perms-mute');
+    muteBtn.textContent = p.muted ? '🔊 باز کردن بی‌صدا' : '🔇 بی‌صدا کردن';
+    muteBtn.onclick = () => api(`/members/${p.member_id}/mute/`, { muted: !p.muted });
+
+    // Role select — owner only (the server rejects role changes by anyone else).
+    const roleWrap = document.getElementById('perms-role-wrap');
+    const roleSel = document.getElementById('perms-role');
+    const canRole = SELF_ROLE === 'OWNER' && p.role !== 'OWNER';
+    roleWrap.classList.toggle('hidden', !canRole);
+    if (canRole) {
+        roleSel.value = ['MODERATOR', 'PRESENTER', 'STUDENT'].includes(p.role) ? p.role : 'STUDENT';
+        roleSel.onchange = async () => {
+            const role = roleSel.value;
+            const label = roleSel.options[roleSel.selectedIndex].text;
+            const ok = await confirmDialog(
+                'تغییر نقش',
+                `نقش «${p.name}» به «${label}» تغییر کند؟ عضو نقش‌های پیش‌فرض تازه می‌گیرد.`,
+                { okLabel: 'تغییر نقش' });
+            if (!ok) { roleSel.value = p.role; return; }
+            try {
+                await api(`/members/${p.member_id}/role/`, { role });
+                document.getElementById('perms-dialog').close();
+            } catch (err) {
+                roleSel.value = p.role;
+            }
+        };
+    }
+
+    const rmBtn = document.getElementById('perms-remove');
+    rmBtn.onclick = async () => {
+        const ok = await confirmDialog('حذف عضو', `${p.name} از کلاس حذف شود؟`, { danger: true, okLabel: 'حذف' });
+        if (!ok) return;
+        const ban = await confirmDialog('مسدودسازی موقت', 'ورود مجدد او ۵ دقیقه مسدود شود؟', { okLabel: 'بله، مسدود شود' });
+        await api(`/members/${p.member_id}/remove/`, { ban_minutes: ban ? 5 : 0 });
+        document.getElementById('perms-dialog').close();
+    };
+}
+
+/** Patch the open dialog in place when roster/permission events arrive. */
+function refreshPermsDialog(identity) {
+    if (permsTargetIdentity !== identity) return;
+    const dialog = document.getElementById('perms-dialog');
+    if (!dialog?.open) { permsTargetIdentity = null; return; }
+    const p = presence.participants.get(identity);
+    if (!p) { dialog.close(); permsTargetIdentity = null; return; }
+    const perms = p.permissions || {};
+    document.querySelectorAll('#perms-list input[type=checkbox]').forEach((cb) => {
+        const key = cb.dataset.perm;
+        if (key && cb.checked !== !!perms[key]) cb.checked = !!perms[key];
+    });
+    const muteBtn = document.getElementById('perms-mute');
+    muteBtn.textContent = p.muted ? '🔊 باز کردن بی‌صدا' : '🔇 بی‌صدا کردن';
+    const roleSel = document.getElementById('perms-role');
+    if (document.activeElement !== roleSel && ['MODERATOR', 'PRESENTER', 'STUDENT'].includes(p.role)) {
+        roleSel.value = p.role;
+    }
+}
+
+function initPermsDialog() {
+    const dialog = document.getElementById('perms-dialog');
+    if (!dialog) return;
+    document.getElementById('perms-x')?.addEventListener('click', () => dialog.close());
+    dialog.addEventListener('close', () => { permsTargetIdentity = null; });
+}
+
 
 const presence = new PresenceClient();
 
@@ -330,6 +461,8 @@ function handleEvent(data) {
             break;
         case 'user_left':
             presence.remove(data.participant.identity);
+            Media.notifyPeerState?.({ identity: data.participant.identity, screen_sharing: false });
+            if (permsTargetIdentity === data.participant.identity) refreshPermsDialog(data.participant.identity);
             ChatClient.addSystemMessage(`${data.participant.name} کلاس را ترک کرد.`);
             break;
         case 'raise_hand':
@@ -341,41 +474,105 @@ function handleEvent(data) {
             break;
         case 'media_state':
             presence.upsert(data.participant);
+            // if the peer stopped sharing, drop the screen view immediately
+            Media.notifyPeerState?.(data.participant);
             break;
-        case 'permission_changed':
+        case 'permission_changed': {
+            const cached = presence.participants.get(data.identity);
+            if (data.permissions) {
+                if (cached) cached.permissions = data.permissions;
+            } else if (cached?.permissions) {
+                cached.permissions[data.permission] = data.value;
+            }
             if (data.identity === IDENTITY) {
-                PERMISSIONS[data.permission] = data.value;
+                if (data.permissions) Object.assign(PERMISSIONS, data.permissions);
+                else PERMISSIONS[data.permission] = data.value;
                 Whiteboard.setPermission(PERMISSIONS.can_use_whiteboard);
                 Presentation.setPermission(PERMISSIONS.can_use_whiteboard);
-                if (data.permission === 'can_present') applyFilePresentability();
+                applyFilePresentability();
+                // Revoking a right must stop whatever is already running.
+                if (!PERMISSIONS.can_use_microphone) Media.forceMute();
+                if (!PERMISSIONS.can_use_camera) Media.forceCameraOff();
+                if (!PERMISSIONS.can_share_screen) Media.stopScreenShare();
+                if (data.permission === 'can_send_messages' || data.permissions) {
+                    ChatClient.setSendEnabled(
+                        PERMISSIONS.can_send_messages || PRIVILEGED,
+                        'شما اجازهٔ ارسال پیام ندارید.');
+                }
+                applyUploadVisibility();
                 refreshControlStates();
+            } else if (cached) {
+                presence.scheduleRender();
             }
+            refreshPermsDialog(data.identity);
             break;
+        }
         case 'role_changed':
             if (data.identity === IDENTITY) {
+                if (data.permissions) Object.assign(PERMISSIONS, data.permissions);
                 toast(data.text || 'نقش شما تغییر کرد.', 'success');
                 setTimeout(() => location.reload(), 1200); // re-render privileges
             } else {
-                presence.upsert({ identity: data.identity, role: data.role, role_label: data.role_label });
+                const cached = presence.participants.get(data.identity);
+                if (data.permissions && cached) cached.permissions = data.permissions;
+                presence.upsert({
+                    identity: data.identity, role: data.role, role_label: data.role_label,
+                    permissions: data.permissions,
+                });
+                refreshPermsDialog(data.identity);
             }
             break;
         case 'participant_muted':
-            presence.upsert({ identity: data.identity, muted: data.muted, member_id: data.member_id });
-            if (data.identity === IDENTITY && data.muted) {
-                toast('میکروفون شما توسط مدیر بی‌صدا شد.', 'warning');
-                Media.forceMute();
+            if (data.permissions) {
+                const cached = presence.participants.get(data.identity);
+                if (cached) cached.permissions = data.permissions;
             }
+            presence.upsert({
+                identity: data.identity, muted: data.muted, member_id: data.member_id,
+                permissions: data.permissions,
+            });
+            if (data.identity === IDENTITY) {
+                if (data.permissions) Object.assign(PERMISSIONS, data.permissions);
+                else if (data.muted) PERMISSIONS.can_use_microphone = false;
+                refreshControlStates();
+                if (data.muted) {
+                    toast('میکروفون شما توسط مدیر بی‌صدا شد.', 'warning');
+                    Media.forceMute();
+                }
+            }
+            refreshPermsDialog(data.identity);
             break;
-        case 'mute_all':
-            if (data.except_member_id !== MEMBER_ID) {
+        case 'mute_all': {
+            const ids = Array.isArray(data.muted_member_ids) ? data.muted_member_ids : null;
+            // Without an explicit list fall back to the legacy "everyone
+            // except the actor" rule; with one, only listed members apply it
+            // (a moderator's mute-all never targets privileged peers).
+            const targeted = ids ? ids.includes(MEMBER_ID) : data.except_member_id !== MEMBER_ID;
+            if (targeted) {
                 toast('همهٔ شرکت‌کنندگان بی‌صدا شدند.', 'warning');
                 Media.forceMute();
+                if (data.can_use_microphone === false) PERMISSIONS.can_use_microphone = false;
+                refreshControlStates();
                 const me = presence.participants.get(IDENTITY);
-                if (me) presence.upsert({ ...me, muted: true });
+                if (me) presence.upsert({ ...me, muted: true, permissions: { ...me.permissions, can_use_microphone: false } });
+            }
+            if (ids) {
+                // keep every roster row + the open dialog honest
+                presence.participants.forEach((p) => {
+                    if (p.identity !== IDENTITY && ids.includes(p.member_id)) {
+                        p.muted = true;
+                        if (p.permissions) p.permissions.can_use_microphone = false;
+                    }
+                });
+                presence.scheduleRender();
+                if (permsTargetIdentity) refreshPermsDialog(permsTargetIdentity);
             }
             break;
+        }
         case 'participant_removed':
             presence.remove(data.identity);
+            if (permsTargetIdentity === data.identity) refreshPermsDialog(data.identity);
+            Media.notifyPeerState?.({ identity: data.identity, screen_sharing: false });
             if (data.identity === IDENTITY) {
                 toast('شما از کلاس حذف شدید.', 'error', 8000);
                 setTimeout(() => { location.href = EXIT_URL; }, 1600);
@@ -791,6 +988,8 @@ function refreshControlStates() {
     micBtn?.classList.toggle('off', !PERMISSIONS.can_use_microphone);
     document.getElementById('btn-camera')?.classList.toggle('off', !PERMISSIONS.can_use_camera);
     document.getElementById('btn-screen')?.classList.toggle('off', !PERMISSIONS.can_share_screen);
+    document.getElementById('btn-hand')?.classList.toggle('off', !PERMISSIONS.can_raise_hand);
+    document.getElementById('btn-whiteboard')?.classList.toggle('off', !PERMISSIONS.can_use_whiteboard);
 }
 
 // ---------------------------------------------------------------------------
@@ -1039,87 +1238,95 @@ function formatBytes(n) {
 
 let activeUpload = null; // in-flight XHR so the cancel button can abort it
 
+function applyUploadVisibility() {
+    // The form visibility always tracks the live permission — a grant that
+    // arrives mid-class must light up the uploader without a reload.
+    document.getElementById('upload-form')?.classList.toggle('hidden', !PERMISSIONS.can_upload_files);
+}
+
 function initFiles() {
     const section = document.getElementById('panel-files');
     const MAX_MB = Number(section.dataset.maxUploadMb || 25);
     const ALLOWED_EXT = new Set((section.dataset.allowedExt || '').split(',').filter(Boolean));
 
-    if (PERMISSIONS.can_upload_files) {
-        const input = document.getElementById('file-input');
-        const progress = document.getElementById('upload-progress');
-        const fill = document.getElementById('upload-progress-fill');
-        const text = document.getElementById('upload-progress-text');
-        document.getElementById('upload-form').classList.remove('hidden');
+    const input = document.getElementById('file-input');
+    const progress = document.getElementById('upload-progress');
+    const fill = document.getElementById('upload-progress-fill');
+    const text = document.getElementById('upload-progress-text');
+    applyUploadVisibility();
 
-        const setProgress = (pct, label) => {
-            fill.style.width = `${pct}%`;
-            fill.setAttribute('aria-valuenow', String(pct));
-            text.textContent = label;
-        };
+    const setProgress = (pct, label) => {
+        fill.style.width = `${pct}%`;
+        fill.setAttribute('aria-valuenow', String(pct));
+        text.textContent = label;
+    };
 
-        input.addEventListener('change', (e) => {
-            const file = e.target.files[0];
-            e.target.value = '';
-            if (!file || activeUpload) return;
+    input.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        e.target.value = '';
+        if (!file || activeUpload) return;
+        if (!PERMISSIONS.can_upload_files) {
+            toast('شما اجازهٔ بارگذاری فایل ندارید.', 'warning');
+            return;
+        }
 
-            // ---- pre-flight checks: fail instantly, don't waste the upload ----
-            const ext = file.name.includes('.') ? file.name.split('.').pop().toLowerCase() : '';
-            if (!ALLOWED_EXT.has(ext)) {
-                toast(`پسوند «.${ext || 'نامشخص'}» مجاز نیست. فرمت‌های مجاز: ${[...ALLOWED_EXT].join('، ')}`, 'error', 4000);
-                return;
-            }
-            if (file.size === 0) { toast('فایل خالی است.', 'error'); return; }
-            if (file.size > MAX_MB * 1024 * 1024) {
-                toast(`حجم فایل بیش از حد مجاز (${MAX_MB.toLocaleString('fa-IR')} مگابایت) است.`, 'error', 4000);
-                return;
-            }
+        // ---- pre-flight checks: fail instantly, don't waste the upload ----
+        const ext = file.name.includes('.') ? file.name.split('.').pop().toLowerCase() : '';
+        if (!ALLOWED_EXT.has(ext)) {
+            toast(`پسوند «.${ext || 'نامشخص'}» مجاز نیست. فرمت‌های مجاز: ${[...ALLOWED_EXT].join('، ')}`, 'error', 4000);
+            return;
+        }
+        if (file.size === 0) { toast('فایل خالی است.', 'error'); return; }
+        if (file.size > MAX_MB * 1024 * 1024) {
+            toast(`حجم فایل بیش از حد مجاز (${MAX_MB.toLocaleString('fa-IR')} مگابایت) است.`, 'error', 4000);
+            return;
+        }
 
-            progress.classList.remove('hidden');
-            input.disabled = true;
-            setProgress(0, `۰٪ — «${file.name}»`);
+        progress.classList.remove('hidden');
+        input.disabled = true;
+        setProgress(0, `۰٪ — «${file.name}»`);
 
-            const xhr = new XMLHttpRequest();
-            activeUpload = xhr;
-            xhr.upload.addEventListener('progress', (ev) => {
-                if (!ev.lengthComputable) return;
-                const pct = Math.round((ev.loaded / ev.total) * 100);
-                setProgress(pct, `${pct.toLocaleString('fa-IR')}٪ — «${file.name}»`);
-            });
-            const finish = () => {
-                activeUpload = null;
-                input.disabled = false;
-                progress.classList.add('hidden');
-            };
-            xhr.addEventListener('load', () => {
-                finish();
-                let data = {};
-                try { data = JSON.parse(xhr.responseText); } catch { /* non-JSON error */ }
-                if (xhr.status >= 200 && xhr.status < 300) {
-                    // add locally for instant feedback; the `file_uploaded`
-                    // broadcast reaches everyone else (dedup keeps one row).
-                    addFileItem({
-                        id: data.id, name: data.name,
-                        size: formatBytes(file.size),
-                        uploader: 'شما', uploader_id: SELF_USER_ID,
-                        icon: iconForName(file.name),
-                        url: `/class/${ROOM_CODE}/files/${data.id}/download/`,
-                    });
-                    toast('فایل بارگذاری شد.', 'success');
-                } else {
-                    toast(data.detail || 'بارگذاری ناموفق بود.', 'error', 4000);
-                }
-            });
-            xhr.addEventListener('error', () => { finish(); toast('خطای شبکه در بارگذاری فایل.', 'error'); });
-            xhr.addEventListener('abort', () => { finish(); toast('بارگذاری لغو شد.', 'info', 2000); });
-            const fd = new FormData();
-            fd.append('file', file);
-            xhr.open('POST', `/class/${ROOM_CODE}/files/upload/`);
-            xhr.setRequestHeader('X-CSRFToken', csrfToken);
-            xhr.send(fd);
+        const xhr = new XMLHttpRequest();
+        activeUpload = xhr;
+        xhr.upload.addEventListener('progress', (ev) => {
+            if (!ev.lengthComputable) return;
+            const pct = Math.round((ev.loaded / ev.total) * 100);
+            setProgress(pct, `${pct.toLocaleString('fa-IR')}٪ — «${file.name}»`);
         });
+        const finish = () => {
+            activeUpload = null;
+            input.disabled = false;
+            progress.classList.add('hidden');
+        };
+        xhr.addEventListener('load', () => {
+            finish();
+            let data = {};
+            try { data = JSON.parse(xhr.responseText); } catch { /* non-JSON error */ }
+            if (xhr.status >= 200 && xhr.status < 300) {
+                // add locally for instant feedback; the `file_uploaded`
+                // broadcast reaches everyone else (dedup keeps one row).
+                addFileItem({
+                    id: data.id, name: data.name,
+                    size: formatBytes(file.size),
+                    uploader: 'شما', uploader_id: SELF_USER_ID,
+                    icon: iconForName(file.name),
+                    url: `/class/${ROOM_CODE}/files/${data.id}/download/`,
+                });
+                toast('فایل بارگذاری شد.', 'success');
+            } else {
+                toast(data.detail || 'بارگذاری ناموفق بود.', 'error', 4000);
+            }
+        });
+        xhr.addEventListener('error', () => { finish(); toast('خطای شبکه در بارگذاری فایل.', 'error'); });
+        xhr.addEventListener('abort', () => { finish(); toast('بارگذاری لغو شد.', 'info', 2000); });
+        const fd = new FormData();
+        fd.append('file', file);
+        xhr.open('POST', `/class/${ROOM_CODE}/files/upload/`);
+        xhr.setRequestHeader('X-CSRFToken', csrfToken);
+        xhr.send(fd);
+    });
 
-        document.getElementById('upload-cancel').addEventListener('click', () => activeUpload?.abort());
-    }
+    document.getElementById('upload-cancel').addEventListener('click', () => activeUpload?.abort());
 
     const list = document.getElementById('file-list');
     applyFilePresentability();
@@ -1322,6 +1529,7 @@ initDevicesDialog();
 initShortcuts();
 initFiles();
 initRosterTools();
+initPermsDialog();
 initClock();
 refreshControlStates();
 if (!PERMISSIONS.can_send_messages) {

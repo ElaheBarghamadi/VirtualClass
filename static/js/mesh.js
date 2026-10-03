@@ -148,6 +148,7 @@ class MeshMedia {
         this.levels = new Map();         // identity → analyser
         this._audioEls = new Map();
         this._screenVideo = null;
+        this._screenOwner = null;   // identity of the peer whose screen we view
         this._statsTimer = null;
         this._speakerTimer = null;
         this._localAnalyser = null;
@@ -221,12 +222,25 @@ class MeshMedia {
         disposeAnalyser(this.levels.get(identity));
         this.levels.delete(identity);
         if (this.activeSpeaker === identity) this.activeSpeaker = null;
+        if (this._screenOwner === identity) this._hideScreenView();
         this._layout();
     }
 
     _onPeerGone(identity) {
         // connection died (e.g. peer tab closed without clean signal)
         if (this.links.has(identity)) this._removePeer(identity);
+    }
+
+    /**
+     * Roster media_state hook from room.js: when the peer whose screen we
+     * are viewing reports `screen_sharing: false` (their track close can
+     * take seconds to surface), leave the screen view immediately.
+     */
+    onPeerMediaState(p) {
+        if (!p || !p.identity || p.identity === this.self?.identity) return;
+        if (p.screen_sharing === false && this._screenOwner === p.identity) {
+            this._hideScreenView();
+        }
     }
 
     // ------------------------------------------------------------ local
@@ -561,10 +575,15 @@ class MeshMedia {
         const camTrack = stream.getVideoTracks()[0];
         if (camTrack) {
             video.srcObject = stream;
-            video.style.display = '';
-            tile.querySelector('.tile-placeholder').classList.add('hidden');
-            camTrack.addEventListener('mute', () => this._refreshRemoteTile(peer.identity));
-            camTrack.addEventListener('unmute', () => this._refreshRemoteTile(peer.identity));
+            // bind mute/unmute/ended exactly once per track (renegotiation
+            // re-fires ontrack for the same track object)
+            const bound = this._trackBound || (this._trackBound = new WeakSet());
+            if (!bound.has(camTrack)) {
+                bound.add(camTrack);
+                camTrack.addEventListener('mute', () => this._refreshRemoteTile(peer.identity));
+                camTrack.addEventListener('unmute', () => this._refreshRemoteTile(peer.identity));
+                camTrack.addEventListener('ended', () => this._refreshRemoteTile(peer.identity));
+            }
         }
         this._refreshRemoteTile(peer.identity);
         this._layout();
@@ -583,6 +602,7 @@ class MeshMedia {
         video.style.objectFit = 'contain';
         holder.appendChild(video);
         this._screenVideo = video;
+        this._screenOwner = peer.identity;
         owner.textContent = `${peer.name || peer.identity} صفحهٔ خود را به اشتراک گذاشته است`;
         stream.getVideoTracks()[0].addEventListener('ended', () => this._hideScreenView());
         document.querySelector('.room-controls')?.classList.add('screen-active');
@@ -612,6 +632,7 @@ class MeshMedia {
         const holder = document.getElementById('screen-holder');
         holder.innerHTML = '';
         this._screenVideo = null;
+        this._screenOwner = null;
         document.querySelector('.room-controls')?.classList.remove('screen-active');
         const screenView = document.getElementById('view-screen');
         if (screenView && !screenView.classList.contains('hidden')) window.__switchView('media');
@@ -683,14 +704,20 @@ class MeshMedia {
         const tile = this.tiles.get(identity);
         if (!link || !tile) return;
         const stream = link.remoteStream;
+        // For REMOTE tracks `enabled` stays true even when the sender turns
+        // the device off — the receiver only learns via `muted` (the track
+        // goes silent/stale).  Using `enabled` here left frozen frames on
+        // screen and mic icons stuck "on"; `muted` is the real signal.
         const videoTrack = stream && stream.getVideoTracks()[0];
-        const camLive = Boolean(videoTrack && videoTrack.enabled && videoTrack.readyState === 'live');
+        const camLive = Boolean(videoTrack && !videoTrack.muted && videoTrack.readyState === 'live');
         const video = tile.querySelector('video');
         if (camLive && video.srcObject !== stream) video.srcObject = stream;
         video.style.display = camLive ? '' : 'none';
         tile.querySelector('.tile-placeholder').classList.toggle('hidden', camLive);
+        if (camLive) video.play().catch(() => {});
         const audioTrack = stream && stream.getAudioTracks()[0];
-        tile.querySelector('.t-mic').classList.toggle('off', !(audioTrack && audioTrack.enabled));
+        const micLive = Boolean(audioTrack && !audioTrack.muted && audioTrack.readyState === 'live');
+        tile.querySelector('.t-mic').classList.toggle('off', !micLive);
     }
 
     setLayout(mode) {
@@ -726,7 +753,7 @@ class MeshMedia {
             const stream = link.remoteStream;
             const tile = this.tiles.get(identity);
             const audioTrack = stream && stream.getAudioTracks()[0];
-            if (!audioTrack || !audioTrack.enabled) {
+            if (!audioTrack || audioTrack.muted || audioTrack.readyState !== 'live') {
                 if (tile) tile.style.setProperty('--lvl', '0');
                 continue;
             }
@@ -784,7 +811,8 @@ class MeshMedia {
         } else {
             const link = this.activeSpeaker && this.links.get(this.activeSpeaker);
             const rs = link && link.remoteStream;
-            const rt = rs && rs.getVideoTracks().find((t) => t.readyState === 'live');
+            // skip muted/stale tracks — a frozen frame is worse than no PiP
+            const rt = rs && rs.getVideoTracks().find((t) => t.readyState === 'live' && !t.muted);
             if (rt) {
                 stream = rs;
                 name = (link.peer && link.peer.name) || '';

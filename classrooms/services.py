@@ -276,7 +276,7 @@ def join_classroom_guest(
     )
     broadcast(classroom.room_code, {
         "type": "waiting_room_entry" if member.in_waiting_room else "user_joined",
-        "participant": participant_payload(member),
+        "participant": participant_payload(member, classroom),
     })
     logger.info(
         "guest_joined",
@@ -333,7 +333,7 @@ def join_classroom(classroom: Classroom, user: User, raw_password: str = "") -> 
         )
         broadcast(classroom.room_code, {
             "type": "waiting_room_entry" if waiting else "user_joined",
-            "participant": participant_payload(member),
+            "participant": participant_payload(member, classroom),
         })
         logger.info(
             "participant_joined",
@@ -378,13 +378,22 @@ def notify_member(room_code: str, member: ClassroomMember, payload: dict) -> Non
     )
 
 
-def participant_payload(member: ClassroomMember) -> dict:
+def participant_payload(member: ClassroomMember, classroom: Classroom | None = None) -> dict:
     """Public participant data — no sensitive fields are ever exposed.
 
     ``identity`` is the client-side key (``u:<id>`` / ``g:<uid>``); the
     database pk only appears as ``member_id`` for host-control endpoints,
     which re-validate everything server-side.
+
+    ``permissions`` is the member's EFFECTIVE capability map (computed
+    server-side when ``classroom`` is provided) — the host UI reads it to
+    show/toggle per-member grants; the browser never derives it itself.
     """
+    perms = (
+        effective_permissions(member, classroom)
+        if classroom is not None
+        else member.permissions_dict()
+    )
     return {
         "member_id": member.id,
         "identity": member.identity,
@@ -399,6 +408,7 @@ def participant_payload(member: ClassroomMember) -> dict:
         "hand_raised_at": member.hand_raised_at.isoformat() if member.hand_raised_at else None,
         "in_waiting_room": member.in_waiting_room,
         "joined_at": member.joined_at.isoformat(),
+        "permissions": perms,
     }
 
 
@@ -461,6 +471,7 @@ def set_member_permission(classroom: Classroom, operator: User, member_id: int, 
         "user_id": target.user_id,
         "permission": permission,
         "value": bool(value),
+        "permissions": perms,
     })
     logger.info("permission_changed", extra={"room_code": classroom.room_code, "target": target.user_id, "permission": permission})
 
@@ -489,6 +500,7 @@ def set_member_role(classroom: Classroom, owner: User, member_id: int, role: str
         "user_id": target.user_id,
         "role": role,
         "role_label": target.get_role_display(),
+        "permissions": effective_permissions(target, classroom),
     })
     logger.info("role_changed", extra={"room_code": classroom.room_code, "target": target.user_id, "role": role})
 
@@ -508,6 +520,7 @@ def set_member_muted(classroom: Classroom, operator: User, member_id: int, muted
     broadcast(classroom.room_code, {
         "type": "participant_muted", "member_id": target.id, "identity": target.identity,
         "user_id": target.user_id, "muted": bool(muted),
+        "permissions": effective_permissions(target, classroom),
     })
 
 
@@ -524,13 +537,23 @@ def request_unmute(classroom: Classroom, operator: User, member_id: int) -> None
 def mute_all(classroom: Classroom, operator: User) -> int:
     actor = _require_privileged(classroom, operator)
     targets = ClassroomMember.objects.filter(classroom=classroom, is_active=True).exclude(id=actor.id)
+    # A moderator may only mute non-privileged peers; the owner may mute
+    # everyone except themself (their own mic can never be taken away).
+    if actor.role != Role.OWNER:
+        targets = targets.exclude(role__in=PRIVILEGED_ROLES)
     count = targets.update(muted=True)
+    muted_ids = list(targets.values_list("id", flat=True))
     for member in targets.select_related("user"):
         notify_member(classroom.room_code, member, {
             "type": "notification", "text": "همهٔ شرکت‌کنندگان توسط میزبان بی‌صدا شدند.",
             "level": "warning", "event": "muted",
         })
-    broadcast(classroom.room_code, {"type": "mute_all", "except_member_id": actor.id})
+    broadcast(classroom.room_code, {
+        "type": "mute_all", "except_member_id": actor.id, "can_use_microphone": False,
+        # explicit target list — privileged peers excluded by a moderator's
+        # mute-all must NOT apply the mute on their clients
+        "muted_member_ids": muted_ids,
+    })
     return count
 
 
@@ -572,7 +595,7 @@ def approve_waiting_room(classroom: Classroom, operator: User, member_id: int) -
         "type": "waiting_room_approved",
         "member_id": target.id,
         "identity": target.identity,
-        "participant": participant_payload(target),
+        "participant": participant_payload(target, classroom),
     })
 
 
@@ -698,7 +721,7 @@ def delete_shared_file(classroom: Classroom, member: ClassroomMember | None, fil
 def set_hand_raised(classroom: Classroom, member: ClassroomMember, raised: bool) -> None:
     member.hand_raised_at = timezone.now() if raised else None
     member.save(update_fields=["hand_raised_at"])
-    payload = participant_payload(member)
+    payload = participant_payload(member, classroom)
     broadcast(classroom.room_code, {
         "type": "raise_hand" if raised else "lower_hand",
         "participant": payload,

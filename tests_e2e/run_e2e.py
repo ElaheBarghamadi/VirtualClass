@@ -159,6 +159,41 @@ def run(base: str, code: str) -> int:
         released = pg_s.evaluate("() => window.__media?.impl?.localStream?.getAudioTracks?.().length ?? -1")
         check("force-mute released the mic device", released in (0, -1), str(released))
 
+        # ---------- owner permissions dialog (full per-member control) ----------
+        pg_o.click(f"{sel} .hc-btn >> nth=2")
+        pg_o.wait_for_selector("#perms-dialog[open]", timeout=5000)
+        check("permissions dialog opens with all 8 switches",
+              pg_o.locator("#perms-list .perm-row").count() == 8,
+              str(pg_o.locator("#perms-list .perm-row").count()))
+        cam_cb = '#perms-list input[data-perm="can_use_camera"]'
+        pg_o.click(cam_cb); pg_o.wait_for_timeout(1200)
+        check("camera revoked live on student",
+              pg_s.evaluate("() => window.__media?.impl?.permissions?.can_use_camera === false"
+                            " && document.getElementById('btn-camera')?.classList.contains('off')") is True)
+        pg_o.click(cam_cb); pg_o.wait_for_timeout(1200)
+        check("camera re-granted live on student",
+              pg_s.evaluate("() => window.__media?.impl?.permissions?.can_use_camera === true"
+                            " && !document.getElementById('btn-camera')?.classList.contains('off')") is True)
+        # unmute through the dialog, re-acquire the mic, then revoke it
+        pg_o.click("#perms-mute"); pg_o.wait_for_timeout(1000)
+        check("dialog unmute restored the student mic grant",
+              pg_s.evaluate("() => window.__media?.impl?.permissions?.can_use_microphone === true") is True)
+        pg_o.click("#perms-x"); pg_o.wait_for_timeout(400)
+        pg_s.click("#btn-mic"); pg_s.wait_for_timeout(1800)
+        check("student mic re-acquired after unmute",
+              pg_s.evaluate("() => window.__media?.impl?.localStream?.getAudioTracks?.().length ?? 0") == 1)
+        pg_o.click(f"{sel} .hc-btn >> nth=2")
+        pg_o.wait_for_selector("#perms-dialog[open]", timeout=5000)
+        mic_cb = '#perms-list input[data-perm="can_use_microphone"]'
+        pg_o.click(mic_cb); pg_o.wait_for_timeout(1200)
+        check("mic permission release stops the device",
+              pg_s.evaluate("() => { const s = window.__media?.impl?.localStream;"
+                            " return s ? s.getAudioTracks().length : 0; }") == 0)
+        check("mic button greyed after revoke",
+              pg_s.evaluate("() => document.getElementById('btn-mic')?.classList.contains('off')") is True)
+        pg_o.click(mic_cb); pg_o.wait_for_timeout(800)   # grant it back
+        pg_o.click("#perms-x"); pg_o.wait_for_timeout(400)
+
         # ---------- whiteboard permission feedback (student cannot draw) ----------
         pg_s.evaluate("() => window.__switchView('whiteboard')")
         pg_s.wait_for_timeout(900)

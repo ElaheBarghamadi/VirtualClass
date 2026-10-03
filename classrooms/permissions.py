@@ -185,10 +185,12 @@ def effective_permissions(member: "ClassroomMember" | None, classroom: "Classroo
     if classroom.chat_disabled and member.role not in PRIVILEGED_ROLES:
         perms["can_send_messages"] = False
 
-    # Moderator enforcement always wins over grants.
-    if member.muted:
+    # Moderator enforcement always wins over grants — except for the
+    # OWNER, who is authoritative in their own classroom and can never be
+    # silenced by a stale moderation flag.
+    if member.muted and member.role != Role.OWNER:
         perms["can_use_microphone"] = False
-    if member.camera_disabled:
+    if member.camera_disabled and member.role != Role.OWNER:
         perms["can_use_camera"] = False
 
     return perms

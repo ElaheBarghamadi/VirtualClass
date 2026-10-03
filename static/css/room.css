@@ -596,6 +596,27 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
 }
 .settings-form .switch-row input { accent-color: var(--accent); width: 18px; height: 18px; }
 
+/* member permissions dialog */
+.perms-dialog { max-width: 480px; }
+.perms-hint { margin: 0 0 .5rem; }
+.perms-list { display: grid; }
+.perms-list .switch-row {
+    display: flex; align-items: center; gap: .6rem; padding: .5rem 0;
+    border-bottom: 1px dashed var(--room-border); font-size: .9rem; cursor: pointer;
+}
+.perms-list .switch-row input { accent-color: var(--accent); width: 18px; height: 18px; flex: none; }
+.perms-role {
+    display: flex; align-items: center; gap: .6rem;
+    padding: .8rem 0 .2rem; font-size: .9rem;
+}
+.perms-role select {
+    flex: 1; min-width: 0; padding: .45rem .6rem; font: inherit;
+    border: 1px solid var(--room-border); border-radius: var(--radius-sm);
+    background: var(--room-bg); color: var(--room-text);
+}
+.perms-actions { display: flex; flex-wrap: wrap; gap: .6rem; padding: .9rem 0 .3rem; }
+.perms-actions .btn { flex: 1 1 10rem; }
+
 /* ---------- toasts ---------- */
 .toast-container {
     position: fixed; top: 1rem; inset-inline-start: 1rem; z-index: 9999;

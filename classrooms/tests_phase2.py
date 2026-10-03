@@ -29,6 +29,7 @@ from .services import (
     set_member_role,
     set_member_muted,
     mute_all,
+    participant_payload,
     remove_member,
     start_session,
 )
@@ -157,6 +158,37 @@ class HostActionTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.mod_member.refresh_from_db()
         self.assertTrue(self.mod_member.muted)
+
+    def test_moderator_mute_all_spares_privileged(self):
+        """A moderator's mute-all never silences the owner or other mods."""
+        self.client.logout()
+        self.client.login(username="h_mod", password=PASSWORD)
+        response = self.client.post(self._url("room:mute_all"), "{}", content_type="application/json")
+        self.assertEqual(response.status_code, 200)
+        self.stu_member.refresh_from_db()
+        self.mod_member.refresh_from_db()
+        owner_member = ClassroomMember.objects.get(classroom=self.classroom, user=self.owner)
+        self.assertTrue(self.stu_member.muted)
+        self.assertFalse(self.mod_member.muted)  # actor never mutes themself
+        self.assertFalse(owner_member.muted)     # privileged peers are spared
+
+    def test_owner_is_immune_to_stale_moderation_flags(self):
+        owner_member = ClassroomMember.objects.get(classroom=self.classroom, user=self.owner)
+        owner_member.muted = True
+        owner_member.camera_disabled = True
+        owner_member.save(update_fields=["muted", "camera_disabled"])
+        perms = effective_permissions(owner_member, self.classroom)
+        self.assertTrue(perms["can_use_microphone"])
+        self.assertTrue(perms["can_use_camera"])
+
+    def test_participant_payload_carries_effective_permissions(self):
+        data = participant_payload(self.stu_member, self.classroom)
+        self.assertIn("permissions", data)
+        self.assertTrue(data["permissions"]["can_use_microphone"])
+        self.stu_member.muted = True
+        self.stu_member.save(update_fields=["muted"])
+        data = participant_payload(self.stu_member, self.classroom)
+        self.assertFalse(data["permissions"]["can_use_microphone"])
 
     # -- remove / ban ----------------------------------------------------------
     def test_remove_and_ban(self):

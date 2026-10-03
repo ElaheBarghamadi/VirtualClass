@@ -42,6 +42,7 @@
      data-room-code="{{ classroom.room_code }}"
      data-identity="{{ member.identity }}"
      data-member-id="{{ member.id }}"
+     data-role="{{ member.role }}"
      data-participant-name="{{ member.participant_name }}"
      data-is-guest="{{ member.is_guest|yesno:'1,0' }}"
      data-privileged="{{ is_privileged|yesno:'1,0' }}"
@@ -456,6 +457,30 @@
             <button type="button" class="btn btn-primary" id="settings-save">ذخیره</button>
         </div>
     </form>
+</dialog>
+
+{# Per-member permissions panel — owner/moderator control center #}
+<dialog class="app-dialog perms-dialog" id="perms-dialog" aria-label="دسترسی‌های عضو">
+    <div class="app-dialog-head">
+        <h2 class="app-dialog-title">دسترسی‌های <span id="perms-name"></span></h2>
+        <button type="button" class="app-dialog-x" id="perms-x" aria-label="بستن">✕</button>
+    </div>
+    <div class="app-dialog-body">
+        <p class="perms-hint muted small">تغییرها بلافاصله اعمال می‌شود و برای همهٔ میزبان‌ها همگام می‌شود.</p>
+        <div class="perms-list" id="perms-list"></div>
+        <div class="perms-role hidden" id="perms-role-wrap">
+            <label for="perms-role">نقش عضو</label>
+            <select id="perms-role">
+                <option value="MODERATOR">مدیر جلسه</option>
+                <option value="PRESENTER">ارائه‌دهنده</option>
+                <option value="STUDENT">دانش‌آموز</option>
+            </select>
+        </div>
+        <div class="perms-actions">
+            <button type="button" class="btn btn-ghost btn-sm" id="perms-mute">🔇 بی‌صدا کردن</button>
+            <button type="button" class="btn btn-danger btn-sm" id="perms-remove">🚫 حذف از کلاس</button>
+        </div>
+    </div>
 </dialog>
 
 {% endblock %}

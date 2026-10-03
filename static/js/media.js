@@ -467,6 +467,13 @@ class LivekitMedia {
         return true;
     }
 
+    /** Stop an active screen share (used when the host revokes the right). */
+    async stopScreenShare() {
+        if (!this.enabled || !this.room) return;
+        const pub = this.room.localParticipant.getTrackPublication(LivekitClient.Track.Source.ScreenShare);
+        if (pub?.track) await this.room.localParticipant.setScreenShareEnabled(false);
+    }
+
     async setMicDevice(deviceId) {
         if (this.room) await this.room.switchActiveDevice('audioinput', deviceId);
     }
@@ -575,6 +582,10 @@ class MediaFacade {
     async toggleScreenShare() { return this.impl ? this.impl.toggleScreenShare() : false; }
     async forceMute() { return this.impl && this.impl.forceMute(); }
     async forceCameraOff() { return this.impl && this.impl.forceCameraOff(); }
+    /** Forced stop (host revoked can_share_screen) — bypasses the grant check. */
+    async stopScreenShare() { return this.impl && this.impl.stopScreenShare && this.impl.stopScreenShare(); }
+    /** Roster media_state hook (mesh: hide a stopped remote screen view). */
+    notifyPeerState(p) { if (this.impl && this.impl.onPeerMediaState) this.impl.onPeerMediaState(p); }
     async setMicDevice(id) { return this.impl && this.impl.setMicDevice(id); }
     async setCameraDevice(id) { return this.impl && this.impl.setCameraDevice(id); }
     async setOutputDevice(id) { return this.impl && this.impl.setOutputDevice(id); }
