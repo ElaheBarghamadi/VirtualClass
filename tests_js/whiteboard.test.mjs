@@ -17,7 +17,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createCanvas } from '@napi-rs/canvas';
 import { JSDOM } from 'jsdom';
 
@@ -129,6 +129,26 @@ async function boot({ canDraw = true } = {}) {
   window.HTMLCanvasElement.prototype.getContext = function getContext(type) {
     return type === '2d' ? contextFor(this) : null;
   };
+  /* assigning ``canvas.width``/``height`` reallocates the backing store in a
+     real browser (and clears it). Mirror that immediately, otherwise the
+     resize happens lazily inside the next getContext() and wipes the frame
+     that was drawn in between. */
+  for (const prop of ['width', 'height']) {
+    const descriptor = Object.getOwnPropertyDescriptor(window.HTMLCanvasElement.prototype, prop);
+    Object.defineProperty(window.HTMLCanvasElement.prototype, prop, {
+      configurable: true,
+      enumerable: descriptor.enumerable,
+      get() { return descriptor.get.call(this); },
+      set(value) {
+        descriptor.set.call(this, value);
+        const entry = backing.get(this);
+        if (entry) {
+          const next = Math.max(1, Math.round(Number(this[prop]) || 1));
+          if (entry.canvas[prop] !== next) entry.canvas[prop] = next;
+        }
+      },
+    });
+  }
   const proto = Object.getPrototypeOf(createCanvas(2, 2).getContext('2d'));
   const nativeDrawImage = proto.drawImage;
   proto.drawImage = function drawImage(source, ...rest) {
@@ -213,6 +233,39 @@ async function boot({ canDraw = true } = {}) {
     await tick(20);
   };
 
+  /* read one device pixel from the canvas backing store */
+  const pixelAt = (x, y, dpr = window.devicePixelRatio || 1) => {
+    const ctx = canvas.getContext('2d');
+    const data = ctx.getImageData(Math.round(x * dpr), Math.round(y * dpr), 1, 1).data;
+    return [data[0], data[1], data[2], data[3]];
+  };
+  /* coloured ink only — the desk background and sheet shadows are grey */
+  const inkCount = (dpr = window.devicePixelRatio || 1, match = (px) => Math.max(...px) - Math.min(...px) > 25) => {
+    const ctx = canvas.getContext('2d');
+    const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+    let ink = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i + 3] > 8 && match([data[i], data[i + 1], data[i + 2]])) ink += 1;
+    }
+    return ink;
+  };
+  /* bounding box (in css px) of every pixel matching ``match`` */
+  const inkBox = (match, dpr = window.devicePixelRatio || 1) => {
+    const ctx = canvas.getContext('2d');
+    const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+    let minX = Infinity; let minY = Infinity; let maxX = -1; let maxY = -1;
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i + 3] <= 8) continue;
+      if (!match([data[i], data[i + 1], data[i + 2]])) continue;
+      const index = i / 4;
+      const x = (index % canvas.width) / dpr;
+      const y = Math.floor(index / canvas.width) / dpr;
+      minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+      minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+    }
+    return maxX < 0 ? null : { minX, minY, maxX, maxY };
+  };
+
   const pointer = (type, x, y, extra = {}) => {
     const event = new window.PointerEvent(type, {
       bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0, buttons: type === 'pointerup' ? 0 : 1,
@@ -220,7 +273,7 @@ async function boot({ canDraw = true } = {}) {
     Object.assign(event, { pointerId: 1, pointerType: 'mouse', isPrimary: true, pressure: 0.5, ...extra });
     canvas.dispatchEvent(event);
   };
-  return { dom, window, Whiteboard, socket, canvas, wrap, pointer, acceptDialog };
+  return { dom, window, Whiteboard, socket, canvas, wrap, pointer, acceptDialog, pixelAt, inkCount, inkBox };
 }
 
 export { boot, FakeWebSocket, whiteboardMarkup, syncSources };
@@ -230,7 +283,7 @@ export { boot, FakeWebSocket, whiteboardMarkup, syncSources };
 /* ------------------------------------------------------------------ */
 async function main() {
   syncSources();
-  const { window, Whiteboard, socket, canvas, pointer, acceptDialog } = await boot({ canDraw: true });
+  const { window, Whiteboard, socket, canvas, pointer, acceptDialog, pixelAt, inkCount, inkBox } = await boot({ canDraw: true });
 
   await check('boot: markup wiring finds every element ui.js needs', () => {
     for (const id of ['wb-canvas-wrap', 'whiteboard-canvas', 'wb-palette', 'wb-pages-list', 'wb-status',
@@ -266,6 +319,129 @@ async function main() {
     same(stroke.width, Whiteboard.tools.width, 'width in reference units');
     same(Whiteboard.objects(1).filter((op) => !op.live).length, 1, 'model objects');
     assert(Whiteboard._pageOps instanceof Map, '_pageOps must be a Map');
+  });
+
+  await check('pixels: the stroke really paints on the canvas', async () => {
+    Whiteboard.chrome.clearSelection?.();
+    Whiteboard.model.apply({ type: 'clear', page: 1 });
+    Whiteboard.render();
+    await tick(60);
+    same(inkCount() <= 4, true, `page should be blank, ink=${inkCount()}`);
+
+    Whiteboard.setTool('pen');
+    Whiteboard.setColor('#dc2626');
+    pointer('pointerdown', 120, 160);
+    pointer('pointermove', 240, 240);
+    pointer('pointermove', 360, 320);
+    pointer('pointerup', 360, 320);
+    await tick(80);
+    assert(Whiteboard.objects(1).length === 1, 'stroke did not reach the model');
+    const op = Whiteboard.objects(1)[0];
+    same(op.color, '#dc2626', 'stroke colour');
+    // smoothing runs the curve through the segment midpoints, so sample there
+    const redAt = [[180, 200], [240, 240], [300, 280]]
+      .some(([x, y]) => { const [r, g, b] = pixelAt(x, y); return r > 120 && r > g + 40 && r > b + 40; });
+    assert(redAt, 'no red ink along the drawn path');
+
+    // and the ink must sit where the pointer was, not somewhere else
+    const box = inkBox(([r, g, b]) => r > 120 && r > g + 40 && r > b + 40);
+    assert(box, 'no red pixels found at all');
+    const near = (a, b) => Math.abs(a - b) <= 20;
+    assert(near(box.minX, 120) && near(box.maxX, 360) && near(box.minY, 160) && near(box.maxY, 320),
+      `red ink landed at ${box.minX},${box.minY}..${box.maxX},${box.maxY}, expected ~120,160..360,320`);
+  });
+
+  await check('pixels: the page sheet, grid and background really render', async () => {
+    Whiteboard.setPageStyle({ color: '#fff7ed', grid: 'grid' });
+    Whiteboard.render();
+    await tick(80);
+    const [r, g, b] = pixelAt(40, 640);
+    assert(r > 240 && g > 235 && b > 220 && b < r - 3, `page sheet not painted (${r},${g},${b})`);
+    const lines = inkBox((px) => px[0] < 250 && px[1] < 250 && px[2] < 250)
+      || inkBox((px) => Math.max(...px) - Math.min(...px) > 6);
+    assert(lines && lines.maxX - lines.minX > 600, 'grid lines missing');
+    Whiteboard.setPageStyle({ color: '#ffffff', grid: 'none' });
+    Whiteboard.render();
+    await tick(80);
+  });
+
+  await check('pixels: drawing works with a canvas that is not at the page origin', async () => {
+    const offset = { left: 220, top: 90 };
+    const originalRect = window.Element.prototype.getBoundingClientRect;
+    try {
+      window.Element.prototype.getBoundingClientRect = function rect() {
+        const own = this.__w || 1200;
+        const height = this.__h || 700;
+        if (this === canvas) {
+          return { x: offset.left, y: offset.top, left: offset.left, top: offset.top,
+            width: own, height, right: offset.left + own, bottom: offset.top + height };
+        }
+        return defaultRect(this);
+      };
+      Whiteboard.render();
+      await tick(40);
+      Whiteboard.setTool('pen');
+      Whiteboard.setColor('#2563eb');
+      pointer('pointerdown', offset.left + 240, offset.top + 300);
+      pointer('pointermove', offset.left + 420, offset.top + 380);
+      pointer('pointerup', offset.left + 420, offset.top + 380);
+      await tick(80);
+      const local = (x, y) => [x - offset.left, y - offset.top];
+      const blueAt = [local(offset.left + 330, offset.top + 340)]
+        .some(([x, y]) => { const [r, g, b] = pixelAt(x, y); return b > 120 && b > r + 30; });
+      assert(blueAt, 'stroke landed in the wrong place');
+      const box = inkBox(([r, g, b]) => b > 120 && b > r + 30);
+      assert(box && Math.abs(box.minX - 240) <= 22 && Math.abs(box.maxX - 420) <= 22,
+        `blue ink at ${box && box.minX}..${box && box.maxX}, expected ~240..420 (canvas-local)`);
+      assert(box && Math.abs(box.minY - 300) <= 22 && Math.abs(box.maxY - 380) <= 22,
+        `blue ink vertically off at ${box && box.minY}..${box && box.maxY}`);
+      assert(Whiteboard.objects(1).some((o) => o.tool === 'pen'), 'stroke missing from the model');
+    } finally {
+      window.Element.prototype.getBoundingClientRect = originalRect;
+      Whiteboard.resize();
+      await tick(40);
+    }
+  });
+
+  await check('pixels: hi-dpi (dpr = 2) keeps ink in the same spot', async () => {
+    const renderer = Whiteboard.renderer;
+    const [w0, h0, dpr0] = [renderer.width, renderer.height, renderer.dpr];
+    try {
+      window.devicePixelRatio = 2;
+      renderer.dpr = 2;
+      renderer.setSize(w0, h0 + 1);
+      renderer.setSize(w0, h0);
+      Whiteboard.render();
+      await tick(120);
+      same(canvas.width, w0 * 2, 'canvas backing store is not hi-dpi');
+      same(renderer.width, w0, 'css width changed');
+      Whiteboard.model.apply({ type: 'clear', page: 1 });
+      Whiteboard.render();
+      await tick(60);
+      Whiteboard.setTool('pen');
+      Whiteboard.setColor('#059669');
+      pointer('pointerdown', 300, 300);
+      pointer('pointermove', 420, 360);
+      pointer('pointermove', 500, 400);
+      pointer('pointerup', 500, 400);
+      await tick(120);
+      const green = ([r, g, b]) => g > 120 && g > r + 55 && g > b + 30;
+      const greenAt = [[360, 330], [420, 360], [460, 380]]
+        .some(([x, y]) => { const [r, g, b] = pixelAt(x, y, 2); return green([r, g, b]); });
+      assert(greenAt, 'hi-dpi stroke misplaced');
+      const box = inkBox(green, 2);
+      const near = (a, b) => Math.abs(a - b) <= 22;
+      assert(box && near(box.minX, 300) && near(box.maxX, 500) && near(box.minY, 300) && near(box.maxY, 400),
+        `hi-dpi ink at ${box && box.minX},${box && box.minY}..${box && box.maxX},${box && box.maxY}, expected ~300,300..500,400`);
+    } finally {
+      window.devicePixelRatio = 1;
+      renderer.dpr = dpr0;
+      renderer.setSize(w0, h0 + 1);
+      renderer.setSize(w0, h0);
+      Whiteboard.render();
+      await tick(80);
+      same(canvas.width, w0, 'backing store not restored');
+    }
   });
 
   await check('pen: the same stroke survives a two-client replay round trip', () => {
@@ -355,6 +531,26 @@ async function main() {
     editor.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true }));
     await tick();
     const op = socket.ops().slice(before).find((entry) => entry.type === 'text' && !entry.live);
+    if (!op) {
+      const el = window.document.querySelector('.wb-inline-editor');
+      console.log('   [dbg] canDraw=%s tool=%s sameEditor=%s connected=%s value=%j ops=%j editors=%d pending=%d',
+        Whiteboard.canDraw, Whiteboard.tool, el === Whiteboard.tools?._editor,
+        Boolean(el && el.isConnected), el && el.value, socket.ops().slice(-2),
+        window.document.querySelectorAll('.wb-inline-editor').length,
+        Whiteboard.model.pending.size);
+    }
+    if (!op) {
+      let seen = 0;
+      const probe = () => { seen += 1; };
+      editor.addEventListener('keydown', probe);
+      editor.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true }));
+      await tick();
+      console.log('   [dbg2] own listener fired %d times, editorConnected=%s toolsEditor=%s editors=%d',
+        seen, editor.isConnected, Boolean(Whiteboard.tools._editor),
+        window.document.querySelectorAll('.wb-inline-editor').length);
+      const op2 = socket.ops().slice(before).find((entry) => entry.type === 'text' && !entry.live);
+      console.log('   [dbg3] text op after retry:', Boolean(op2));
+    }
     assert(op, 'no text op');
     same(op.text, 'سلام تخته');
     assert(!window.document.querySelector('.wb-inline-editor'), 'editor not removed');
@@ -860,7 +1056,7 @@ async function main() {
   process.exit(failed.length ? 1 : 0);
 }
 
-if (process.argv[1] && process.argv[1].endsWith('board.test.mjs')) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((err) => {
     console.error('harness crashed:', err);
     process.exit(2);

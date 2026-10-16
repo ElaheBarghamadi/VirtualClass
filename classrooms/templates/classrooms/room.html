@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% load static %}
+{% load static client_assets %}
 {% block title %}{{ classroom.title }}{% endblock %}
 {% block extra_css %}
 <link rel="stylesheet" href="{% static 'css/room.css' %}">
@@ -58,7 +58,8 @@
      data-media-enabled="{{ media.enabled|yesno:'1,0' }}"
      data-ice-servers="{{ media.ice_servers_json }}"
      data-mesh-max="{{ media.mesh_max_participants }}"
-     data-show-chat="{{ classroom.show_chat_default|yesno:'1,0' }}">
+     data-show-chat="{{ classroom.show_chat_default|yesno:'1,0' }}"
+     data-wb-build="{% client_build %}">
 
     <header class="room-header">
         <div class="room-title">
@@ -617,9 +618,52 @@
 <script src="{% static 'vendor/pdf.min.js' %}"></script>
 <script>window.PDF_WORKER_URL = "{% static 'vendor/pdf.worker.min.js' %}";</script>
 <script>
-    const s = document.createElement('script');
-    s.type = 'module';
-    s.src = "{% static 'js/room.js' %}";
-    document.body.appendChild(s);
+    /* The room is a single ES-module graph.  Two failures are otherwise
+       invisible — the scripts cannot be fetched at all, or a *stale* copy is
+       served from a browser/proxy cache after a deploy — and both look exactly
+       like "the whiteboard does nothing".  Load the graph explicitly, compare
+       the build stamp with the one this page was rendered with, and say what
+       is wrong instead of failing silently. */
+    function clientWarning(text) {
+        if (document.getElementById('client-warning')) return;
+        const box = document.createElement('div');
+        box.id = 'client-warning';
+        box.setAttribute('role', 'alert');
+        box.style.cssText = 'position:fixed;z-index:9999;top:.6rem;left:50%;transform:translateX(-50%);'
+            + 'max-width:min(46rem,94vw);padding:.6rem .9rem;background:#7f1d1d;color:#fff;'
+            + 'border-radius:.6rem;font-size:.85rem;line-height:1.8;box-shadow:0 10px 30px rgba(0,0,0,.35)';
+        box.innerHTML = '<strong>خطا در بارگذاری کلاینت کلاس:</strong> ' + text
+            + ' <button type="button" style="margin-inline-start:.5rem;background:#fff;color:#7f1d1d;'
+            + 'border:0;border-radius:.4rem;padding:.15rem .5rem;cursor:pointer">تلاش دوباره</button>';
+        box.querySelector('button').addEventListener('click', () => location.reload());
+        document.body.appendChild(box);
+    }
+
+    /* ``?v=<build>`` matters: the pre-rewrite engine lived at the very same
+       URL (``static/js/whiteboard.js``) and exported the same name, so a
+       browser/proxy copy of the old file links up fine and just sits there —
+       indistinguishable from "the whiteboard does nothing".  The stamp is
+       rendered by the server, so a new build can never be served a stale
+       module graph. */
+    window.__WB_EXPECTED_BUILD__ = "{% client_build %}";
+    const roomScript = document.createElement('script');
+    roomScript.type = 'module';
+    roomScript.src = "{% static 'js/room.js' %}?v={% client_build %}";
+    roomScript.addEventListener('error', () => clientWarning(
+        'فایل‌های جاوااسکریپت بارگذاری نشدند. اگر روی سرور اجرا می‌کنید '
+        + '<code>collectstatic</code> را اجرا کنید و صفحه را با Ctrl+Shift+R تازه کنید.'));
+    roomScript.addEventListener('load', () => setTimeout(() => {
+        const wb = window.__wb;
+        const expected = window.__WB_EXPECTED_BUILD__;
+        if (!wb || !wb.ready) {
+            clientWarning('تختهٔ سفید آماده نشد؛ متن قرمز کنسول مرورگر (F12) را ببینید.');
+            return;
+        }
+        if (expected && wb.build !== expected) {
+            clientWarning('نسخهٔ قدیمی کلاینت از کش بارگذاری شد (' + wb.build + ' ≠ ' + expected
+                + '). صفحه را با Ctrl+Shift+R تازه کنید.');
+        }
+    }, 2000));
+    document.body.appendChild(roomScript);
 </script>
 {% endblock %}

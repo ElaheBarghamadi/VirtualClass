@@ -126,10 +126,6 @@ export class BoardChrome {
             this.wb.setWidth(Number(event.target.value));
             this.$('wb-width-value').textContent = String(event.target.value);
         });
-        this.$('wb-bg')?.addEventListener('input', (event) => {
-            if (!this.wb.canDraw) return this.wb.deny();
-            this.wb.setPageStyle({ color: event.target.value });
-        });
         this.$('wb-grid')?.addEventListener('click', () => {
             if (!this.wb.canDraw) return this.wb.deny();
             this.wb.cycleGrid();
@@ -168,7 +164,12 @@ export class BoardChrome {
         });
 
         document.addEventListener('click', (event) => {
-            if (!event.target.closest('.wb-popover, .wb-popover-toggle')) this.closePopovers();
+            // Any element that owns a popover keeps it open: the toolbar
+            // actions carry ``.wb-popover-toggle``, but a *tool* button opens
+            // its own palette through ``data-popover`` alone.  Without this the
+            // click bubbles up and closes the palette it just opened (the
+            // sticky-note colours were unreachable that way).
+            if (!event.target.closest('.wb-popover, [data-popover]')) this.closePopovers();
         });
     }
 
@@ -191,27 +192,19 @@ export class BoardChrome {
     }
 
     _bindPanels() {
-        for (const button of this.all('[data-wb-panel]')) {
-            button.addEventListener('click', () => {
-                const panel = button.dataset.wbPanel;
-                const isOpen = this.$(`wb-panel-${panel}`)?.classList.contains('hidden') === false;
-                this.openPanel(isOpen ? null : panel);
-            });
-        }
-        this.$('wb-panel-close')?.addEventListener('click', () => this.openPanel(null));
-        for (const button of this.all('[data-panel-close]')) {
-            button.addEventListener('click', () => this.openPanel(null));
-        }
+        // the pages drawer is the only panel; the floating popovers are closed
+        // by their own toggle, by a click outside, or with Escape
+        this.$('wb-pages-close')?.addEventListener('click', () => this.openPanel(null));
     }
 
     /* ------------------------------------------------------------------ */
     /* popovers                                                           */
     /* ------------------------------------------------------------------ */
 
-    togglePopover(name) {
+    togglePopover(name, force) {
         const target = this.$(`wb-popover-${name}`);
         if (!target) return;
-        const willOpen = target.classList.contains('hidden');
+        const willOpen = force === undefined ? target.classList.contains('hidden') : Boolean(force);
         this.closePopovers();
         if (willOpen) {
             target.classList.remove('hidden');
@@ -225,17 +218,19 @@ export class BoardChrome {
         this.all('[data-popover]').forEach((button) => button.setAttribute('aria-expanded', 'false'));
     }
 
+    /** Close an open popover; returns true when something was closed. */
+    closePopoversIfOpen() {
+        const open = this.q('.wb-popover:not(.hidden)');
+        if (!open) return false;
+        this.closePopovers();
+        return true;
+    }
+
     openPanel(name) {
-        // the pages panel is the side drawer; everything else is a floating panel
+        // the pages panel is the side drawer; the rest are floating popovers
         this.togglePanel(name === 'pages');
-        for (const panel of ['layers', 'export', 'style', 'help']) {
-            const element = this.$(`wb-panel-${panel}`);
-            if (element) element.classList.toggle('hidden', panel !== name);
-        }
-        this.all('[data-wb-panel]').forEach((button) => {
-            button.setAttribute('aria-pressed', String(button.dataset.wbPanel === name));
-            button.classList.toggle('active', button.dataset.wbPanel === name);
-        });
+        this.closePopovers();
+        if (name && name !== 'pages') this.togglePopover(name, true);
     }
 
     /* ------------------------------------------------------------------ */
@@ -275,7 +270,7 @@ export class BoardChrome {
         const toolbar = this.q('.wb-toolbar');
         toolbar?.classList.toggle('no-draw', !canDraw);
         this.$('wb-nodraw-hint')?.classList.toggle('hidden', canDraw);
-        for (const id of ['wb-bg', 'wb-grid', 'wb-new-page', 'wb-page-add', 'wb-page-dup', 'wb-page-remove']) {
+        for (const id of ['wb-page-bg', 'wb-grid', 'wb-new-page', 'wb-page-add', 'wb-page-dup', 'wb-page-remove']) {
             const element = this.$(id);
             if (element) element.disabled = !canDraw;
         }

@@ -10,13 +10,19 @@ Each test targets a concrete defect that the suite did not cover:
   have a username (``get_full_name()`` is empty for them).
 """
 import os
+import re
 import tempfile
+from pathlib import Path
+
+from django.conf import settings
 
 from django.contrib.auth import get_user_model
 from django.core.files.base import ContentFile
-from django.test import TestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
+
+from classrooms.templatetags.client_assets import client_build
 
 from classrooms.models import ClassroomMember, SharedFile
 from classrooms.services import (
@@ -215,3 +221,55 @@ class ParticipantNamingTests(TestCase):
         classroom = create_classroom(make_user("n_owner"), title="Names")
         member = join_classroom(classroom, user)
         self.assertEqual(member.participant_name, "bare_user")
+
+
+class ClientBuildStampTests(SimpleTestCase):
+    """The room tells the user when a stale client bundle is being served.
+
+    A browser or a proxy can keep answering with the previous ``whiteboard.js``
+    after a deploy.  The room keeps working then, but the board silently does
+    nothing, so the page renders the stamp of the bundle *the server has* and
+    compares it with the one that ran.
+    """
+
+    def test_the_tag_reads_the_stamp_out_of_the_bundle(self):
+        source = (settings.BASE_DIR / "static" / "js" / "whiteboard.js").read_text(encoding="utf-8")
+        match = re.search(r"""export\s+const\s+BUILD\s*=\s*['"]([^'"]+)['"]""", source)
+        self.assertIsNotNone(match, "whiteboard.js must declare a BUILD stamp")
+        self.assertEqual(client_build(), match.group(1))
+
+    def test_a_missing_bundle_yields_an_empty_stamp(self):
+        with tempfile.TemporaryDirectory() as empty:
+            with override_settings(STATICFILES_DIRS=[empty], BASE_DIR=Path(empty)):
+                self.assertEqual(client_build(), "")
+
+    def test_the_room_template_renders_the_stamp_twice(self):
+        template = (settings.BASE_DIR / "classrooms" / "templates" / "classrooms"
+                    / "room.html").read_text(encoding="utf-8")
+        self.assertGreaterEqual(template.count("{% client_build %}"), 2)
+
+class ClientAssetFreshnessTests(SimpleTestCase):
+    """The client must never be served a stale module graph.
+
+    The pre-rewrite engine lived at ``static/js/whiteboard.js`` and exported the
+    same name, so a cached (or not yet collected) copy links up perfectly and
+    then does nothing at all — from the outside that is exactly what "the
+    whiteboard is broken" looks like.  Both entry points therefore have to be
+    requested through a URL that carries the server's build stamp.
+    """
+
+    def setUp(self):
+        base = settings.BASE_DIR
+        self.html = (base / "classrooms" / "templates" / "classrooms" / "room.html").read_text(encoding="utf-8")
+        self.room = (base / "static" / "js" / "room.js").read_text(encoding="utf-8")
+
+    def test_the_room_module_is_loaded_through_a_stamped_url(self):
+        self.assertIn("{% static 'js/room.js' %}?v={% client_build %}", self.html)
+
+    def test_the_engine_is_imported_through_a_stamped_url(self):
+        self.assertRegex(self.room, r"await import\(`\./whiteboard\.js\$\{WB_STAMP")
+        self.assertIn("dataset.wbBuild", self.room)
+
+    def test_a_stale_bundle_is_reported_to_the_user(self):
+        self.assertIn("__WB_EXPECTED_BUILD__", self.html)
+        self.assertIn("client-warning", self.html)

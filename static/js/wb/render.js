@@ -112,6 +112,7 @@ export class BoardRenderer {
         this._scene = null;
         this._sceneKey = '';
         this._sceneCtx = null;
+        this._appliedDpr = 0;
         this.unavailable = typeof this.ctx?.scale !== 'function';
     }
 
@@ -119,12 +120,20 @@ export class BoardRenderer {
     /* viewport                                                           */
     /* ------------------------------------------------------------------ */
 
+    /**
+     * Resize the viewport.  Also returns ``true`` when only the device pixel
+     * ratio changed: browser zoom and dragging the window onto a second
+     * monitor change ``devicePixelRatio`` without changing the CSS size, and
+     * the backing store has to be rebuilt (or the board goes blurry/streaky
+     * until the next real resize).
+     */
     setSize(cssWidth, cssHeight) {
         const width = Math.max(1, Math.floor(cssWidth));
         const height = Math.max(1, Math.floor(cssHeight));
-        if (width === this.width && height === this.height) return false;
+        if (width === this.width && height === this.height && this._appliedDpr === this.dpr) return false;
         this.width = width;
         this.height = height;
+        this._appliedDpr = this.dpr;
         this.canvas.width = Math.max(1, Math.round(width * this.dpr));
         this.canvas.height = Math.max(1, Math.round(height * this.dpr));
         this.canvas.style.width = `${width}px`;

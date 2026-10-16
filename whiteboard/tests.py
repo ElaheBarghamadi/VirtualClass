@@ -11,6 +11,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
+from pathlib import Path
+
+from django.conf import settings
 
 from asgiref.sync import async_to_sync
 from channels.routing import URLRouter
@@ -1107,3 +1111,68 @@ class WhiteboardSyncTests(WhiteboardConsumerTestCase):
         err, pong = async_to_sync(scenario)()
         self.assertEqual(err["type"], "error")
         self.assertEqual(pong, {"type": "pong", "t": 7})
+
+
+class ClientMarkupContractTests(SimpleTestCase):
+    """Every DOM hook the whiteboard client asks for must exist in the room.
+
+    The client is a separate ES-module graph that only knows the page through
+    ids, classes and ``data-`` attributes.  A renamed or removed id never
+    raises — the button simply stops working, which is the most expensive kind
+    of bug to find by hand (the sticky-note palette was unreachable for exactly
+    that reason).  ``tests_js/`` exercises the same contract from the other
+    side, by clicking the real buttons in a real DOM.
+    """
+
+    SOURCES = ("whiteboard.js", "wb/tools.js", "wb/ui.js", "wb/render.js", "wb/transport.js")
+
+    # ``chrome.$('wb-x')`` / ``getElementById('wb-x')`` / ``querySelector('#wb-x')``
+    ID_PATTERNS = (
+        re.compile(r"""\.\$\('([A-Za-z0-9_-]+)'\)"""),
+        re.compile(r"""getElementById\('([A-Za-z0-9_-]+)'\)"""),
+        re.compile(r"""querySelector\('#([A-Za-z0-9_-]+)'\)"""),
+    )
+
+    def setUp(self):
+        self.static = Path(settings.BASE_DIR) / "static" / "js"
+        self.template = (Path(settings.BASE_DIR) / "classrooms" / "templates"
+                         / "classrooms" / "room.html").read_text(encoding="utf-8")
+
+    def requested_ids(self):
+        ids = set()
+        for name in self.SOURCES:
+            source = (self.static / name).read_text(encoding="utf-8")
+            for pattern in self.ID_PATTERNS:
+                ids.update(pattern.findall(source))
+        return {value for value in ids if value.startswith(("wb-", "whiteboard"))}
+
+    def test_every_id_the_client_uses_exists_in_the_template(self):
+        missing = sorted(
+            value for value in self.requested_ids()
+            if f'id="{value}"' not in self.template
+        )
+        self.assertEqual(
+            missing, [],
+            "the room template lost ids the client binds to: " + ", ".join(missing),
+        )
+
+    def test_the_stylesheet_still_styles_what_the_client_creates(self):
+        css = (Path(settings.BASE_DIR) / "static" / "css" / "room.css").read_text(encoding="utf-8")
+        for selector in (".wb-inline-editor", ".wb-popover", ".wb-status", ".wb-toolbar",
+                         ".wb-pages-panel", ".wb-selection-bar", ".wb-swatch"):
+            self.assertIn(selector, css, f"{selector} is no longer styled")
+
+    def test_the_room_page_loads_the_client_and_reports_its_build(self):
+        # the bootstrap compares the stamp the server rendered with the stamp of
+        # the bundle that actually ran, so a stale cached script is visible
+        self.assertIn("data-wb-build=", self.template)
+        self.assertIn("__WB_EXPECTED_BUILD__", self.template)
+        self.assertIn("wb.build !== expected", self.template)
+        self.assertIn("js/room.js", self.template)
+
+    def test_the_client_exposes_a_diagnostics_hook(self):
+        source = (self.static / "whiteboard.js").read_text(encoding="utf-8")
+        self.assertIn("diag()", source)
+        self.assertIn("export const BUILD", source)
+        # the boot line is what a support round asks for first
+        self.assertIn("[whiteboard] build", source)

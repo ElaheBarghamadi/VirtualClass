@@ -9,9 +9,17 @@ without a browser or a Django server.
 ```bash
 cd tests_js
 npm install
-npm test              # 43 checks
-npm test -- --dump    # ...and write .build/ops.json (every frame the client sent)
+npm test                                   # all four suites
+node whiteboard.test.mjs                   # 47 checks — stubbed canvas, deep DOM coverage
+node board.test.mjs                        # 44 checks — real rasterizer, pixel assertions
+node offline.test.mjs                      # 17 checks — works with no socket at all
+node dom_contract.test.mjs                 #  7 checks — markup ↔ client contract
+node board.test.mjs --dump .build/ops.json # dump every op the client sent
 ```
+
+Every suite copies `static/js` into `.build/` and imports it as ES modules, and
+each `boot()` gets its **own module instance**, so two environments in one
+process never read each other's state.
 
 What is covered:
 
@@ -33,6 +41,51 @@ What is covered:
 * **the compatibility surface** `room.js` and `tests_e2e/run_e2e.py` rely on
   (`Whiteboard.init/resize/setPermission/page/canDraw/_pageOps/PAGE`).
 
+## `board.test.mjs` — the browser-faithful suite
+
+`whiteboard.test.mjs` replaces the 2D context with recording stubs, so it can
+assert *what the client asked the canvas to draw*. That cannot catch a bug in
+the drawing itself. `board.test.mjs` instead gives every `<canvas>` a real
+backing store (`@napi-rs/canvas`), dispatches real `PointerEvent`s through
+jsdom's event pipeline and then reads the pixels back, which covers exactly the
+class of bug that only shows up in a browser:
+
+* ink lands where the pointer was, also when the canvas sits at an offset and
+  when the page is zoomed/scrolled;
+* `devicePixelRatio` handling (2× backing store, dpr changes without a size
+  change);
+* the page sheet, grids and backgrounds really paint;
+* PNG/print exports contain real image bytes;
+* a stroke made while the socket is down is queued and flushed on reconnect;
+* malformed server frames cannot break the render loop;
+* the whole toolbar, button by button: every tool, every popover, the pages
+  drawer, zoom, layers, duplicate/delete, export and the help sheet;
+* the keyboard: every tool letter the tooltips advertise, `Ctrl+A/D/Z/Y`,
+  `Delete`, `Escape`, arrow nudging and `Alt+←/→` page navigation;
+* `__wb.diag()` reports the state support needs (`fresh`, canvas size, dpr,
+  socket state, pending ops).
+
+## `offline.test.mjs` — the class without a socket
+
+A teacher who runs `runserver` without Redis (or with a channel layer that is
+down) still has to be able to open the board and draw — the strokes simply wait
+in the outbox. That path is its own suite: boot with a socket that never opens,
+draw, watch the op queue, then open the socket and check it is flushed, that the
+server echo clears the pending flag *without* applying the op twice, and that a
+viewer without the permission stays locked the whole time.
+
+## `dom_contract.test.mjs` — markup ↔ client
+
+A typo in an id or a selector is invisible to the other suites (the client uses
+`?.` everywhere, so a missing hook is a silent no-op) and shows up in the
+browser as a button that does nothing. This suite regex-scans the client for
+every `getElementById` / `$()` / `querySelector` it uses and checks it against
+the real room template. Anything created at runtime is listed explicitly with a
+reason, and the list is checked for stale entries so it cannot rot. It also
+guards the anti-stale-cache contract: both entry points must be requested
+through a `?v=<build>` URL.
+
 `--dump` exists because the server side needs proof that it accepts what the
 client sends: `whiteboard/tests.py::ClientContractTests` replays a captured
-session of exactly this shape through the real service layer.
+session of exactly this shape through the real service layer, and any dumped
+file can be re-validated with `whiteboard.protocol.validate_op`.

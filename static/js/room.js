@@ -12,7 +12,12 @@
  * — registered users and guests share one pipeline.
  */
 import { ChatClient } from './chat.js';
-import { Whiteboard } from './whiteboard.js';
+// The engine is fetched through a *versioned* URL.  The pre-rewrite engine was
+// served from this exact path with the same export name, so without the stamp
+// a cached copy would be linked in and the board would silently do nothing.
+// ``?v=`` falls back to the plain URL for non-template environments (tests).
+const WB_STAMP = document.getElementById('classroom-root')?.dataset.wbBuild || '';
+const { Whiteboard } = await import(`./whiteboard.js${WB_STAMP ? `?v=${encodeURIComponent(WB_STAMP)}` : ''}`);
 import { Presentation } from './presentation.js';
 import { Media } from './media.js';
 import { QuizClient } from './quiz.js';
@@ -981,10 +986,20 @@ function initControls() {
     });
     bind('btn-whiteboard', () => {
         if (!PERMISSIONS.can_use_whiteboard) return toast('شما اجازهٔ استفاده از تخته را ندارید.', 'warning');
-        if (Whiteboard.unavailable) return toast('کتابخانهٔ تخته بارگذاری نشد؛ صفحه را تازه کنید.', 'error');
-        // Ask the server to broadcast the state so EVERYONE sees the board.
+        if (Whiteboard.unavailable) {
+            return toast('کتابخانهٔ تخته در این مرورگر بارگذاری نشد؛ صفحه را با Ctrl+Shift+R تازه کنید و اگر تکرار شد متن کنسول (F12) را بفرستید.', 'error', 8000);
+        }
         const showing = !document.getElementById('view-whiteboard').classList.contains('hidden');
-        presence.send({ action: 'whiteboard_state', open: !showing });
+        const open = !showing;
+        // Open it here and now, then tell the server so the rest of the class
+        // follows.  The old order (wait for the broadcast) left the button
+        // completely dead whenever the room socket was down or still
+        // connecting — which looks exactly like "the whiteboard is broken".
+        applyWhiteboardState(open);
+        presence.send({ action: 'whiteboard_state', open });
+        if (open && presence.state !== 'connected') {
+            toast('تخته باز شد؛ اما اتصال کلاس برقرار نیست و تغییرات فعلاً فقط روی همین دستگاه می‌ماند.', 'warning', 6000);
+        }
     });
     bind('btn-chat', () => {
         const side = document.getElementById('room-side');

@@ -34,6 +34,24 @@ const DEFAULT_STICKY = { w: 330, h: 250 };
 const DEFAULT_TEXT_SIZE = 30;
 const DRAG_THRESHOLD = 2;
 
+/**
+ * Single-key tool shortcuts.  The toolbar tooltips and the help sheet have
+ * always advertised them; keeping the map here means the keyboard and the
+ * buttons can never disagree about a letter.
+ */
+export const TOOL_KEYS = {
+    v: 'select',
+    p: 'pen',
+    h: 'highlighter',
+    e: 'eraser',
+    l: 'line',
+    a: 'arrow',
+    r: 'rectangle',
+    o: 'ellipse',
+    t: 'text',
+    n: 'sticky',
+};
+
 export class BoardTools {
     /**
      * @param {object} options
@@ -804,6 +822,8 @@ export class BoardTools {
         };
 
         editor.addEventListener('keydown', (event) => {
+            // the editor owns every keystroke while it is open: letters must
+            // type, not switch tools
             event.stopPropagation();
             if (event.key === 'Escape') {
                 event.preventDefault();
@@ -895,7 +915,8 @@ export class BoardTools {
 
     handleKeyDown(event) {
         const target = event.target;
-        if (this._editor || target instanceof HTMLTextAreaElement || target instanceof HTMLInputElement) {
+        if (this._editor || target instanceof HTMLTextAreaElement || target instanceof HTMLInputElement
+            || target?.isContentEditable) {
             return false;
         }
         const meta = event.ctrlKey || event.metaKey;
@@ -927,6 +948,11 @@ export class BoardTools {
         if (meta && key === 'a') {
             event.preventDefault();
             this.selectAll();
+            return true;
+        }
+        if (!meta && !event.altKey && !event.shiftKey && TOOL_KEYS[key] && this.onTool) {
+            event.preventDefault();
+            this.onTool(TOOL_KEYS[key]);
             return true;
         }
         if (event.key === 'Delete' || event.key === 'Backspace') {

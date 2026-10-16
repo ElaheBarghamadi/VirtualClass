@@ -49,6 +49,15 @@ export class BoardSocket {
 
     connect() {
         if (this.closed) return;
+        // Never run two sockets at once: a reconnect timer can fire while a
+        // connection is already open or still handshaking (a flaky tunnel
+        // makes that common).  A second socket would leak a connection, keep a
+        // ghost participant in the roster, and let the *old* socket's close
+        // event report "offline" while the board is actually connected.
+        if (this.ws && (this.ws.readyState === WebSocket.OPEN
+            || this.ws.readyState === WebSocket.CONNECTING)) {
+            return;
+        }
         this._setStatus(this.attempt === 0 ? 'connecting' : 'reconnecting');
         let socket;
         try {
@@ -68,6 +77,7 @@ export class BoardSocket {
         };
 
         socket.onmessage = (event) => {
+            if (socket !== this.ws) return; // a socket we already replaced
             this.lastMessageAt = Date.now();
             let data;
             try {
@@ -79,6 +89,7 @@ export class BoardSocket {
         };
 
         socket.onclose = (event) => {
+            if (socket !== this.ws) return; // a stale socket dying quietly
             this._stopHeartbeat();
             if (event && (event.code === 4401 || event.code === 4403)) {
                 this.closed = true;
@@ -107,6 +118,8 @@ export class BoardSocket {
         const delay = Math.min(this.retryDelay, 15000) * (0.85 + Math.random() * 0.3);
         this.attempt += 1;
         this.retryTimer = setTimeout(() => {
+            this.retryTimer = null;
+            if (this._isOpen()) return; // came back on its own
             this.retryDelay = Math.min(this.retryDelay * 1.8, 15000);
             this.connect();
         }, delay);

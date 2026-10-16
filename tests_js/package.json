@@ -5,7 +5,7 @@
   "description": "Headless harness for the whiteboard client engine (jsdom + a real canvas)",
   "type": "module",
   "scripts": {
-    "test": "node whiteboard.test.mjs"
+    "test": "node whiteboard.test.mjs && node board.test.mjs && node offline.test.mjs && node dom_contract.test.mjs"
   },
   "dependencies": {
     "@napi-rs/canvas": "^1.0.11",

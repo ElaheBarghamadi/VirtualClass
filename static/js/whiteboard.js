@@ -30,6 +30,13 @@ import { BoardSocket } from './wb/transport.js';
 import { BoardChrome } from './wb/ui.js';
 import { PAGE_H, PAGE_W, clamp, opPoints, opX, opY } from './wb/geometry.js';
 
+/**
+ * Build stamp of this bundle.  The room template renders the stamp of the
+ * *server's* copy and the page compares the two: when a stale script is still
+ * cached the board would otherwise just sit there doing nothing.
+ */
+export const BUILD = 'wb-2026-10-16.1';
+
 const GRID_ORDER = ['none', 'grid', 'dots', 'lines', 'graph'];
 const CURSOR_TTL = 6000;
 const GHOST_TTL = 4000;
@@ -102,6 +109,9 @@ class WhiteboardImpl {
         });
         this.tools.onUndo = (kind) => (kind === 'redo' ? this.redo() : this.undo());
         this.tools.onPageChange = (delta) => this.setPage(this.page + delta);
+        // single-key tool shortcuts (P, E, R, …) go through the facade so the
+        // toolbar, the permission lock and the cursor all stay in sync
+        this.tools.onTool = (tool) => this.setTool(tool);
 
         this.chrome = new BoardChrome(this);
         this.chrome.init();
@@ -133,10 +143,20 @@ class WhiteboardImpl {
         this.ready = true;
         this.render();
         this.socket.connect();
+        if (typeof console !== 'undefined' && console.info) {
+            console.info(
+                `[whiteboard] build ${BUILD} · ${this.canDraw ? 'اجازهٔ نوشتن' : 'فقط مشاهده'}`
+                + ` · بوم ${canvas.width}×${canvas.height}@${this.renderer.dpr}x`,
+            );
+        }
     }
 
     _unavailable(message) {
         this.unavailable = true;
+        this._unavailableReason = message;
+        if (typeof console !== 'undefined' && console.error) {
+            console.error(`[whiteboard] unavailable: ${message}`);
+        }
         if (this.chrome) {
             this.chrome.setUnavailable(message);
         } else {
@@ -200,7 +220,15 @@ class WhiteboardImpl {
         document.addEventListener('keydown', (event) => {
             if (document.getElementById('view-whiteboard')?.classList.contains('hidden')) return;
             if (document.getElementById('settings-dialog')?.open) return;
+            // a modal (shortcuts, confirm…) owns the keyboard while it is up
+            if (document.querySelector('dialog[open]')) return;
             if (event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement) return;
+            // Escape closes a floating popover first — the same reflex as the
+            // help sheet, and the only way out of the palette on a phone
+            if (event.key === 'Escape' && this.chrome?.closePopoversIfOpen?.()) {
+                event.preventDefault();
+                return;
+            }
             const handled = this.tools.handleKeyDown(event);
             if (handled) this.chrome.setHistoryState({
                 canUndo: this.model.canUndo(this.page),
@@ -741,6 +769,10 @@ class WhiteboardImpl {
         if (!wrap || wrap.offsetParent === null) return;
         const rect = wrap.getBoundingClientRect();
         if (rect.width < 20 || rect.height < 20) return;
+        // browser zoom / a second monitor can change the ratio without the
+        // element changing size — keep the backing store in sync
+        const ratio = Math.min(window.devicePixelRatio || 1, 2.5);
+        if (ratio !== this.renderer.dpr) this.renderer.dpr = ratio;
         this.renderer.setSize(rect.width, rect.height);
         this.render();
     }
@@ -819,6 +851,59 @@ class WhiteboardImpl {
     /* compatibility surface (room.js + automated smoke tests)             */
     /* ------------------------------------------------------------------ */
 
+    /** Build stamp of the bundle that is actually running in this tab. */
+    get build() {
+        return BUILD;
+    }
+
+    /** Build stamp the server rendered into the page ("" when missing). */
+    get expectedBuild() {
+        return document.getElementById('classroom-root')?.dataset.wbBuild || '';
+    }
+
+    /**
+     * One-shot status report for debugging from the browser console
+     * (``__wb.diag()``).  Everything a support round needs in one object.
+     */
+    diag() {
+        const canvas = document.getElementById('whiteboard-canvas');
+        const wrap = document.getElementById('wb-canvas-wrap');
+        const box = (el) => {
+            if (!el) return null;
+            const rect = el.getBoundingClientRect();
+            return `${Math.round(rect.width)}×${Math.round(rect.height)}`;
+        };
+        return {
+            build: BUILD,
+            expectedBuild: this.expectedBuild,
+            fresh: !this.expectedBuild || this.expectedBuild === BUILD,
+            ready: Boolean(this.ready),
+            unavailable: Boolean(this.unavailable),
+            unavailableReason: this._unavailableReason || null,
+            canDraw: Boolean(this.canDraw),
+            page: this.page,
+            pages: this.model ? this.model.pageCount : 0,
+            objects: this.model ? this.model.objectCount(this.page) : 0,
+            pending: this.model ? this.model.pending.size : 0,
+            tool: this.tool,
+            color: this.color,
+            width: this.width,
+            canvas: canvas ? {
+                backing: `${canvas.width}×${canvas.height}`,
+                dpr: this.renderer ? this.renderer.dpr : null,
+                scale: this.renderer ? Number(this.renderer.scale.toFixed(4)) : null,
+                view: this.renderer ? (this.renderer.unavailable ? 'no-2d-context' : 'ok') : 'missing',
+            } : 'missing',
+            wrap: box(wrap),
+            socket: this.socket ? {
+                state: this.socket.status,
+                url: this.socket.url(),
+                outbox: this.socket.outbox.length,
+                peers: this.socket.presence.size,
+            } : null,
+        };
+    }
+
     /** page → list of raw operations (mirrors the old private map). */
     get _pageOps() {
         return this.model.rawPageMap();
@@ -830,6 +915,14 @@ class WhiteboardImpl {
 
     get tool() {
         return this.tools?.tool || 'pen';
+    }
+
+    get color() {
+        return this.tools?.color || null;
+    }
+
+    get width() {
+        return this.tools?.width ?? null;
     }
 
     /** Presentation annotation coordinates are document pixels. */
