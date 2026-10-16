@@ -181,6 +181,18 @@ body.full-page .messages {
     font-size: 2rem; font-weight: 800; color: var(--accent-contrast);
     background: linear-gradient(135deg, var(--accent), var(--primary));
 }
+/* Why a tile has no picture: "camera on, nothing arrived yet" or "this
+   network needs a TURN relay".  Informative, never a decoration. */
+.tile-hint {
+    position: absolute; inset-inline: .5rem; top: .45rem;
+    background: color-mix(in srgb, var(--background) 78%, transparent);
+    color: var(--text); padding: .15rem .55rem; border-radius: var(--radius-pill);
+    font-size: .68rem; line-height: 1.5; text-align: center;
+    max-width: calc(100% - 1rem); margin-inline: auto; display: block;
+}
+.tile-hint.waiting { color: var(--accent); }
+.tile-hint.warn { color: var(--danger); font-weight: 700; }
+.tile.cam-pending { outline: 1px dashed color-mix(in srgb, var(--accent) 45%, transparent); }
 .tile-overlay {
     position: absolute; inset-inline-start: .5rem; bottom: .45rem;
     display: flex; align-items: center; gap: .5rem;

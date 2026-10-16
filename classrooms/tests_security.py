@@ -121,10 +121,23 @@ class WsSafeFrameTests(SecurityTestBase):
     """Malformed frames fail closed; large frames are rejected before parsing."""
 
     def _cases(self):
+        """(routes, path, frame limit, initial messages) per socket.
+
+        The limits come from the consumers themselves — a hard-coded copy here
+        would silently stop testing the real limit (and did: the presence
+        socket's cap was raised for WebRTC signalling).
+        """
+        from chat.consumers import ChatConsumer
+        from classrooms.consumers import ClassroomConsumer
+        from whiteboard.consumers import WhiteboardConsumer
+
         return (
-            (presence_routes, f"/ws/classroom/{self.classroom.room_code}/", 32 * 1024, 2),
-            (chat_routes, f"/ws/classroom/{self.classroom.room_code}/chat/", 16 * 1024, 1),
-            (wb_routes, f"/ws/classroom/{self.classroom.room_code}/whiteboard/", 128 * 1024, 1),
+            (presence_routes, f"/ws/classroom/{self.classroom.room_code}/",
+             ClassroomConsumer.max_message_bytes, 2),
+            (chat_routes, f"/ws/classroom/{self.classroom.room_code}/chat/",
+             ChatConsumer.max_message_bytes, 1),
+            (wb_routes, f"/ws/classroom/{self.classroom.room_code}/whiteboard/",
+             WhiteboardConsumer.max_message_bytes, 1),
         )
 
     def test_malformed_json_gets_error_on_every_socket(self):

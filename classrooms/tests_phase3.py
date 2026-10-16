@@ -510,14 +510,43 @@ class RtcSignalRelayTests(TransactionTestCase):
 
         async_to_sync(scenario)()
 
-    def test_oversized_signal_is_dropped(self):
+    def test_a_camera_offer_is_not_too_big_for_the_relay(self):
+        """A real camera/screen offer is many times an audio-only one.
+
+        The relay used to cut envelopes at 16 KB, which silently threw away the
+        offer that turns a camera on — the class then never saw the picture and
+        nothing anywhere said why.
+        """
+        async def scenario():
+            owner_ws = await self._connected(self.owner)
+            stu_ws = await self._connected(self.student)
+
+            # ~40 KB: a normal Chrome offer with two video m-lines
+            big = {"sdp": {"type": "offer", "sdp": "v=0\r\n" + "a=rtpmap:96 VP8/90000\r\n" * 1200}}
+            await owner_ws.send_json_to({
+                "action": "rtc_signal", "to_member_id": self.stu_member.id, "data": big,
+            })
+            msg = await self._receive_typed(stu_ws, "rtc_signal")
+            assert msg["data"] == big, "the camera offer was truncated or dropped"
+            await self._close(stu_ws)
+            await self._close(owner_ws)
+
+        async_to_sync(scenario)()
+
+    def test_oversized_signal_is_dropped_and_reported(self):
+        """Above the cap (but still a legal socket frame): dropped + reported."""
         async def scenario():
             owner_ws = await self._connected(self.owner)
             stu_ws = await self._connected(self.student)
             await owner_ws.send_json_to({
                 "action": "rtc_signal", "to_member_id": self.stu_member.id,
-                "data": {"sdp": {"type": "offer", "sdp": "x" * 20000}},
+                "data": {"sdp": {"type": "offer", "sdp": "x" * 110_000}},
             })
+            # the sender gets an explicit error instead of silence
+            # the sender gets an explicit error instead of silence
+            error = await self._receive_typed(owner_ws, "error")
+            assert error.get("code") == "signal-too-large", error
+            assert error.get("bytes", 0) > 96 * 1024, error
             await self._assert_no_relay(stu_ws)
             await self._close(stu_ws)
             await self._close(owner_ws)

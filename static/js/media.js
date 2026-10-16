@@ -226,6 +226,43 @@ class LivekitMedia {
         return true;
     }
 
+    /**
+     * Same shape as the mesh engine's report, so one console command
+     * (`__media.diag()`) answers "why is nobody seeing my camera?" in either
+     * transport.  LiveKit publishes for us — the interesting facts are which
+     * local tracks are really published and what the server says about each
+     * remote participant.
+     */
+    diag() {
+        const describe = (track) => (track ? {
+            kind: track.kind,
+            readyState: track.mediaStreamTrack ? track.mediaStreamTrack.readyState : track.readyState,
+            muted: track.isMuted,
+            enabled: track.mediaStreamTrack ? track.mediaStreamTrack.enabled : undefined,
+        } : null);
+        const publications = (participant) => Array.from(participant.getTrackPublications().values())
+            .map((pub) => ({ source: pub.source, muted: pub.isMuted, subscribed: pub.isSubscribed, track: describe(pub.track) }));
+        return {
+            engine: 'livekit',
+            room: this.roomCode,
+            identity: this.currentIdentity,
+            quality: this.quality,
+            connected: Boolean(this.room && this.room.state === 'connected'),
+            url: this.room ? this.room.name || '' : '',
+            media: {
+                micOn: this.micOn,
+                cameraOn: this.cameraOn,
+                local: this.localParticipant ? publications(this.localParticipant) : [],
+            },
+            peers: this.room ? Array.from(this.room.remoteParticipants.values()).map((participant) => ({
+                identity: participant.identity,
+                connection: participant.connectionQuality,
+                roster: this.peerInfo.get(participant.identity) || null,
+                tracks: publications(participant),
+            })) : [],
+        };
+    }
+
     _syncRemotePermissions(participant) {
         participant.getTrackPublications().forEach((publication) => {
             const track = publication.track;
@@ -745,6 +782,11 @@ class MediaFacade {
     /** Keep roster-driven permission gates current in either media engine. */
     syncPeers(peers) { if (this.impl && this.impl.syncPeers) this.impl.syncPeers(peers); }
     handleSignal(msg) { if (this.impl && this.impl.handleSignal) this.impl.handleSignal(msg); }
+    /** Transport facts for bug reports: `__media.diag()` in the console. */
+    diag() {
+        if (this.impl && this.impl.diag) return this.impl.diag();
+        return { engine: this.engine, note: 'no media engine is running' };
+    }
 
     setLayout(mode) { if (this.impl) this.impl.setLayout(mode); }
     updatePip(view) { if (this.impl && this.impl.updatePip) this.impl.updatePip(view); }

@@ -130,8 +130,14 @@ class PresenceClient {
         };
         window.addEventListener('online', () => resume('online'));
         document.addEventListener('visibilitychange', () => {
-            if (document.visibilityState === 'visible') resume('visible');
+            if (document.visibilityState === 'visible') {
+                resume('visible');
+                this.scheduleRender();       // repaint the roster we missed
+            }
         });
+        // Background tabs are frozen (no frames, throttled timers): make sure
+        // the peer list still reaches the media engine every few seconds.
+        setInterval(() => { if (document.hidden) this.scheduleRender(); }, 4000);
     }
 
     connect() {
@@ -183,6 +189,12 @@ class PresenceClient {
             this._clearTimers();
             if (socket !== this.ws) return;
             this.ws = null;
+            if (evt && evt.code === 4409) {
+                // The server refuses frames this large — a signalling envelope
+                // (a screen-share offer) or a runaway payload hit the limit.
+                toast('پیام بزرگی به سرور فرستاده شد و اتصال بسته شد؛ در حال وصل شدن دوباره…', 'error', 8000);
+                console.warn('[presence] closed 4409 (message too large)');
+            }
             if (evt && (evt.code === 4401 || evt.code === 4403)) {
                 this.closed = true;
                 toast('دسترسی شما به کلاس قطع شده است.', 'error');
@@ -296,14 +308,48 @@ class PresenceClient {
         this.scheduleRender();
     }
 
-    /** Coalesce burst updates (join + media_state + …) into one paint. */
+    /**
+     * Coalesce burst updates (join + media_state + …) into one paint.
+     *
+     * A hidden tab gets no animation frames at all, so the paint is done from
+     * a timer there — otherwise the roster would never reach the mesh engine
+     * and a class that is running in a background window would silently have
+     * no peers, no signalling and no media.
+     */
     scheduleRender() {
         if (this._renderQueued) return;
         this._renderQueued = true;
-        requestAnimationFrame(() => {
+        const run = () => {
             this._renderQueued = false;
             this.render();
-        });
+        };
+        if (typeof document !== 'undefined' && document.hidden) setTimeout(run, 0);
+        else requestAnimationFrame(run);
+    }
+
+    /**
+     * Hand the media engine the roster rows it needs (LiveKit ignores this).
+     *
+     * Called from `render()` *and* straight from the events that change it, so
+     * the P2P mesh is never waiting for a paint — a camera that turns on while
+     * the roster tab is collapsed must still be negotiated.
+     */
+    syncMediaPeers() {
+        const inRoom = Array.from(this.participants.values()).filter((p) => !p.in_waiting_room);
+        Media.syncPeers(inRoom.map((p) => ({
+            identity: p.identity,
+            member_id: p.member_id,
+            name: p.name,
+            role: p.role,
+            // The roster is the only place the mesh learns what a peer *says*
+            // it is doing; the media tracks remain the source of truth.
+            camera_on: p.camera_on,
+            mic_on: p.mic_on,
+            permissions: p.permissions || {},
+            muted: Boolean(p.muted),
+            camera_disabled: Boolean(p.camera_disabled),
+            screen_sharing: p.screen_sharing,
+        })));
     }
 
     render() {
@@ -344,15 +390,7 @@ class PresenceClient {
         document.getElementById('hand-count').textContent = String(hands);
 
         // Keep the P2P mesh engine's peer set in sync (LiveKit ignores this).
-        Media.syncPeers(inRoom.map((p) => ({
-            identity: p.identity,
-            member_id: p.member_id,
-            name: p.name,
-            permissions: p.permissions || {},
-            muted: Boolean(p.muted),
-            camera_disabled: Boolean(p.camera_disabled),
-            screen_sharing: p.screen_sharing,
-        })));
+        this.syncMediaPeers();
     }
 
     _matches(p) {
@@ -638,12 +676,14 @@ function handleEvent(data) {
                 });
             }
             presence.render();
+            presence.syncMediaPeers();
             applyClassroomState(data.classroom || {});
             checkMeshCapacity();
             break;
         }
         case 'user_joined':
             presence.upsert(data.participant);
+            presence.syncMediaPeers();
             checkMeshCapacity();
             if (data.participant.identity !== IDENTITY) {
                 ChatClient.addSystemMessage(`${data.participant.name} به کلاس پیوست.`);
@@ -651,6 +691,7 @@ function handleEvent(data) {
             break;
         case 'user_left':
             presence.remove(data.participant.identity);
+            presence.syncMediaPeers();
             Media.notifyPeerState?.({ identity: data.participant.identity, screen_sharing: false });
             if (permsTargetIdentity === data.participant.identity) refreshPermsDialog(data.participant.identity);
             ChatClient.addSystemMessage(`${data.participant.name} کلاس را ترک کرد.`);
@@ -664,6 +705,7 @@ function handleEvent(data) {
             break;
         case 'media_state':
             presence.upsert(data.participant);
+            presence.syncMediaPeers();
             // if the peer stopped sharing, drop the screen view immediately
             Media.notifyPeerState?.(data.participant);
             break;
@@ -819,6 +861,17 @@ function handleEvent(data) {
             break;
         case 'classroom_deactivated':
             toast(data.text || 'این کلاس غیرفعال شد.', 'error', 6000);
+            break;
+        case 'error':
+            // Server-side rejections of our own frames.  A dropped
+            // `rtc_signal` means a camera that silently never connects, so it
+            // has to be said out loud.
+            if (data.code === 'signal-too-large') {
+                toast('بستهٔ سیگنالینگ رسانه بزرگ بود و فرستاده نشد؛ برای گزارش این پیام را نگه دارید: '
+                    + `(${data.bytes || '?'} بایت)`, 'error', 8000);
+            } else if (data.message) {
+                toast(data.message, 'error', 5000);
+            }
             break;
         case 'file_uploaded':
             addFileItem(data.file);
@@ -1935,11 +1988,14 @@ try {
         onStateChange: (state) => presence.send({ action: 'media_state', ...state }),
         onQualityChange,
     });
+    // Diagnostics handle for bug reports (mirrors __wb for the whiteboard).
+    window.__media = Media;
     // re-sync the mesh once media is up (the first snapshot may predate it)
     Media.syncPeers(Array.from(presence.participants.values())
         .filter((p) => !p.in_waiting_room)
         .map((p) => ({
             identity: p.identity, member_id: p.member_id, name: p.name,
+            role: p.role, camera_on: p.camera_on, mic_on: p.mic_on,
             permissions: p.permissions || {}, muted: Boolean(p.muted),
             camera_disabled: Boolean(p.camera_disabled), screen_sharing: p.screen_sharing,
         })));

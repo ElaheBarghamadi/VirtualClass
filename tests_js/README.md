@@ -1,21 +1,24 @@
-# Whiteboard client tests (headless)
+# Client tests (headless)
 
-The browser half of the whiteboard is a handful of plain ES modules
-(`static/js/whiteboard.js` + `static/js/wb/*.js`). These tests run that **real
-code** in [jsdom](https://github.com/jsdom/jsdom) with a real 2D canvas
-(`@napi-rs/canvas`) and a fake WebSocket, so the engine can be exercised
-without a browser or a Django server.
+The browser half of the classroom — the whiteboard (`static/js/whiteboard.js` +
+`static/js/wb/*.js`), the media transports (`static/js/media.js`,
+`static/js/mesh.js`) and the connection policy (`static/js/net/policy.js`) — is
+plain ES modules. These tests run that **real code** in
+[jsdom](https://github.com/jsdom/jsdom) with a real 2D canvas
+(`@napi-rs/canvas`), a fake WebSocket and a WebRTC simulation, so the engines can
+be exercised without a browser or a Django server.
 
 ```bash
 cd tests_js
 npm install
-npm test                                   # all six suites
+npm test                                   # all seven suites
 node whiteboard.test.mjs                   # 47 checks — stubbed canvas, deep DOM coverage
 node board.test.mjs                        # 49 checks — real rasterizer, pixel assertions
 node offline.test.mjs                      # 18 checks — works with no socket at all
 node dom_contract.test.mjs                 #  7 checks — markup ↔ client contract
 node policy.test.mjs                       # 17 checks — quality/bitrate/ICE/backoff policy
-node mesh.test.mjs                         # 10 checks — P2P media engine on a fake RTCPeerConnection
+node mesh.test.mjs                         # 10 checks — P2P engine on a scripted RTCPeerConnection
+node mesh_media.test.mjs                   # 15 checks — TWO peers, media really arrives
 node board.test.mjs --dump .build/ops.json # dump every op the client sent
 ```
 
@@ -110,6 +113,48 @@ degradation preference), a healthy link is left alone with the browser defaults,
 bandwidth is restored when the link recovers, a failed link gets one ICE restart
 and is then rebuilt **only by the initiating side** (so the two ends cannot keep
 tearing the link down), and the rebuild is rate-limited.
+
+## `mesh_media.test.mjs` — two classmates, one classroom
+
+`mesh.test.mjs` drives one side against a scripted connection, which can never
+answer the question the class actually asks: *does the picture arrive?*  This
+suite runs **two real `MeshMedia` instances** inside one jsdom document,
+connected by `webrtc_sim.mjs` — a small WebRTC simulation with the rules a
+browser enforces:
+
+* `addIceCandidate` **throws** while there is no remote description (so a
+  candidate that arrives early has to be queued, not dropped);
+* a received track starts `muted` and only unmutes when media really flows, then
+  mutes again when the sender stops (exactly what `mesh.js` reads to decide
+  whether a tile shows a picture);
+* `addTrack` reuses a free transceiver of the same kind, offers can collide and
+  the polite side rolls back — the perfect-negotiation dance, for real;
+* remote streams are keyed by msid, so a second track in the same stream lands
+  in the same remote `MediaStream`.
+
+Signalling goes through a relay that behaves like the Django consumer: JSON
+round-trip, size cap, per-target delivery, asynchronous hops (and an optional
+hostile mode that lets candidates overtake the offer). The checks are the
+user-visible facts — the peer's tile shows a video track, the placeholder is
+gone, the `<audio>` element still carries the voice, no envelope was dropped:
+
+* two peers negotiate and hear each other (and no ICE candidate is thrown away);
+* **turning a camera on after the link is live shows the picture on the other
+  side** — the reported bug — without stealing the voice;
+* camera off → on again still works (a stale transceiver is the classic failure);
+* a peer that starts its camera *before* its mic, and a peer that starts its
+  camera *before* anyone joins, are both visible;
+* a picture that stalls and recovers comes back on its own (no reconnect);
+* a host-disabled camera stays hidden, and a stale camera flag on an **owner**
+  cannot hide the owner (the server never applies it — see
+  `classrooms/permissions.py`);
+* simultaneous camera switches survive an offer collision; a late joiner sees a
+  camera that was already on;
+* the client and server signal caps are the same number, and an oversized
+  envelope is refused on the client *loudly* instead of vanishing.
+
+One running process per suite; `webrtc_sim.mjs` is a test double, not shipped
+code — nothing under `static/js/` imports it.
 
 `--dump` exists because the server side needs proof that it accepts what the
 client sends: `whiteboard/tests.py::ClientContractTests` replays a captured

@@ -35,7 +35,12 @@ from channels.db import database_sync_to_async
 from .models import Classroom, ClassroomMember
 from .ws_security import RateLimiter, SafeJsonWebsocketConsumer, ws_origin_allowed
 
-RTC_SIGNAL_MAX_BYTES = 16 * 1024  # hard cap on relayed SDP/ICE envelopes
+# Hard cap on relayed SDP/ICE envelopes.  A camera (or a screen share) makes an
+# offer several times larger than an audio-only one — a too-small cap silently
+# eats exactly the "I turned my camera on" negotiation, which is why this is
+# generous and why a rejected envelope now produces a visible error instead of
+# disappearing.
+RTC_SIGNAL_MAX_BYTES = 96 * 1024
 RECEIVE_RATE_LIMIT = 20  # client messages per second per connection
 from .services import (
     attendance_join,
@@ -52,7 +57,13 @@ logger = logging.getLogger(__name__)
 class ClassroomConsumer(SafeJsonWebsocketConsumer):
     """Presence + event consumer for a single classroom."""
 
-    max_message_bytes = 32 * 1024
+    # Chat frames are small, but this socket also relays WebRTC signalling: a
+    # real offer with two video m-lines (camera + screen share, every codec and
+    # its RTX/FEC payloads) is easily 20–50 KB.  A 32 KB frame limit closed the
+    # whole socket the moment someone shared a screen — the class looked like
+    # "my camera turned on and everyone lost me" (and chat/presence with it).
+    # Relayed signals are capped separately by RTC_SIGNAL_MAX_BYTES.
+    max_message_bytes = 128 * 1024
 
     async def connect(self) -> None:
         self.room_code: str = self.scope["url_route"]["kwargs"]["room_code"]
@@ -193,6 +204,17 @@ class ClassroomConsumer(SafeJsonWebsocketConsumer):
             except (TypeError, ValueError, RecursionError):
                 return
             if len(encoded) > RTC_SIGNAL_MAX_BYTES:
+                # Tell the sender; a lost offer must never be a silent mystery.
+                logger.warning(
+                    "rtc_signal_too_large member=%s bytes=%s limit=%s",
+                    self.member.id, len(encoded), RTC_SIGNAL_MAX_BYTES,
+                )
+                await self.send_json({
+                    "type": "error",
+                    "code": "signal-too-large",
+                    "message": "بستهٔ سیگنالینگ رسانه بزرگ‌تر از حد مجاز بود و ارسال نشد.",
+                    "bytes": len(encoded),
+                })
                 return
             await self._relay_rtc_signal(to_member_id, data)
             return

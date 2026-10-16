@@ -33,9 +33,18 @@ const DEFAULT_ICE_SERVERS = [
 ];
 let ICE_SERVERS = DEFAULT_ICE_SERVERS;
 
+// Must match `RTC_SIGNAL_MAX_BYTES` in classrooms/consumers.py: sending an
+// envelope the server will refuse only wastes the renegotiation that a camera
+// needs, so it is caught client-side and explained to the user instead.
+const SIGNAL_MAX_BYTES = 96 * 1024;
+
 // How long we give a peer link to come up before declaring it unreachable,
 // and how patient we are with a transient network drop before restarting ICE.
 const CONNECT_TIMEOUT_MS = 10000;
+// An offer that is still unanswered after this long is re-sent (a relayed
+// envelope can be lost: the room socket may have dropped between the hops).
+const OFFER_RESEND_MS = 6000;
+const OFFER_RESEND_MAX = 3;
 const DISCONNECT_GRACE_MS = 3000;
 // How long a rebuilt/recovered link is left alone before we touch it again.
 const REBUILD_COOLDOWN_MS = 10000;
@@ -61,12 +70,29 @@ class PeerLink {
         this.makingOffer = false;
         this.ignoreOffer = false;
         this.screenPc = null;                  // created on demand
+        // One MediaStream per peer that we add every received track to.  It is
+        // never replaced: the <audio> element and the tile's <video> both point
+        // at it, so a camera appearing (or a screen ending) can never steal the
+        // other player's source.
         this.remoteStream = null;
         this.remoteScreenStream = null;
         this.failed = false;                   // gave up — shown in the UI
         this.retried = false;                  // one automatic ICE restart
         this._watchdog = null;
         this._recovery = null;
+        // signalling bookkeeping — the numbers `diag()` reports and the
+        // "did this ever arrive?" debugging that used to be guesswork
+        this._candidatesQueued = 0;            // arrived before any remote SDP
+        this._candidatesSent = 0;
+        this._candidatesReceived = 0;
+        this._candidatesFailed = 0;
+        this._offersSent = 0;
+        this._offersAnswered = 0;
+        this._negotiationDeferred = false;     // need an offer once we are stable
+        this._negotiating = false;
+        this._lastNegotiationAt = 0;
+        this._lastSignalAt = 0;
+        this._lastError = null;
         this.pc = this._makePc(false);
     }
 
@@ -75,35 +101,35 @@ class PeerLink {
         this.mesh._applyPeerPermissions(this);
     }
 
+    /** This peer's stable media stream (created on first received track). */
+    _streamFor(isScreen) {
+        const key = isScreen ? 'remoteScreenStream' : 'remoteStream';
+        if (!this[key]) this[key] = new MediaStream();
+        return this[key];
+    }
+
     _makePc(isScreen) {
         const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
         pc.onicecandidate = (e) => {
             if (e.candidate) {
+                this._candidatesSent += 1;
                 this.mesh._signal(this.peer.member_id, { ice: e.candidate, screen: isScreen });
             }
         };
         pc.ontrack = (e) => {
-            const stream = e.streams[0] || new MediaStream([e.track]);
+            // A track can arrive in a stream we already know (the sender added a
+            // second kind to the same MediaStream) or in a brand-new one after
+            // the sender re-acquired its local stream.  Either way every track
+            // lands in OUR stream for this peer, so nothing is ever replaced.
+            const stream = this._streamFor(isScreen);
+            this.mesh._attachRemoteTrack(this, e.track, isScreen, e.streams && e.streams[0]);
             if (isScreen) {
-                this.remoteScreenStream = stream;
                 this.mesh._applyPeerPermissions(this);
             } else {
-                this.remoteStream = stream;
                 this.mesh._onRemoteMedia(this.peer, stream);
             }
         };
-        pc.onnegotiationneeded = async () => {
-            try {
-                this.makingOffer = true;
-                await pc.setLocalDescription(await pc.createOffer());
-                this.mesh._signal(this.peer.member_id, { sdp: pc.localDescription, screen: isScreen });
-                if (!isScreen) this.armWatchdog();
-            } catch (err) {
-                console.warn('[mesh] negotiation failed:', err);
-            } finally {
-                this.makingOffer = false;
-            }
-        };
+        pc.onnegotiationneeded = () => { this.negotiate(isScreen); };
         pc.oniceconnectionstatechange = () => { if (!isScreen) this._onConnectState(pc); };
         pc.onconnectionstatechange = () => {
             if (isScreen) return;
@@ -178,6 +204,10 @@ class PeerLink {
             try { this.pc.restartIce(); } catch (e) { /* not supported */ }
             clearTimeout(this._watchdog); this._watchdog = null;
             this.armWatchdog();
+            // `restartIce()` normally fires negotiationneeded; when it does not
+            // (nothing else to negotiate) the offer has to be made here or the
+            // restart never reaches the peer.
+            if (this.pc.signalingState === 'stable') this.negotiate(false);
             return;
         }
         clearTimeout(this._watchdog); this._watchdog = null;
@@ -194,26 +224,143 @@ class PeerLink {
         this._recover();
     }
 
+    /**
+     * Create and send an offer for one of our connections.
+     *
+     * `onnegotiationneeded` covers most cases, but not all of them: after the
+     * polite side rolls its own offer back to accept the peer's, the browser
+     * does not always fire it again — and that is exactly how a camera that was
+     * switched on mid-class ends up never being negotiated.  So every path that
+     * changes our tracks calls this, and it defers until the connection is
+     * stable again.
+     */
+    async negotiate(isScreen = false) {
+        const pc = isScreen ? this.screenPc : this.pc;
+        if (!pc || pc.connectionState === 'closed') return false;
+        if (this._negotiating || pc.signalingState !== 'stable') {
+            if (!isScreen) this._negotiationDeferred = true;
+            return false;
+        }
+        this._negotiating = true;
+        this.makingOffer = true;                  // perfect-negotiation flag
+        try {
+            await pc.setLocalDescription(await pc.createOffer());
+            if (pc.connectionState === 'closed') return false;
+            this._offersSent += 1;
+            this._lastNegotiationAt = Date.now();
+            this.mesh._signal(this.peer.member_id, { sdp: pc.localDescription, screen: isScreen });
+            if (!isScreen) this.armWatchdog();
+            return true;
+        } catch (err) {
+            this._lastError = String((err && err.message) || err);
+            console.warn('[mesh] negotiation failed:', err);
+            return false;
+        } finally {
+            this._negotiating = false;
+            this.makingOffer = false;
+        }
+    }
+
+    /** Our tracks changed while we could not offer: offer now that we can. */
+    _flushDeferredNegotiation() {
+        if (!this._negotiationDeferred) return;
+        if (this.pc.signalingState !== 'stable') return;
+        this._negotiationDeferred = false;
+        this.negotiate(false);
+    }
+
+    /**
+     * A description arrived.  Applying it needs care in two places:
+     *
+     * * a remote offer can collide with our own — the impolite side ignores it
+     *   (the polite side rolls back and answers), and after a rollback we must
+     *   re-offer ourselves or our own new track (a camera!) is never sent;
+     * * any ICE candidate that arrived *before* this description was rejected
+     *   by the browser (`InvalidStateError`) — it is queued here and replayed
+     *   the moment the remote description exists, instead of being lost.
+     */
     async handleSignal(data) {
         const isScreen = Boolean(data.screen);
         const pc = isScreen ? this._ensureScreenPc() : this.pc;
+        this._lastSignalAt = Date.now();
         if (data.sdp) {
             const description = data.sdp;
             const offerCollision =
                 description.type === 'offer' && (this.makingOffer || pc.signalingState !== 'stable');
             this.ignoreOffer = !this.polite && offerCollision;
-            if (this.ignoreOffer) return;
-            await pc.setRemoteDescription(description);
+            if (this.ignoreOffer) {
+                // The polite peer will roll back and answer us.  Keep their
+                // offer though: if our own offer never gets answered (a lost
+                // envelope), this is the only way back to a negotiated link.
+                this._ignoredOffer = { description, isScreen };
+                return;
+            }
+            if (offerCollision && description.type === 'offer') {
+                // We are polite and we had an offer in flight: applying this one
+                // rolls ours back, so our own new tracks need a fresh offer.
+                this._negotiationDeferred = true;
+            }
+            try {
+                await pc.setRemoteDescription(description);
+            } catch (err) {
+                this._lastError = String((err && err.message) || err);
+                console.warn('[mesh] setRemoteDescription failed:', err);
+                this._negotiationDeferred = true;
+                return;
+            }
+            await this._flushPendingCandidates(pc);
+            this._offerResends = 0;
+            this._ignoredOffer = null;
             if (!isScreen) this.armWatchdog();
             if (description.type === 'offer') {
-                await pc.setLocalDescription(await pc.createAnswer());
+                try {
+                    await pc.setLocalDescription(await pc.createAnswer());
+                } catch (err) {
+                    this._lastError = String((err && err.message) || err);
+                    console.warn('[mesh] creating an answer failed:', err);
+                    return;
+                }
+                this._offersAnswered += 1;
                 this.mesh._signal(this.peer.member_id, { sdp: pc.localDescription, screen: isScreen });
             }
+            if (!isScreen) this._flushDeferredNegotiation();
         } else if (data.ice) {
+            this._candidatesReceived += 1;
+            await this._addCandidate(pc, data.ice);
+        }
+    }
+
+    /** `addIceCandidate`, with the "no remote description yet" hole plugged. */
+    async _addCandidate(pc, candidate) {
+        if (!candidate) return;
+        if (!pc.remoteDescription) {
+            this._candidatesQueued += 1;
+            this._pendingCandidates || (this._pendingCandidates = {});
+            const key = pc === this.screenPc ? 'screen' : 'media';
+            (this._pendingCandidates[key] || (this._pendingCandidates[key] = [])).push(candidate);
+            return;
+        }
+        try {
+            await pc.addIceCandidate(candidate);
+        } catch (err) {
+            this._candidatesFailed += 1;
+            this._lastError = String((err && err.message) || err);
+            if (!this.ignoreOffer) console.warn('[mesh] bad ICE candidate:', err);
+        }
+    }
+
+    /** Replay the candidates that arrived too early (never drop signalling). */
+    async _flushPendingCandidates(pc) {
+        const key = pc === this.screenPc ? 'screen' : 'media';
+        const queued = this._pendingCandidates && this._pendingCandidates[key];
+        if (!queued || !queued.length) return;
+        this._pendingCandidates[key] = [];
+        for (const candidate of queued) {
             try {
-                await pc.addIceCandidate(data.ice);
+                await pc.addIceCandidate(candidate);
             } catch (err) {
-                if (!this.ignoreOffer) console.warn('[mesh] bad ICE candidate:', err);
+                this._candidatesFailed += 1;
+                this._lastError = String((err && err.message) || err);
             }
         }
     }
@@ -225,12 +372,92 @@ class PeerLink {
         return this.screenPc;
     }
 
+    /**
+     * Make sure every local track is being sent on this connection.
+     *
+     * Live tracks that already have a sender of the same kind are swapped in
+     * with `replaceTrack` (no renegotiation needed); a brand-new kind goes in
+     * with `addTrack`, which reuses a free transceiver and triggers negotiation.
+     * `_addedAt` arms a safety net (`_ensureOfferedSince`) so a track that never
+     * produced an offer is offered anyway.
+     */
     addLocalTracks(stream) {
-        if (!stream) return;
-        const existing = new Set(this.pc.getSenders().map((s) => s.track && s.track.kind));
+        if (!stream) return false;
+        let added = false;
         for (const track of stream.getTracks()) {
-            if (!existing.has(track.kind)) this.pc.addTrack(track, stream);
+            if (track.readyState !== 'live') continue;
+            const senders = this.pc.getSenders();
+            if (senders.some((s) => s.track === track)) continue;         // already sending it
+            const sameKind = senders.find((s) => s.track && s.track.kind === track.kind);
+            if (sameKind) {
+                sameKind.replaceTrack(track).catch(() => {});
+                added = true;
+                continue;
+            }
+            try {
+                this.pc.addTrack(track, stream);
+                added = true;
+            } catch (err) {
+                this._lastError = String((err && err.message) || err);
+            }
         }
+        if (added) this._addedAt = Date.now();
+        return added;
+    }
+
+    /**
+     * Our offer was ignored by the peer and theirs was ignored by us: with one
+     * lost envelope nothing would ever be negotiated again.  Roll our offer
+     * back and take theirs instead — the polite side is waiting for exactly
+     * that answer.
+     */
+    async _resolveIgnoredOffer() {
+        const held = this._ignoredOffer;
+        if (!held || this.pc.signalingState !== 'have-local-offer') return false;
+        this._ignoredOffer = null;
+        try {
+            await this.pc.setLocalDescription({ type: 'rollback' });
+        } catch (err) {
+            this._lastError = String((err && err.message) || err);
+            return false;
+        }
+        this._offerResends = 0;
+        this._lastNegotiationAt = 0;            // our tracks still need an offer
+        this._addedAt = this._addedAt || Date.now();
+        await this.handleSignal({ sdp: held.description, screen: held.isScreen });
+        return true;
+    }
+
+    /**
+     * The periodic safety net, called from the stats tick.  Two things need it:
+     * a track change that never produced an offer, and an offer that was never
+     * answered (the envelope was lost, or the socket dropped between the two
+     * peers).  Both would otherwise leave a camera negotiated on one side only.
+     */
+    _ensureOfferedSince() {
+        const offerAge = this._lastNegotiationAt ? Date.now() - this._lastNegotiationAt : 0;
+        const waitingForAnswer = this.pc.signalingState === 'have-local-offer' && this._lastNegotiationAt;
+        if (waitingForAnswer && offerAge > OFFER_RESEND_MS && this._ignoredOffer) {
+            this._resolveIgnoredOffer().catch(() => {});
+            return;
+        }
+        if (waitingForAnswer && offerAge > OFFER_RESEND_MS && (this._offerResends || 0) < OFFER_RESEND_MAX) {
+            // Our (current) offer is older than a lost envelope should be —
+            // send the very same description again instead of giving up.
+            this._offerResends = (this._offerResends || 0) + 1;
+            this._lastNegotiationAt = Date.now();
+            this.mesh._signal(this.peer.member_id, { sdp: this.pc.localDescription, screen: false });
+            return;
+        }
+        if (this._addedAt && this._lastNegotiationAt < this._addedAt) {
+            if (this.pc.signalingState !== 'stable' || this._negotiating) {
+                this._negotiationDeferred = true;
+                return;
+            }
+            this.negotiate(false);
+            return;
+        }
+        this._flushDeferredNegotiation();
     }
 
     close() {
@@ -300,9 +527,17 @@ class MeshMedia {
             emptyText.textContent = 'برای فعال کردن دوربین/میکروفون از دکمه‌های پایین استفاده کنید.';
         }
         // periodic real-stats quality + active-speaker evaluation
-        this._statsTimer = setInterval(() => this._evaluateQuality(), 4000);
+        this._statsTimer = setInterval(() => this._tick(), 4000);
         this._speakerTimer = setInterval(() => this._evaluateSpeaker(), 700);
+        // Cheap self-healing sweep: a camera that arrived late, a mute/unmute
+        // event that was missed, or a track that never produced an offer all
+        // fix themselves within a second instead of needing a reconnect.
+        this._tileTimer = setInterval(() => this._refreshTiles(), 1000);
         this._watchDevices();
+        this._visibilityBound = () => {
+            if (document.visibilityState === 'visible') this._refreshTiles();
+        };
+        document.addEventListener('visibilitychange', this._visibilityBound);
     }
 
     // ------------------------------------------------------------ roster
@@ -325,7 +560,7 @@ class MeshMedia {
                         try { link.pc.createDataChannel('mesh-init'); } catch (e) { /* noop */ }
                     }
                 }
-                this._replayPending(p.identity);
+                this._replayPending(p.identity).catch(() => {});
             } else {
                 this.links.get(p.identity).updatePeer(p);
             }
@@ -395,6 +630,8 @@ class MeshMedia {
         btn.addEventListener('click', (e) => { e.stopPropagation(); this.retryPeer(peer.identity); });
         box.append(title, hint, btn);
         tile.appendChild(box);
+        // Numbers beat adjectives: a screenshot of this is a bug report.
+        try { console.warn('[mesh] peer diagnostics', this.diag()); } catch (err) { /* console only */ }
         this._reportConnFailure();
         this._layout();
     }
@@ -660,8 +897,13 @@ class MeshMedia {
         const p = el.play();
         if (p && typeof p.catch === 'function') {
             p.catch(() => {
-                // Autoplay policy: retry on the first real user gesture.
+                // Autoplay policy: retry on the first real user gesture.  One
+                // rescue per element is enough — the periodic tile sweep calls
+                // this often enough that stacking listeners would leak.
+                if (el.__playArmed) return;
+                el.__playArmed = true;
                 const retry = () => {
+                    el.__playArmed = false;
                     el.play().catch(() => {});
                     document.removeEventListener('pointerdown', retry);
                     document.removeEventListener('keydown', retry);
@@ -887,31 +1129,86 @@ class MeshMedia {
         link.handleSignal(msg.data).catch((err) => console.warn('[mesh] signal error:', err));
     }
 
-    _replayPending(identity) {
+    /**
+     * Replay buffered envelopes for a peer in the order they arrived.
+     *
+     * Awaiting each one matters: `setRemoteDescription` is applied
+     * asynchronously, and a candidate handed to `addIceCandidate` before that
+     * finishes is rejected by the browser (it is queued on the link instead,
+     * but keeping the order makes the whole path deterministic).
+     */
+    async _replayPending(identity) {
         if (!this._pendingSignals) return;
         const link = this.links.get(identity);
         if (!link) return;
-        const keep = [];
-        for (const msg of this._pendingSignals) {
-            if (msg.from_identity === identity) {
-                link.handleSignal(msg.data).catch((err) => console.warn('[mesh] signal error:', err));
-            } else {
-                keep.push(msg);
+        const mine = this._pendingSignals.filter((msg) => msg.from_identity === identity);
+        this._pendingSignals = this._pendingSignals.filter((msg) => msg.from_identity !== identity);
+        for (const msg of mine) {
+            // eslint-disable-next-line no-await-in-loop
+            try {
+                await link.handleSignal(msg.data);
+            } catch (err) {
+                console.warn('[mesh] signal error:', err);
             }
         }
-        this._pendingSignals = keep;
+    }
+
+    /**
+     * Is this peer allowed to have a live camera as far as the *server's* rules
+     * go?  Mirrors `classrooms/permissions.py`: a moderator's camera flag never
+     * applies to the OWNER, and stale/unknown data must never hide a picture
+     * that is really arriving (the track's own `muted` says that).
+     */
+    _cameraAllowed(link) {
+        const peer = (link && link.peer) || {};
+        const permissions = peer.permissions || {};
+        if (permissions.can_use_camera === false) return false;
+        if (peer.camera_disabled === true && peer.role && peer.role !== 'OWNER') return false;
+        return true;
+    }
+
+    _micAllowed(link) {
+        const peer = (link && link.peer) || {};
+        const permissions = peer.permissions || {};
+        return permissions.can_use_microphone !== false;
+    }
+
+    /**
+     * Park one received track in the peer's stream and keep the UI in step.
+     * Called for every `ontrack`, whenever we learn about a track that appeared
+     * later in an already-known stream, and from the periodic sweep — so a
+     * camera that arrives after the connection is set up can never be missed.
+     */
+    _attachRemoteTrack(link, track, isScreen) {
+        if (!link || !track) return;
+        const stream = link._streamFor(isScreen);
+        if (!stream.getTracks().includes(track)) stream.addTrack(track);
+        const bound = this._trackBound || (this._trackBound = new WeakSet());
+        if (!bound.has(track)) {
+            bound.add(track);
+            const refresh = () => {
+                this._applyPeerPermissions(link);      // sets enabled + refreshes
+                this._refreshRemoteTile(link.peer.identity);
+            };
+            track.addEventListener('mute', refresh);
+            track.addEventListener('unmute', refresh);
+            track.addEventListener('ended', () => {
+                try { stream.removeTrack(track); } catch (err) { /* already gone */ }
+                refresh();
+            });
+        }
     }
 
     _applyPeerPermissions(link) {
         if (!link?.peer) return;
-        const permissions = link.peer.permissions || {};
-        const audioAllowed = permissions.can_use_microphone !== false && link.peer.muted !== true;
-        const cameraAllowed = permissions.can_use_camera !== false && link.peer.camera_disabled !== true;
-        link.remoteStream?.getAudioTracks().forEach((track) => { track.enabled = audioAllowed; });
+        const cameraAllowed = this._cameraAllowed(link);
+        const micAllowed = this._micAllowed(link);
+        link.remoteStream?.getAudioTracks().forEach((track) => { track.enabled = micAllowed; });
         link.remoteStream?.getVideoTracks().forEach((track) => { track.enabled = cameraAllowed; });
 
+        const screenPermissions = link.peer.permissions || {};
         const screenTrack = link.remoteScreenStream?.getVideoTracks()[0];
-        const screenAllowed = permissions.can_share_screen !== false
+        const screenAllowed = screenPermissions.can_share_screen !== false
             && link.peer.screen_sharing !== false
             && screenTrack?.readyState === 'live';
         if (screenTrack) screenTrack.enabled = screenAllowed;
@@ -925,9 +1222,12 @@ class MeshMedia {
         if (link.remoteStream) this._refreshRemoteTile(link.peer.identity);
     }
 
+    /** A media track arrived from `peer` (its stream is kept, never replaced). */
     _onRemoteMedia(peer, stream) {
         const link = this.links.get(peer.identity);
-        if (link) this._applyPeerPermissions(link);
+        if (!link) return;
+        const mediaStream = link.remoteStream || stream;
+        this._applyPeerPermissions(link);
         let audio = this._audioEls.get(peer.identity);
         if (!audio) {
             audio = document.createElement('audio');
@@ -935,24 +1235,14 @@ class MeshMedia {
             document.body.appendChild(audio);
             this._audioEls.set(peer.identity, audio);
         }
-        this._applySinkId(audio);
-        audio.srcObject = stream;
-        this._playSafe(audio);
+        if (audio.srcObject !== mediaStream) {
+            audio.srcObject = mediaStream;
+            this._applySinkId(audio);
+            this._playSafe(audio);
+        }
         const tile = this._ensureTile(peer);
         const video = tile.querySelector('video');
-        const camTrack = stream.getVideoTracks()[0];
-        if (camTrack) {
-            video.srcObject = stream;
-            // bind mute/unmute/ended exactly once per track (renegotiation
-            // re-fires ontrack for the same track object)
-            const bound = this._trackBound || (this._trackBound = new WeakSet());
-            if (!bound.has(camTrack)) {
-                bound.add(camTrack);
-                camTrack.addEventListener('mute', () => this._refreshRemoteTile(peer.identity));
-                camTrack.addEventListener('unmute', () => this._refreshRemoteTile(peer.identity));
-                camTrack.addEventListener('ended', () => this._refreshRemoteTile(peer.identity));
-            }
-        }
+        if (video && video.srcObject !== mediaStream) video.srcObject = mediaStream;
         this._refreshRemoteTile(peer.identity);
         this._layout();
     }
@@ -1049,7 +1339,12 @@ class MeshMedia {
         const level = document.createElement('i');
         level.className = 'tile-level';
         level.setAttribute('aria-hidden', 'true');
-        tile.append(video, placeholder, overlay, speaking, level);
+        // Why a tile is empty is information, not decoration ("camera on but
+        // no picture yet" / "this network needs a TURN relay").
+        const hint = document.createElement('small');
+        hint.className = 'tile-hint hidden';
+        hint.setAttribute('aria-live', 'polite');
+        tile.append(video, placeholder, overlay, speaking, level, hint);
         overlay.querySelector('.tile-name').textContent = peer.name || peer.identity;
         this.tiles.set(peer.identity, tile);
         this.tilesEl.appendChild(tile);
@@ -1084,34 +1379,93 @@ class MeshMedia {
         this._layout();
     }
 
+    /**
+     * Decide what this peer's tile shows, from *media truth* first.
+     *
+     * For a REMOTE track `enabled` stays true even when the sender switches the
+     * device off, so liveness comes from `muted` (the receiver sees RTP stop).
+     * Permissions only ever *hide* media, they never reveal it — and where the
+     * two disagree (a stale moderator flag on an owner, a roster row we have
+     * not heard from yet) the arriving picture wins, because "the camera is on
+     * but nobody can see me" is the failure that actually breaks a class.
+     *
+     * Called on every `ontrack`, every mute/unmute, every roster update and
+     * from the periodic sweep, so a missed event self-corrects within a second.
+     */
     _refreshRemoteTile(identity) {
         const link = this.links.get(identity);
         const tile = this.tiles.get(identity);
         if (!link || !tile) return;
         const stream = link.remoteStream;
-        // For REMOTE tracks `enabled` stays true even when the sender turns
-        // the device off — the receiver only learns via `muted` (the track
-        // goes silent/stale).  Using `enabled` here left frozen frames on
-        // screen and mic icons stuck "on"; `muted` is the real signal.
-        const permissions = link.peer.permissions || {};
-        const videoTrack = stream && stream.getVideoTracks()[0];
+        const videoTrack = stream && stream.getVideoTracks().find((t) => t.readyState === 'live');
         const camLive = Boolean(
-            permissions.can_use_camera !== false
-            && link.peer.camera_disabled !== true
-            && videoTrack && !videoTrack.muted && videoTrack.readyState === 'live'
+            this._cameraAllowed(link)
+            && videoTrack && !videoTrack.muted && videoTrack.enabled !== false
         );
         const video = tile.querySelector('video');
-        if (camLive && video.srcObject !== stream) video.srcObject = stream;
+        if (video.srcObject !== stream) video.srcObject = stream || null;
         video.style.display = camLive ? '' : 'none';
         tile.querySelector('.tile-placeholder').classList.toggle('hidden', camLive);
-        if (camLive) video.play().catch(() => {});
-        const audioTrack = stream && stream.getAudioTracks()[0];
+        if (camLive && video.paused) this._playSafe(video);
+        const audioTrack = stream && stream.getAudioTracks().find((t) => t.readyState === 'live');
         const micLive = Boolean(
-            permissions.can_use_microphone !== false
-            && link.peer.muted !== true
-            && audioTrack && !audioTrack.muted && audioTrack.readyState === 'live'
+            this._micAllowed(link)
+            && audioTrack && !audioTrack.muted && audioTrack.enabled !== false
         );
-        tile.querySelector('.t-mic').classList.toggle('off', !micLive);
+        tile.querySelector('.t-mic')?.classList.toggle('off', !micLive);
+        this._updateTileHint(link, tile, { camLive, videoTrack });
+    }
+
+    /**
+     * The line under a peer's tile that says what is (not) happening.
+     *
+     * Silence is the worst answer here: a teacher whose camera is on and whose
+     * class sees nothing needs to know whether their picture never left the
+     * room, never arrived, or was deliberately hidden — and a classmate whose
+     * camera is on needs to see that we are waiting for their picture instead
+     * of a name on a grey square.
+     */
+    _updateTileHint(link, tile, { camLive, videoTrack }) {
+        const hint = tile.querySelector('.tile-hint');
+        if (!hint) return;
+        let text = '';
+        let tone = '';
+        if (!camLive && link.peer.camera_on === true) {
+            if (videoTrack) {
+                text = 'دوربین روشن است اما تصویر هنوز نرسیده…';
+                tone = 'waiting';
+            } else if (!link._isUp(link.pc)) {
+                text = 'در حال برقراری ارتباط تصویری…';
+                tone = 'waiting';
+            } else {
+                text = hasTurnServer()
+                    ? 'تصویر این هم‌کلاسی از شبکه نرسید.'
+                    : 'تصویر این هم‌کلاسی نرسید — شبکه‌های سخت به سرور TURN نیاز دارند.';
+                tone = 'warn';
+            }
+        }
+        hint.textContent = text;
+        hint.classList.toggle('hidden', !text);
+        hint.classList.toggle('warn', tone === 'warn');
+        hint.classList.toggle('waiting', tone === 'waiting');
+        tile.classList.toggle('cam-pending', tone === 'waiting');
+    }
+
+    /** Cheap sweep: re-evaluate every remote tile from the media objects. */
+    _refreshTiles() {
+        this.links.forEach((link, identity) => this._refreshRemoteTile(identity));
+        this._renderLocalTileIfNeeded();
+    }
+
+    _renderLocalTileIfNeeded() {
+        if (!this.localStream) return;
+        const tile = this.tiles.get(this.self.identity);
+        if (!tile) return;
+        const track = this.localStream.getVideoTracks().find((t) => t.readyState === 'live');
+        const camLive = Boolean(track);
+        const video = tile.querySelector('video');
+        if (video && video.srcObject !== this.localStream) video.srcObject = this.localStream;
+        if (video) video.style.display = camLive ? '' : 'none';
     }
 
     setLayout(mode) {
@@ -1229,6 +1583,12 @@ class MeshMedia {
         if (label) label.textContent = name;
         pip.classList.remove('hidden');
         this._playSafe(vid);
+    }
+
+    /** Everything that has to be re-checked on a timer. */
+    async _tick() {
+        for (const link of this.links.values()) link._ensureOfferedSince();
+        await this._evaluateQuality();
     }
 
     async _evaluateQuality() {
@@ -1407,15 +1767,124 @@ class MeshMedia {
         this.onStateChange({ mic_on: this.micOn, camera_on: this.cameraOn, screen_sharing: Boolean(this.screenStream) });
     }
 
+    /**
+     * Relay one signalling envelope through the room socket.
+     *
+     * The server refuses envelopes above a hard cap, and an offer that is too
+     * big (a screen share with every codec in it) would otherwise vanish
+     * silently — so it is measured here first and reported to the user, with
+     * the numbers kept for `diag()`.
+     */
     _signal(toMemberId, data) {
-        this.signal({ action: 'rtc_signal', to_member_id: toMemberId, data });
+        const envelope = { action: 'rtc_signal', to_member_id: toMemberId, data };
+        let bytes = 0;
+        try {
+            bytes = JSON.stringify(envelope).length;
+        } catch (err) {
+            return;                                   // unserialisable: drop
+        }
+        if (bytes > SIGNAL_MAX_BYTES) {
+            this._lastError = `signal-too-large:${bytes}`;
+            this._signalRejected = (this._signalRejected || 0) + 1;
+            console.warn(`[mesh] signalling envelope of ${bytes} bytes exceeds the server cap; not sent`);
+            toast('بستهٔ سیگنالینگ رسانه بزرگ‌تر از حد مجاز سرور است و فرستاده نشد. صفحه را دوباره به اشتراک بگذارید یا تعداد دستگاه‌ها را کم کنید.', 'error', 8000);
+            return;
+        }
+        this.signal(envelope);
+    }
+
+    /**
+     * Everything a "nobody can see my camera" report needs, in one object.
+     *
+     * Run `__media.diag()` in the browser console (or look at the warning the
+     * room prints when a link fails).  It answers the four questions that
+     * actually decide the outcome: what we are sending, whether an offer that
+     * carries it left the browser, whether candidates survived the trip, and
+     * whether the peer's track is arriving live or muted.
+     */
+    diag() {
+        const describeTrack = (track) => (track ? {
+            kind: track.kind,
+            readyState: track.readyState,
+            muted: track.muted,
+            enabled: track.enabled,
+        } : null);
+        return {
+            engine: 'mesh',
+            room: this.roomCode,
+            self: this.self.identity,
+            quality: this.quality,
+            media: {
+                micOn: this.micOn,
+                cameraOn: this.cameraOn,
+                screenSharing: Boolean(this.screenStream),
+                localTracks: (this.localStream ? this.localStream.getTracks() : []).map(describeTrack),
+                screenTracks: (this.screenStream ? this.screenStream.getTracks() : []).map(describeTrack),
+            },
+            signallingErrors: this._signalRejected || 0,
+            ice: {
+                servers: ICE_SERVERS.map((s) => ({ urls: [].concat(s.urls || []), hasCredentials: Boolean(s.username) })),
+                turnConfigured: hasTurnServer(),
+                note: hasTurnServer() ? '' : 'بدون TURN، شبکه‌های سخت (شرکتی/موبایل) نمی‌توانند مستقیم وصل شوند.',
+            },
+            peers: Array.from(this.links.values()).map((link) => ({
+                identity: link.peer.identity,
+                name: link.peer.name,
+                memberId: link.peer.member_id,
+                polite: link.polite,
+                connection: link.pc.connectionState,
+                ice: link.pc.iceConnectionState,
+                signaling: link.pc.signalingState,
+                failed: Boolean(link.failed),
+                senders: link.pc.getSenders().map((s) => describeTrack(s.track)),
+                signalling: {
+                    candidatesSent: link._candidatesSent,
+                    candidatesQueued: link._candidatesQueued,
+                    candidatesReceived: link._candidatesReceived,
+                    candidatesFailed: link._candidatesFailed,
+                    offersSent: link._offersSent,
+                    offersAnswered: link._offersAnswered,
+                    offersResent: link._offerResends || 0,
+                    deferredNegotiation: Boolean(link._negotiationDeferred),
+                    holdingIgnoredOffer: Boolean(link._ignoredOffer),
+                },
+                roster: {
+                    mediaCameraOn: link.peer.camera_on,
+                    mediaMicOn: link.peer.mic_on,
+                    cameraDisabled: link.peer.camera_disabled,
+                    role: link.peer.role,
+                    cameraAllowed: this._cameraAllowed(link),
+                    micAllowed: this._micAllowed(link),
+                },
+                received: {
+                    audio: describeTrack(link.remoteStream && link.remoteStream.getAudioTracks()[0]),
+                    video: describeTrack(link.remoteStream && link.remoteStream.getVideoTracks()[0]),
+                    screen: describeTrack(link.remoteScreenStream && link.remoteScreenStream.getVideoTracks()[0]),
+                },
+                tile: (() => {
+                    const tile = this.tiles.get(link.peer.identity);
+                    const video = tile && tile.querySelector('video');
+                    return {
+                        videoShown: Boolean(video && video.style.display !== 'none'),
+                        hint: (tile && tile.querySelector('.tile-hint')?.textContent) || '',
+                    };
+                })(),
+                lastSignalAgeMs: link._lastSignalAt ? Date.now() - link._lastSignalAt : null,
+                lastError: link._lastError,
+            })),
+        };
     }
 
     /** Release everything: devices, timers, listeners, peer connections. */
     dispose() {
         if (this._statsTimer) clearInterval(this._statsTimer);
         if (this._speakerTimer) clearInterval(this._speakerTimer);
-        this._statsTimer = this._speakerTimer = null;
+        if (this._tileTimer) clearInterval(this._tileTimer);
+        this._statsTimer = this._speakerTimer = this._tileTimer = null;
+        if (this._visibilityBound) {
+            document.removeEventListener('visibilitychange', this._visibilityBound);
+            this._visibilityBound = null;
+        }
         if (this._deviceChangeBound && navigator.mediaDevices?.removeEventListener) {
             navigator.mediaDevices.removeEventListener('devicechange', this._deviceChangeBound);
             this._deviceChangeBound = null;
