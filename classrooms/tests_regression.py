@@ -164,6 +164,33 @@ class HostActionInputTests(TestCase):
         self.student_member.refresh_from_db()
         self.assertFalse(self.student_member.can_use_whiteboard)
 
+    def test_permission_response_returns_effective_value_under_room_policy(self):
+        url = reverse("room:member_permission", args=[self.classroom.room_code, self.student_member.id])
+        payload = '{"permission":"can_use_whiteboard","value":true}'
+        response = self._post(url, payload)
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()["permissions"]["can_use_whiteboard"])
+        self.student_member.refresh_from_db()
+        self.assertTrue(self.student_member.can_use_whiteboard)  # stored grant; global policy still wins
+
+        self.classroom.allow_student_whiteboard = True
+        self.classroom.save(update_fields=["allow_student_whiteboard"])
+        response = self._post(url, payload)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["permissions"]["can_use_whiteboard"])
+
+        camera_url = reverse("room:member_permission", args=[self.classroom.room_code, self.student_member.id])
+        self.classroom.allow_student_camera = False
+        self.classroom.save(update_fields=["allow_student_camera"])
+        camera_payload = '{"permission":"can_use_camera","value":true}'
+        response = self._post(camera_url, camera_payload)
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()["permissions"]["can_use_camera"])
+        self.classroom.allow_student_camera = True
+        self.classroom.save(update_fields=["allow_student_camera"])
+        response = self._post(camera_url, camera_payload)
+        self.assertTrue(response.json()["permissions"]["can_use_camera"])
+
     def test_string_false_does_not_lock_the_room(self):
         url = reverse("room:lock", args=[self.classroom.room_code])
         resp = self._post(url, '{"locked":"false"}')

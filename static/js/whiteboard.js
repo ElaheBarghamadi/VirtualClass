@@ -56,19 +56,28 @@ class WhiteboardImpl {
             document.getElementById('wb-nodraw-hint')?.classList.remove('hidden');
         }
         if (typeof fabric === 'undefined') {
-            // library failed to load — degrade, don't crash the room
-            this.unavailable = true;
+            this._showUnavailable('کتابخانهٔ تخته بارگذاری نشد. صفحه را تازه‌سازی کنید؛ اگر مشکل ادامه داشت، به پشتیبانی اطلاع دهید.');
             console.warn('[whiteboard] fabric.js is not loaded');
             return;
         }
         const el = document.getElementById('whiteboard-canvas');
-        if (!el) return;
-        this.canvas = new fabric.Canvas(el, {
-            backgroundColor: '#ffffff',
-            selection: false,
-            isDrawingMode: false,
-            preserveObjectStacking: true,
-        });
+        if (!el) {
+            this._showUnavailable('بوم تخته پیدا نشد. صفحه را تازه‌سازی کنید.');
+            return;
+        }
+        try {
+            this.canvas = new fabric.Canvas(el, {
+                backgroundColor: '#ffffff',
+                selection: false,
+                isDrawingMode: false,
+                preserveObjectStacking: true,
+            });
+        } catch (err) {
+            this._showUnavailable('بوم تخته ساخته نشد. صفحه را تازه‌سازی کنید؛ اگر مشکل ادامه داشت، به پشتیبانی اطلاع دهید.');
+            console.error('[whiteboard] canvas initialization failed:', err);
+            return;
+        }
+        this.unavailable = false;
         this.resize();
         window.addEventListener('resize', () => this.resize());
         // The wrap changes size on view-switch, panel toggles and
@@ -83,6 +92,16 @@ class WhiteboardImpl {
         this._bindPages();
         this._bindDrawing();
         this._connect(roomCode);
+    }
+
+    _showUnavailable(message) {
+        this.unavailable = true;
+        const hint = document.getElementById('wb-error-hint');
+        if (hint) {
+            hint.textContent = message;
+            hint.classList.remove('hidden');
+        }
+        document.querySelector('.wb-toolbar')?.classList.add('is-unavailable');
     }
 
     /** The element whose size the canvas should match (.wb-canvas-wrap). */
@@ -300,11 +319,16 @@ class WhiteboardImpl {
         this.canvas.on('mouse:down', (opt) => this._down(opt));
         this.canvas.on('mouse:move', (opt) => this._move(opt));
         this.canvas.on('mouse:up', () => this._up());
-        // releasing outside the canvas must still finish the stroke
-        window.addEventListener('mouseup', () => this._up());
+        // A touch/pen pointer can be lifted outside Fabric's canvas element.
+        // Finish the stroke on the window too; _up() safely ignores duplicates.
+        const finishStroke = () => this._up();
+        window.addEventListener('mouseup', finishStroke);
+        window.addEventListener('pointerup', finishStroke);
+        window.addEventListener('pointercancel', finishStroke);
+        window.addEventListener('touchend', finishStroke, { passive: true });
     }
 
-    _deny(reason = 'فقط میزبان و ارائه‌دهنده می‌توانند روی تخته بنویسند.') {
+    _deny(reason = 'برای حساب شما نوشتن روی تخته فعال نیست. از مالک کلاس بخواهید مجوز «تختهٔ اشتراکی» را روشن کند و در صورت نیاز تنظیمات کلاس را بررسی کند.') {
         if (!this._warned) {
             import('./toast.js').then(({ toast }) => toast(reason, 'warning'));
             this._warned = true;

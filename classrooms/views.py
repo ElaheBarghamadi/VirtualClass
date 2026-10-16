@@ -448,14 +448,14 @@ def member_permission_view(request, room_code: str, member_id: int):
     classroom = get_object_or_404(Classroom, room_code=room_code)
     try:
         body = _json_body(request)
-        set_member_permission(
+        permissions = set_member_permission(
             classroom, request.user, member_id, body.get("permission", ""), body.get("value")
         )
     except PermissionDenied as exc:
         return _json_error(exc)
     except ValueError as exc:
         return _json_error(exc, status=400)
-    return JsonResponse({"ok": True})
+    return JsonResponse({"ok": True, "permissions": permissions})
 
 
 @login_required

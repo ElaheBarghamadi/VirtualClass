@@ -255,9 +255,8 @@ class MeshMedia {
         this._speakerTimer = null;
         this._localAnalyser = null;
         this._localLevelRaf = null;
+        this._localSpeakingUntil = 0;
         this.currentView = 'media';
-        this._pipView = null;
-        this._pipClosed = false;
         this._micDeviceId = null;         // remembered across acquisitions
         this._camDeviceId = null;
         this._toggling = { mic: false, camera: false };   // double-tap guard
@@ -680,7 +679,11 @@ class MeshMedia {
             const tile = this.tiles.get(this.self.identity);
             if (tile) {
                 tile.style.setProperty('--lvl', level.toFixed(3));
-                tile.classList.toggle('speaking', level > 0.06);
+                const now = performance.now();
+                if (level > 0.03) this._localSpeakingUntil = now + 750;
+                const speaking = now < this._localSpeakingUntil;
+                tile.classList.toggle('speaking', speaking);
+                tile.querySelector('.tile-speaking')?.setAttribute('aria-hidden', String(!speaking));
             }
             this._localLevelRaf = requestAnimationFrame(tick);
         };
@@ -692,10 +695,15 @@ class MeshMedia {
         this._localLevelRaf = null;
         disposeAnalyser(this._localAnalyser);
         this._localAnalyser = null;
+        this._localSpeakingUntil = 0;
         const btn = document.getElementById('btn-mic');
         if (btn) btn.style.setProperty('--mic-level', '0');
         const tile = this.tiles.get(this.self.identity);
-        if (tile) { tile.style.setProperty('--lvl', '0'); tile.classList.remove('speaking'); }
+        if (tile) {
+            tile.style.setProperty('--lvl', '0');
+            tile.classList.remove('speaking');
+            tile.querySelector('.tile-speaking')?.setAttribute('aria-hidden', 'true');
+        }
     }
 
     async toggleScreenShare() {
@@ -1015,10 +1023,16 @@ class MeshMedia {
         const placeholder = document.createElement('div');
         placeholder.className = 'tile-placeholder';
         placeholder.textContent = (peer.name || '?').charAt(0);
+        const speaking = document.createElement('span');
+        speaking.className = 'tile-speaking';
+        speaking.textContent = 'در حال صحبت';
+        speaking.setAttribute('role', 'status');
+        speaking.setAttribute('aria-label', 'در حال صحبت');
+        speaking.setAttribute('aria-hidden', 'true');
         const level = document.createElement('i');
         level.className = 'tile-level';
         level.setAttribute('aria-hidden', 'true');
-        tile.append(video, placeholder, overlay, level);
+        tile.append(video, placeholder, overlay, speaking, level);
         overlay.querySelector('.tile-name').textContent = peer.name || peer.identity;
         this.tiles.set(peer.identity, tile);
         this.tilesEl.appendChild(tile);
@@ -1097,27 +1111,32 @@ class MeshMedia {
         let focus = null;
         if (this.layout !== 'grid') focus = this.activeSpeaker;
         this.tilesEl.classList.toggle('has-focus', Boolean(focus));
-        const hideStrips = this.layout === 'focus';
         this.tiles.forEach((tile, identity) => {
             tile.classList.toggle('focus', identity === focus);
             tile.classList.toggle('mini', Boolean(focus) && identity !== focus);
-            tile.classList.toggle('strip-hidden', hideStrips && identity !== focus);
+            // Focus adjusts tile sizes but must not hide a live camera.
         });
         this.emptyEl.classList.toggle('hidden', count > 0);
     }
 
     // ------------------------------------------------- speaker + quality
     _evaluateSpeaker() {
-        // real signal levels from an AnalyserNode per remote audio stream;
-        // every tile gets a live level bar, the loudest becomes the speaker
+        // Read real signal levels from each remote stream. Every participant
+        // above the noise gate gets a visible speaking badge; the loudest is
+        // still used as the focus/PiP speaker.
         let best = null;
-        let bestLevel = 0.02; // noise gate
+        let bestLevel = 0.02; // noise gate for choosing the focus speaker
         for (const [identity, link] of this.links) {
             const stream = link.remoteStream;
             const tile = this.tiles.get(identity);
             const audioTrack = stream && stream.getAudioTracks()[0];
             if (!audioTrack || !audioTrack.enabled || audioTrack.muted || audioTrack.readyState !== 'live') {
-                if (tile) tile.style.setProperty('--lvl', '0');
+                if (tile) {
+                    tile.style.setProperty('--lvl', '0');
+                    tile._speakingUntil = 0;
+                    tile.classList.remove('speaking');
+                    tile.querySelector('.tile-speaking')?.setAttribute('aria-hidden', 'true');
+                }
                 continue;
             }
             let analyser = this.levels.get(identity);
@@ -1127,14 +1146,18 @@ class MeshMedia {
                 this.levels.set(identity, analyser);
             }
             const level = analyserLevel(analyser);
-            if (tile) tile.style.setProperty('--lvl', level.toFixed(3));
+            if (tile) {
+                tile.style.setProperty('--lvl', level.toFixed(3));
+                const now = performance.now();
+                if (level > 0.03) tile._speakingUntil = now + 900;
+                const speaking = now < (tile._speakingUntil || 0);
+                tile.classList.toggle('speaking', speaking);
+                tile.querySelector('.tile-speaking')?.setAttribute('aria-hidden', String(!speaking));
+            }
             if (level > bestLevel) { bestLevel = level; best = identity; }
         }
         if (best !== this.activeSpeaker) {
             this.activeSpeaker = best;
-            this.tiles.forEach((tile, identity) => {
-                if (identity !== this.self.identity) tile.classList.toggle('speaking', identity === best);
-            });
             this._layout();
             this.updatePip(this.currentView); // pip follows the speaker
         }
@@ -1153,12 +1176,8 @@ class MeshMedia {
         const vid = document.getElementById('cam-pip-video');
         const label = document.getElementById('cam-pip-label');
         if (!pip || !vid) return;
-        if (this.currentView !== this._pipView) {
-            this._pipView = this.currentView;
-            this._pipClosed = false; // a fresh view re-opens the pip
-        }
         const pipViews = ['whiteboard', 'presentation', 'screen'];
-        if (!pipViews.includes(this.currentView) || this._pipClosed) {
+        if (!pipViews.includes(this.currentView)) {
             pip.classList.add('hidden');
             vid.srcObject = null;
             return;
@@ -1193,11 +1212,6 @@ class MeshMedia {
         if (label) label.textContent = name;
         pip.classList.remove('hidden');
         this._playSafe(vid);
-    }
-
-    closePip() {
-        this._pipClosed = true;
-        this.updatePip(this.currentView);
     }
 
     async _evaluateQuality() {

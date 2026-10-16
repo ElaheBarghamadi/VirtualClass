@@ -44,11 +44,10 @@ class LivekitMedia {
         this.onStateChange = () => {};   // room.js hook → presence media_state
         this.onQualityChange = () => {}; // room.js hook → connection pill
         this.currentView = 'media';
-        this._pipView = null;
-        this._pipClosed = false;
         this._pipTrack = null;
         this._localAnalyser = null;
         this._localLevelRaf = null;
+        this._localSpeakingUntil = 0;
         this.peerInfo = new Map();
         this._remotePermissionState = new WeakMap();
         this._screenShareOwner = null;
@@ -102,7 +101,7 @@ class LivekitMedia {
             .on(R.TrackUnsubscribed, (track, pub, p) => this._detachTrack(p, track))
             .on(R.TrackMuted, (track, pub) => this._refreshTrackState(pub?.source && this._ownerOf(track)))
             .on(R.TrackUnmuted, (track, pub) => this._refreshTrackState(this._ownerOf(track)))
-            .on(R.ActiveSpeakersChanged, (speakers) => this._setActiveSpeaker(speakers[0]))
+            .on(R.ActiveSpeakersChanged, (speakers) => this._setActiveSpeakers(speakers))
             .on(R.LocalTrackPublished, () => this._syncLocalUI())
             .on(R.LocalTrackUnpublished, () => this._syncLocalUI())
             .on(R.ConnectionQualityChanged, (quality, participant) => {
@@ -219,7 +218,17 @@ class LivekitMedia {
         placeholder.className = 'tile-placeholder';
         placeholder.textContent = (participant.name || participant.identity || '?').charAt(0);
 
-        tile.append(video, placeholder, overlay);
+        const speaking = document.createElement('span');
+        speaking.className = 'tile-speaking';
+        speaking.textContent = 'در حال صحبت';
+        speaking.setAttribute('role', 'status');
+        speaking.setAttribute('aria-label', 'در حال صحبت');
+        speaking.setAttribute('aria-hidden', 'true');
+        const level = document.createElement('span');
+        level.className = 'tile-level';
+        level.setAttribute('aria-hidden', 'true');
+
+        tile.append(video, placeholder, overlay, speaking, level);
         tile.addEventListener('click', () => this.togglePin(identity));
         tile.addEventListener('keydown', (e) => { if (e.key === 'Enter') this.togglePin(identity); });
         overlay.querySelector('.tile-fs')?.addEventListener('click', (e) => {
@@ -321,10 +330,21 @@ class LivekitMedia {
         }
     }
 
-    _setActiveSpeaker(participant) {
-        this.activeSpeaker = participant ? participant.identity : null;
+    _setActiveSpeakers(participants = []) {
+        const speakers = new Set((participants || []).map((p) => p?.identity).filter(Boolean));
+        this.activeSpeaker = participants?.[0]?.identity || null;
         this.tiles.forEach((tile, identity) => {
-            tile.classList.toggle('speaking', identity === this.activeSpeaker);
+            const speaking = speakers.has(identity);
+            tile.classList.toggle('speaking', speaking);
+            tile.querySelector('.tile-speaking')?.setAttribute('aria-hidden', String(!speaking));
+            if (!speaking) tile.style.setProperty('--lvl', '0');
+            else {
+                const participant = identity === this.currentIdentity
+                    ? this.localParticipant
+                    : this.room?.remoteParticipants?.get(identity);
+                const reported = Number(participant?.audioLevel) || 0;
+                tile.style.setProperty('--lvl', Math.max(0.16, Math.min(1, reported)).toFixed(3));
+            }
         });
         this._layout();
         this.updatePip(this.currentView); // pip follows the speaker
@@ -338,12 +358,8 @@ class LivekitMedia {
         const vid = document.getElementById('cam-pip-video');
         const label = document.getElementById('cam-pip-label');
         if (!pip || !vid) return;
-        if (this.currentView !== this._pipView) {
-            this._pipView = this.currentView;
-            this._pipClosed = false;
-        }
         const pipViews = ['whiteboard', 'presentation', 'screen'];
-        if (!pipViews.includes(this.currentView) || this._pipClosed || !this.room) {
+        if (!pipViews.includes(this.currentView) || !this.room) {
             pip.classList.add('hidden');
             vid.srcObject = null;
             this._pipTrack = null;
@@ -381,11 +397,6 @@ class LivekitMedia {
         vid.play().catch(() => {});
     }
 
-    closePip() {
-        this._pipClosed = true;
-        this.updatePip(this.currentView);
-    }
-
     // ------------------------------------------------- local mic meter
     _startLocalLevel() {
         this._stopLocalLevel();
@@ -403,7 +414,11 @@ class LivekitMedia {
             const tile = this.localParticipant && this.tiles.get(this.localParticipant.identity);
             if (tile) {
                 tile.style.setProperty('--lvl', level.toFixed(3));
-                tile.classList.toggle('speaking', level > 0.06);
+                const now = performance.now();
+                if (level > 0.03) this._localSpeakingUntil = now + 750;
+                const speaking = now < this._localSpeakingUntil;
+                tile.classList.toggle('speaking', speaking);
+                tile.querySelector('.tile-speaking')?.setAttribute('aria-hidden', String(!speaking));
             }
             this._localLevelRaf = requestAnimationFrame(tick);
         };
@@ -415,8 +430,15 @@ class LivekitMedia {
         this._localLevelRaf = null;
         disposeAnalyser(this._localAnalyser);
         this._localAnalyser = null;
+        this._localSpeakingUntil = 0;
         const btn = document.getElementById('btn-mic');
         if (btn) btn.style.setProperty('--mic-level', '0');
+        const tile = this.localParticipant && this.tiles.get(this.localParticipant.identity);
+        if (tile) {
+            tile.style.setProperty('--lvl', '0');
+            tile.classList.remove('speaking');
+            tile.querySelector('.tile-speaking')?.setAttribute('aria-hidden', 'true');
+        }
     }
 
     togglePin(identity) {
@@ -439,11 +461,11 @@ class LivekitMedia {
         }
 
         this.tilesEl.classList.toggle('has-focus', Boolean(focus));
-        const hideStrips = this.layout === 'focus';
         this.tiles.forEach((tile, identity) => {
             tile.classList.toggle('focus', identity === focus);
             tile.classList.toggle('mini', Boolean(focus) && identity !== focus);
-            tile.classList.toggle('strip-hidden', hideStrips && identity !== focus);
+            // Focus changes tile sizes only; it never hides a participant's
+            // live camera. Visibility is controlled by media permissions.
         });
         this.emptyEl.classList.toggle('hidden', count > 0);
     }
@@ -662,7 +684,6 @@ class MediaFacade {
 
     setLayout(mode) { if (this.impl) this.impl.setLayout(mode); }
     updatePip(view) { if (this.impl && this.impl.updatePip) this.impl.updatePip(view); }
-    closePip() { if (this.impl && this.impl.closePip) this.impl.closePip(); }
     async toggleMicrophone() { return this.impl ? this.impl.toggleMicrophone() : false; }
     async toggleCamera() { return this.impl ? this.impl.toggleCamera() : false; }
     async toggleScreenShare() { return this.impl ? this.impl.toggleScreenShare() : false; }

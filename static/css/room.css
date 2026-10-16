@@ -127,7 +127,13 @@ body.full-page .messages {
     .tiles[data-count="5"], .tiles[data-count="6"] { grid-template-columns: repeat(3, 1fr); }
     .tiles[data-count="7"], .tiles[data-count="8"], .tiles[data-count="9"] { grid-template-columns: repeat(3, 1fr); }
 }
-.tiles.has-focus { grid-template-columns: 1fr 180px; grid-template-rows: 1fr; }
+.tiles.has-focus {
+    grid-template-columns: minmax(0, 1fr) minmax(110px, min(22vw, 220px));
+    grid-template-rows: minmax(0, 1fr);
+    grid-auto-rows: minmax(90px, 120px);
+    overflow-y: auto;
+}
+.tiles[data-layout="focus"] { scrollbar-gutter: stable; }
 .tile {
     position: relative; background: var(--surface-3); border: 2px solid transparent;
     border-radius: var(--radius); overflow: hidden; cursor: pointer; min-height: 110px;
@@ -135,11 +141,23 @@ body.full-page .messages {
 }
 .tile:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .tile.speaking { border-color: var(--success); box-shadow: 0 0 14px var(--success-soft); }
-.tile.focus { grid-row: 1 / -1; grid-column: 1; }
+.tile-speaking {
+    display: none; position: absolute; top: .5rem; inset-inline-start: .5rem; z-index: 4;
+    align-items: center; gap: .3rem; padding: .25rem .6rem;
+    border: 1px solid color-mix(in srgb, var(--success) 60%, transparent);
+    border-radius: var(--radius-pill); background: color-mix(in srgb, var(--success) 88%, #000 12%);
+    color: #fff; font-size: .72rem; font-weight: 750; line-height: 1.2;
+    box-shadow: 0 2px 10px color-mix(in srgb, var(--success) 35%, transparent);
+    pointer-events: none;
+}
+.tile-speaking::before { content: '●'; font-size: .55rem; animation: speaking-pulse 1s ease-in-out infinite; }
+.tile.speaking .tile-speaking { display: inline-flex; }
+@keyframes speaking-pulse { 50% { opacity: .35; transform: scale(.8); } }
+@media (prefers-reduced-motion: reduce) { .tile-speaking::before { animation: none; } }
+.tile.focus { grid-row: 1; grid-column: 1; }
 .tile.focus video { object-fit: contain; background: var(--surface-3); }
 .tile.mini { grid-row: auto; grid-column: 2; min-height: 80px; }
 .tiles.has-focus .tile.mini { grid-column: 2; }
-.tile.strip-hidden { display: none; }
 .tile.conn-failed { border-color: var(--warning); }
 /* "Could not reach this classmate" — explains itself instead of showing a
    mysterious empty tile, and offers one more attempt. */
@@ -220,17 +238,17 @@ body.full-page .messages {
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     pointer-events: none;
 }
-.cam-pip-close {
+.cam-pip-fs {
     position: absolute; top: 4px; inset-inline-end: 4px;
-    width: 24px; height: 24px;
-    border: none; border-radius: 50%;
-    background: color-mix(in srgb, #000 55%, transparent);
-    color: #fff; font-size: .7rem; line-height: 1;
+    width: 28px; height: 28px;
+    border: 1px solid color-mix(in srgb, #fff 30%, transparent); border-radius: 50%;
+    background: color-mix(in srgb, #000 60%, transparent);
+    color: #fff; font-size: 1rem; line-height: 1;
     cursor: pointer;
     display: inline-flex; align-items: center; justify-content: center;
 }
-.cam-pip-close:hover { background: color-mix(in srgb, #000 75%, transparent); }
-.cam-pip-close:focus-visible { outline: 2px solid var(--accent); }
+.cam-pip-fs:hover { background: color-mix(in srgb, #000 82%, transparent); }
+.cam-pip-fs:focus-visible { outline: 2px solid var(--accent); }
 @media (max-width: 640px) {
     .cam-pip { width: 130px; inset-inline-start: 8px; }
 }
@@ -963,13 +981,24 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
 .file-actions .file-present { white-space: nowrap; }
 
 /* whiteboard when the viewer may not draw */
-.wb-nodraw-hint {
-    margin: .3rem 0 .5rem; padding: .5rem .8rem; font-size: .82rem; line-height: 1.7;
+.wb-nodraw-hint, .wb-error-hint {
+    margin: .3rem 0 .5rem; padding: .55rem .8rem; font-size: .82rem; line-height: 1.7;
     border: 1px solid var(--warning, #d97706); border-radius: var(--radius-md);
     background: color-mix(in srgb, var(--warning, #d97706) 10%, transparent);
 }
-.wb-toolbar.no-draw { opacity: .45; filter: grayscale(.6); }
+.wb-error-hint {
+    border-color: var(--danger, #dc2626);
+    background: color-mix(in srgb, var(--danger, #dc2626) 10%, transparent);
+}
+.wb-toolbar.no-draw { opacity: .55; filter: grayscale(.5); }
 .wb-toolbar.no-draw .wb-tool.active { outline: none; }
+.wb-toolbar.is-unavailable { opacity: .45; pointer-events: none; }
+.perms-policy-note {
+    margin-block: .35rem .7rem; padding: .5rem .7rem;
+    border-inline-start: 3px solid var(--warning, #d97706);
+    background: color-mix(in srgb, var(--warning, #d97706) 8%, transparent);
+    border-radius: var(--radius-sm); line-height: 1.65;
+}
 
 /* ===== extra-small phones (≤360px): squeeze the control bar to two rows =====
    Must come AFTER the 560px block (same specificity, later source wins):

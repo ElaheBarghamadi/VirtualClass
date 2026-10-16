@@ -498,7 +498,7 @@ def _can_manage(actor: ClassroomMember, target: ClassroomMember) -> bool:
     return target.role not in PRIVILEGED_ROLES
 
 
-def set_member_permission(classroom: Classroom, operator: User, member_id: int, permission: str, value: bool) -> None:
+def set_member_permission(classroom: Classroom, operator: User, member_id: int, permission: str, value: bool) -> dict[str, bool]:
     actor = _require_privileged(classroom, operator)
     if permission not in permission_fields():
         raise ValueError(f"Unknown permission: {permission!r}")
@@ -531,6 +531,7 @@ def set_member_permission(classroom: Classroom, operator: User, member_id: int, 
         "permissions": perms,
     })
     logger.info("permission_changed", extra={"room_code": classroom.room_code, "target": target.user_id, "permission": permission})
+    return perms
 
 
 def set_member_role(classroom: Classroom, owner: User, member_id: int, role: str) -> None:

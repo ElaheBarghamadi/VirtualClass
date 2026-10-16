@@ -338,6 +338,15 @@ function fillPermsDialog(p) {
     const list = document.getElementById('perms-list');
     list.innerHTML = '';
     const perms = p.permissions || {};
+    const wbPolicyNote = document.getElementById('perms-whiteboard-policy-note');
+    const studentLike = ['STUDENT', 'GUEST'].includes(p.role);
+    const studentBoardEnabled = !!document.querySelector('#settings-form [name="allow_student_whiteboard"]')?.checked;
+    if (wbPolicyNote) {
+        wbPolicyNote.classList.toggle('hidden', !studentLike);
+        wbPolicyNote.textContent = studentBoardEnabled
+            ? 'برای دانش‌آموزان، نوشتن روی تخته به مجوز «تختهٔ اشتراکی» همین عضو وابسته است.'
+            : 'تنظیم «تختهٔ دانش‌آموزان» در کلاس خاموش است؛ تا روشن نشود، دادن مجوز فردی به دانش‌آموز برای نوشتن کافی نیست.';
+    }
     for (const key of PERM_ORDER) {
         if (key === 'can_upload_files' && p.is_guest) continue; // guests never upload
         const row = document.createElement('label');
@@ -349,9 +358,19 @@ function fillPermsDialog(p) {
         cb.addEventListener('change', async () => {
             const want = cb.checked;
             try {
-                await api(`/members/${p.member_id}/permission/`, { permission: key, value: want });
+                // The server's permission_changed event carries the effective
+                // value (including class-wide policy). Do not optimistically
+                // overwrite the roster with the requested value: a room policy
+                // may correctly keep an individual grant ineffective.
+                const result = await api(`/members/${p.member_id}/permission/`, { permission: key, value: want });
                 const cached = presence.participants.get(p.identity);
-                if (cached?.permissions) cached.permissions[key] = want;
+                if (cached && result?.permissions) {
+                    // Reconcile from the server's effective capability map,
+                    // not the requested checkbox value (class-wide policy or
+                    // moderation can legitimately keep this grant off).
+                    presence.upsert({ ...cached, permissions: result.permissions });
+                    refreshPermsDialog(p.identity);
+                }
             } catch (err) {
                 cb.checked = !want; // server refused — roll the switch back
             }
@@ -987,7 +1006,13 @@ function initControls() {
     });
     bind('btn-exit-screen', () => switchView('media'));
     bind('btn-exit-presentation', () => switchView('media'));
-    bind('cam-pip-close', () => Media.closePip());
+    bind('cam-pip-fs', () => {
+        const pip = document.getElementById('cam-pip');
+        const video = document.getElementById('cam-pip-video');
+        const target = video && video.readyState > 0 ? video : pip;
+        if (document.fullscreenElement) document.exitFullscreen?.();
+        else target?.requestFullscreen?.().catch(() => {});
+    });
     bind('btn-exit', async () => {
         if (await confirmDialog('خروج از کلاس', 'از کلاس خارج شوید؟ برای ورود مجدد باید دوباره به کلاس بپیوندید.', { danger: true, okLabel: 'خروج' })) {
             document.getElementById('leave-submit').form.submit();

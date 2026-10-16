@@ -183,7 +183,45 @@ def run(base: str, code: str) -> int:
         check("camera re-granted live on student",
               pg_s.evaluate("() => window.__media?.impl?.permissions?.can_use_camera === true"
                             " && !document.getElementById('btn-camera')?.classList.contains('off')") is True)
+        pg_o.click("#perms-x"); pg_o.wait_for_timeout(300)
+
+        # While the member is still a STUDENT, verify the classroom-wide
+        # camera switch releases a live device and permits it again on restore.
+        pg_s.click("#btn-camera"); pg_s.wait_for_timeout(1800)
+        class_camera_cb = 'input[name="allow_student_camera"]'
+        pg_o.click("#btn-settings"); pg_o.wait_for_selector("#settings-dialog[open]")
+        pg_o.uncheck(class_camera_cb)
+        pg_o.click("#settings-save"); pg_o.wait_for_timeout(1400)
+        class_camera_revoked = pg_s.evaluate("""() => ({
+            permission: window.__media?.impl?.permissions?.can_use_camera,
+            tracks: window.__media?.impl?.localStream?.getVideoTracks?.().length ?? 0,
+        })""")
+        class_remote_hidden = pg_o.evaluate("""id => {
+            const v = document.querySelector(`.tile[data-identity="${id}"] video`);
+            return !v || getComputedStyle(v).display === 'none' || v.videoWidth === 0;
+        }""", stu_id)
+        check("class camera policy stops active student capture and hides remote video",
+              class_camera_revoked["permission"] is False
+              and class_camera_revoked["tracks"] == 0 and class_remote_hidden,
+              f"{class_camera_revoked}; remote_hidden={class_remote_hidden}")
+        pg_o.click("#btn-settings"); pg_o.wait_for_selector("#settings-dialog[open]")
+        pg_o.check(class_camera_cb)
+        pg_o.click("#settings-save"); pg_o.wait_for_timeout(900)
+        pg_s.click("#btn-camera"); pg_s.wait_for_timeout(1600)
+        try:
+            pg_o.wait_for_function("""id => {
+                const v = document.querySelector(`.tile[data-identity="${id}"] video`);
+                return !!v && v.videoWidth > 0 && v.readyState >= 2;
+            }""", arg=stu_id, timeout=8000)
+            camera_after_class_policy = True
+        except Exception:
+            camera_after_class_policy = False
+        check("camera works after restoring class policy", camera_after_class_policy)
+        pg_s.click("#btn-camera"); pg_s.wait_for_timeout(500)
+
         # unmute through the dialog, re-acquire the mic, then revoke it
+        pg_o.click(f"{sel} .hc-btn >> nth=2")
+        pg_o.wait_for_selector("#perms-dialog[open]")
         pg_o.click("#perms-mute"); pg_o.wait_for_timeout(1000)
         check("dialog unmute restored the student mic grant",
               pg_s.evaluate("() => window.__media?.impl?.permissions?.can_use_microphone === true") is True)
@@ -224,6 +262,17 @@ def run(base: str, code: str) -> int:
               pg_s.evaluate("() => window.__wb?.canDraw === true"
                             " && !document.querySelector('.wb-toolbar')?.classList.contains('no-draw')"
                             " && document.getElementById('wb-nodraw-hint')?.classList.contains('hidden')") is True)
+        # Subsequent roster/media updates must not replace an effective grant
+        # with the connection-time class policy cached by an old socket.
+        pg_s.evaluate("""() => {
+            const m = window.__media?.impl;
+            m?.onStateChange?.({
+                mic_on: Boolean(m.micOn), camera_on: Boolean(m.cameraOn),
+                screen_sharing: Boolean(m.screenStream),
+            });
+        }""")
+        pg_o.wait_for_timeout(500)
+        check("whiteboard grant survives later media-state updates", pg_o.is_checked(wb_cb))
         pg_o.click("#perms-x"); pg_o.wait_for_timeout(250)
 
         pg_o.evaluate("() => window.__switchView('whiteboard')")
@@ -243,11 +292,22 @@ def run(base: str, code: str) -> int:
 
         pg_o.click(f"{sel} .hc-btn >> nth=2")
         pg_o.wait_for_selector("#perms-dialog[open]")
-        pg_o.uncheck(wb_cb); pg_o.wait_for_timeout(1200)
+        pg_o.uncheck(wb_cb)
+        try:
+            pg_s.wait_for_function("""() => window.__wb?.canDraw === false
+                && document.querySelector('.wb-toolbar')?.classList.contains('no-draw')
+                && !document.getElementById('wb-nodraw-hint')?.classList.contains('hidden')""",
+                timeout=6000)
+        except Exception:
+            pass
+        wb_revoked = pg_s.evaluate("""() => ({
+            canDraw: window.__wb?.canDraw,
+            noDraw: document.querySelector('.wb-toolbar')?.classList.contains('no-draw'),
+            hintVisible: !document.getElementById('wb-nodraw-hint')?.classList.contains('hidden'),
+        })""")
         check("owner revokes whiteboard permission live",
-              pg_s.evaluate("() => window.__wb?.canDraw === false"
-                            " && document.querySelector('.wb-toolbar')?.classList.contains('no-draw')"
-                            " && !document.getElementById('wb-nodraw-hint')?.classList.contains('hidden')") is True)
+              wb_revoked["canDraw"] is False and wb_revoked["noDraw"] and wb_revoked["hintVisible"],
+              str(wb_revoked))
         pg_o.click("#perms-x"); pg_o.wait_for_timeout(250)
         pg_s.evaluate("() => window.__switchView('media')")
         pg_o.evaluate("() => window.__switchView('media')")
@@ -330,7 +390,16 @@ def run(base: str, code: str) -> int:
         pg_o.mouse.move(box["x"] + 260, box["y"] + 200, steps=8); pg_o.mouse.up()
         pg_o.wait_for_timeout(1200)
         check("whiteboard stroke rendered",
-              pg_o.evaluate("() => { const c = document.getElementById('whiteboard-canvas'); return c ? c.toDataURL().length > 5000 : false; }"))
+              pg_o.evaluate("""() => {
+                  const c = document.getElementById('whiteboard-canvas');
+                  if (!c) return false;
+                  const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+                  let ink = 0;
+                  for (let i = 0; i < d.length; i += 4) {
+                      if (d[i] < 245 || d[i + 1] < 245 || d[i + 2] < 245) ink++;
+                  }
+                  return ink > 30;
+              }"""))
         # --- regression: ops must be viewport-normalised (0..1) so they
         # land in the same relative spot on ANY window size ---
         norm = pg_o.evaluate("""() => {
@@ -447,9 +516,108 @@ def run(base: str, code: str) -> int:
         # a false "connection failed" would wreck a perfectly good class.
         check("no false unreachable-peer notice while connected",
               pg_s.evaluate("() => !document.querySelector('.tile.conn-failed')"))
+
+        # A student's live camera must actually arrive at the owner, and a
+        # layout change may resize it but may never remove the participant.
+        try:
+            pg_o.wait_for_function("""id => {
+                const v = document.querySelector(`.tile[data-identity="${id}"] video`);
+                return !!v && v.videoWidth > 0 && v.readyState >= 2;
+            }""", arg=stu_id, timeout=10000)
+            remote_camera_ok = True
+        except Exception:
+            remote_camera_ok = False
+        check("permitted student camera reaches owner", remote_camera_ok)
+        pg_o.click('.layout-btn[data-layout="focus"]'); pg_o.wait_for_timeout(700)
+        focus_camera = pg_o.evaluate("""id => {
+            const tile = document.querySelector(`.tile[data-identity="${id}"]`);
+            const video = tile?.querySelector('video');
+            return {
+                tilePresent: !!tile,
+                tileVisible: !!tile && getComputedStyle(tile).display !== 'none',
+                videoVisible: !!video && getComputedStyle(video).display !== 'none',
+                fullscreen: !!tile?.querySelector('.tile-fs'),
+            };
+        }""", stu_id)
+        check("focus layout keeps every camera tile visible and fullscreen-capable",
+              focus_camera["tilePresent"] and focus_camera["tileVisible"]
+              and focus_camera["videoVisible"] and focus_camera["fullscreen"], str(focus_camera))
+
         pg_s.evaluate("() => window.__switchView('whiteboard')"); pg_s.wait_for_timeout(1500)
-        check("PiP camera visible over whiteboard view",
-              pg_s.evaluate("() => !document.getElementById('cam-pip')?.classList.contains('hidden')"))
+        pip_state = pg_s.evaluate("""() => ({
+            visible: !document.getElementById('cam-pip')?.classList.contains('hidden'),
+            fullscreen: !!document.getElementById('cam-pip-fs'),
+            closers: document.querySelectorAll('#cam-pip-close, .cam-pip-close').length,
+        })""")
+        check("PiP remains visible and cannot be closed; fullscreen control exists",
+              pip_state["visible"] and pip_state["fullscreen"] and pip_state["closers"] == 0,
+              str(pip_state))
+        pg_s.click("#cam-pip-fs"); pg_s.wait_for_timeout(500)
+        pip_fullscreen = pg_s.evaluate("() => !!document.fullscreenElement")
+        check("PiP fullscreen control enters fullscreen", pip_fullscreen)
+        if pip_fullscreen:
+            pg_s.evaluate("() => document.exitFullscreen?.()")
+            pg_s.wait_for_timeout(350)
+
+        # Revocation while a stream is active must stop local capture and
+        # remove the remote video for everyone; regrant only permits the
+        # member to turn their camera on again.
+        pg_o.click('.layout-btn[data-layout="grid"]'); pg_o.wait_for_timeout(350)
+        pg_o.click('.side-tab[data-tab="participants"]'); pg_o.wait_for_timeout(350)
+        pg_o.click(f"{sel} .hc-btn >> nth=2")
+        pg_o.wait_for_selector("#perms-dialog[open]", timeout=5000)
+        if pg_o.is_checked(cam_cb):
+            pg_o.uncheck(cam_cb)
+        pg_o.wait_for_timeout(1400)
+        revoked_live = pg_s.evaluate("""() => ({
+            permission: window.__media?.impl?.permissions?.can_use_camera,
+            tracks: window.__media?.impl?.localStream?.getVideoTracks?.().length ?? 0,
+        })""")
+        remote_hidden = pg_o.evaluate("""id => {
+            const v = document.querySelector(`.tile[data-identity="${id}"] video`);
+            return !v || getComputedStyle(v).display === 'none' || v.videoWidth === 0;
+        }""", stu_id)
+        check("live camera revocation stops capture and hides remote video",
+              revoked_live["permission"] is False and revoked_live["tracks"] == 0 and remote_hidden,
+              f"{revoked_live}; remote_hidden={remote_hidden}")
+        pg_o.check(cam_cb); pg_o.wait_for_timeout(900)
+        pg_o.click("#perms-x"); pg_o.wait_for_timeout(300)
+        pg_s.click("#btn-camera"); pg_s.wait_for_timeout(2200)
+        try:
+            pg_o.wait_for_function("""id => {
+                const v = document.querySelector(`.tile[data-identity="${id}"] video`);
+                return !!v && v.videoWidth > 0 && v.readyState >= 2;
+            }""", arg=stu_id, timeout=8000)
+            camera_after_regrant = True
+        except Exception:
+            camera_after_regrant = False
+        check("camera returns to permitted peers after regrant and re-enable",
+              camera_after_regrant)
+
+        # A real microphone signal gives a prominent per-tile speaking badge
+        # locally and on the receiving peer. Wait for a sample rather than
+        # asserting on a single animation frame of the fake capture device.
+        pg_s.click("#btn-mic")
+        try:
+            pg_s.wait_for_function("""() => {
+                const t = document.querySelector('.tile[data-self="1"]');
+                return !!t?.classList.contains('speaking')
+                    && getComputedStyle(t.querySelector('.tile-speaking')).display !== 'none';
+            }""", timeout=8000)
+            local_speaking = True
+        except Exception:
+            local_speaking = False
+        try:
+            pg_o.wait_for_function("""id => {
+                const t = document.querySelector(`.tile[data-identity="${id}"]`);
+                return !!t?.classList.contains('speaking')
+                    && getComputedStyle(t.querySelector('.tile-speaking')).display !== 'none';
+            }""", arg=stu_id, timeout=8000)
+            remote_speaking = True
+        except Exception:
+            remote_speaking = False
+        check("microphone activity shows a clear local speaking indicator", local_speaking)
+        check("microphone activity shows a clear remote speaking indicator", remote_speaking)
 
         # ---------- exit ----------
         pg_s.click("#btn-exit"); pg_s.wait_for_timeout(600)

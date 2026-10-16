@@ -89,7 +89,7 @@
                     <div class="stage-toolbar" role="group" aria-label="چیدمان نمایش">
                         <button type="button" class="layout-btn active" data-layout="grid" aria-pressed="true" title="چیدمان شبکه‌ای">▦ شبکه</button>
                         <button type="button" class="layout-btn" data-layout="speaker" aria-pressed="false" title="سخنران">🎙 سخنران</button>
-                        <button type="button" class="layout-btn" data-layout="focus" aria-pressed="false" title="تمرکز (فقط سخنران)">◎ تمرکز</button>
+                        <button type="button" class="layout-btn" data-layout="focus" aria-pressed="false" title="بزرگ‌نمایی سخنران؛ سایر کاشی‌ها در نوار کناری می‌مانند">◎ تمرکز</button>
                         <button type="button" class="layout-btn" data-layout="presentation" aria-pressed="false" title="ارائه">📽 ارائه</button>
                         <span class="ctrl-sep" aria-hidden="true"></span>
                         <button type="button" class="layout-btn" data-action="fullscreen-stage" aria-pressed="false" title="تمام‌صفحه" aria-label="تمام‌صفحه">⛶ تمام‌صفحه</button>
@@ -143,9 +143,9 @@
 
                 <div class="stage-view hidden" id="view-whiteboard">
                     <div class="wb-nodraw-hint hidden" id="wb-nodraw-hint" role="note">
-                        ✋ فقط میزبان و ارائه‌دهنده می‌توانند روی تخته بنویسند —
-                        از میزبان بخواهید نقش شما را به «ارائه‌دهنده» تغییر دهد.
+                        ✋ نوشتن روی تخته برای شما فعال نیست. از مالک کلاس بخواهید مجوز «تختهٔ اشتراکی» را برایتان روشن کند؛ برای دانش‌آموزان، گزینهٔ «تختهٔ دانش‌آموزان» در تنظیمات کلاس هم باید فعال باشد.
                     </div>
+                    <div class="wb-error-hint hidden" id="wb-error-hint" role="alert"></div>
                     <div class="wb-toolbar" role="toolbar" aria-label="ابزار تخته سفید">
                         <button type="button" class="wb-tool active" data-tool="pen" title="قلم" aria-label="قلم">✏️</button>
                         <button type="button" class="wb-tool" data-tool="highlighter" title="هایلایت" aria-label="هایلایت">🖍️</button>
@@ -321,7 +321,7 @@
     <div id="cam-pip" class="cam-pip hidden" aria-label="تصویر کوچک دوربین">
         <video id="cam-pip-video" autoplay playsinline muted></video>
         <span id="cam-pip-label" class="cam-pip-label"></span>
-        <button type="button" id="cam-pip-close" class="cam-pip-close" aria-label="بستن تصویر کوچک">✕</button>
+        <button type="button" id="cam-pip-fs" class="cam-pip-fs" title="نمایش تمام‌صفحه" aria-label="نمایش تمام‌صفحهٔ دوربین">⛶</button>
     </div>
 
     <footer class="room-controls">
@@ -511,6 +511,9 @@
     </div>
     <div class="app-dialog-body">
         <p class="perms-hint muted small">تغییرها بلافاصله اعمال می‌شود و برای همهٔ میزبان‌ها همگام می‌شود.</p>
+        <p class="perms-hint perms-policy-note hidden" id="perms-whiteboard-policy-note" role="note">
+            برای دانش‌آموزان، دسترسی تخته علاوه بر این مجوز به گزینهٔ «تختهٔ دانش‌آموزان» در تنظیمات کلاس هم وابسته است.
+        </p>
         <div class="perms-list" id="perms-list"></div>
         <div class="perms-role hidden" id="perms-role-wrap">
             <label for="perms-role">نقش عضو</label>

@@ -303,9 +303,14 @@ class ClassroomConsumer(SafeJsonWebsocketConsumer):
 
     @database_sync_to_async
     def _self_payload(self) -> dict:
-        member = ClassroomMember.objects.filter(id=self.member.id).select_related("user").first()
+        # The consumer's ``self.classroom`` is a connection-time snapshot.
+        # Class-wide permissions can change while the socket stays open, so
+        # refresh the related classroom whenever we emit a participant state;
+        # otherwise a later media_state could overwrite a fresh grant with
+        # stale effective permissions in every peer's roster.
+        member = ClassroomMember.objects.filter(id=self.member.id).select_related("user", "classroom").first()
         return (
-            participant_payload(member, getattr(self, "classroom", None))
+            participant_payload(member, member.classroom)
             if member
             else {"identity": "", "name": ""}
         )

@@ -553,6 +553,42 @@ class RtcSignalRelayTests(TransactionTestCase):
         self.classroom.refresh_from_db()
         self.assertFalse(self.classroom.whiteboard_open)
 
+    def test_media_state_does_not_rebroadcast_stale_class_permissions(self):
+        from asgiref.sync import sync_to_async
+        from classrooms.models import Classroom
+        from classrooms.services import set_member_permission, update_settings
+
+        async def scenario():
+            owner_ws = await self._connected(self.owner)
+            student_ws = await self._connected(self.student)
+
+            # The sockets were opened while this class-wide grant was false.
+            # Update the policy and member permission without reconnecting.
+            await sync_to_async(update_settings)(
+                self.classroom, self.owner, {"allow_student_whiteboard": True},
+            )
+            await self._receive_typed(owner_ws, "settings_changed")
+            await self._receive_typed(student_ws, "settings_changed")
+            fresh_classroom = await sync_to_async(Classroom.objects.get)(id=self.classroom.id)
+            await sync_to_async(set_member_permission)(
+                fresh_classroom, self.owner, self.stu_member.id, "can_use_whiteboard", True,
+            )
+            await self._receive_typed(owner_ws, "permission_changed")
+            await self._receive_typed(student_ws, "permission_changed")
+
+            # A later roster/media update must carry the newly effective
+            # grant, not the connection-time Classroom object from before.
+            await student_ws.send_json_to({
+                "action": "media_state", "mic_on": True,
+                "camera_on": False, "screen_sharing": False,
+            })
+            media = await self._receive_typed(owner_ws, "media_state")
+            assert media["participant"]["permissions"]["can_use_whiteboard"] is True, media
+            await owner_ws.disconnect()
+            await student_ws.disconnect()
+
+        async_to_sync(scenario)()
+
     def test_room_setting_change_pushes_fresh_effective_permissions(self):
         from asgiref.sync import sync_to_async
         from classrooms.services import set_member_permission, update_settings
