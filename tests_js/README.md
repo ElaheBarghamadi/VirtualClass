@@ -9,7 +9,7 @@ without a browser or a Django server.
 ```bash
 cd tests_js
 npm install
-npm test              # 35 checks
+npm test              # 43 checks
 npm test -- --dump    # ...and write .build/ops.json (every frame the client sent)
 ```
 
@@ -28,6 +28,8 @@ What is covered:
   roster, remote cursors, permission grant/revoke;
 * **robustness** — a malformed operation from the network cannot break the
   render loop;
+* **legacy boards** — operations stored by the previous client (pixel-ish
+  rect/ellipse geometry, `color: null` eraser strokes) still paint;
 * **the compatibility surface** `room.js` and `tests_e2e/run_e2e.py` rely on
   (`Whiteboard.init/resize/setPermission/page/canDraw/_pageOps/PAGE`).
 

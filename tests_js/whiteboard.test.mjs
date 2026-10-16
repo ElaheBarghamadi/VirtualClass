@@ -774,6 +774,39 @@ async function main() {
     void printed;
   });
 
+  await check('legacy boards: operations stored by the old client still paint', async () => {
+    socket.serverSend({
+      type: 'whiteboard_history', full: true, trimmed: false, seq: 200,
+      board: { page_count: 1, pages: {}, revision: 200 },
+      events: [
+        { id: 1, seq: 190, actor_identity: 'u:2', actor_name: 'قدیمی', op: {
+          type: 'draw', tool: 'pen', id: 'old-stroke', page: 1, norm: 1, width: 4,
+          color: '#2563eb', points: [[0.1, 0.1], [0.2, 0.3], [0.3, 0.4]] } },
+        { id: 2, seq: 191, actor_identity: 'u:2', actor_name: 'قدیمی', op: {
+          type: 'draw', tool: 'line', id: 'old-line', page: 1, norm: 1, width: 3,
+          color: '#dc2626', points: [[0.4, 0.4], [0.6, 0.5]] } },
+        { id: 3, seq: 192, actor_identity: 'u:2', actor_name: 'قدیمی', op: {
+          type: 'draw', tool: 'rectangle', id: 'old-rect', page: 1, norm: 1, width: 2,
+          color: '#0891b2', left: 0.1, top: 0.6, w: 0.2, h: 0.2 } },
+        { id: 4, seq: 193, actor_identity: 'u:2', actor_name: 'قدیمی', op: {
+          type: 'draw', tool: 'ellipse', id: 'old-ellipse', page: 1, norm: 1, width: 2,
+          color: '#059669', left: 0.6, top: 0.6, rx: 0.1, ry: 0.08 } },
+        { id: 5, seq: 194, actor_identity: 'u:2', actor_name: 'قدیمی', op: {
+          type: 'draw', tool: 'eraser', id: 'old-eraser', page: 1, norm: 1, width: 4,
+          color: null, points: [[0.7, 0.2], [0.8, 0.3]] } },
+        { id: 6, seq: 195, actor_identity: 'u:2', actor_name: 'قدیمی', op: {
+          type: 'laser', page: 1, norm: 1, x: 0.5, y: 0.5 } },
+      ],
+    });
+    await tick(80);
+    const ids = Whiteboard.objects(1).map((op) => op.id);
+    for (const legacy of ['old-stroke', 'old-line', 'old-rect', 'old-ellipse', 'old-eraser']) {
+      assert(ids.includes(legacy), `${legacy} did not come back from the log`);
+    }
+    const drawn = Whiteboard.renderer.exportDataURL(Whiteboard.model, 1, 1.5);
+    assert(drawn.startsWith('data:image/png') && drawn.length > 2000, 'legacy pages did not paint');
+  });
+
   await check('chrome: the pages drawer, popovers and follow switch reflect state', async () => {
     const pages = window.document.getElementById('wb-pages-panel');
     window.document.getElementById('wb-pages-toggle').click();
