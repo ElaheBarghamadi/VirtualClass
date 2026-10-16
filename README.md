@@ -6,6 +6,73 @@
 
 ---
 
+## شروع سریع (اجرای محلی در یک فرمان)
+
+```bash
+git clone https://github.com/ElaheBarghamadi/VirtualClass.git
+cd VirtualClass
+git checkout arena/7fe77451-virtualclass
+
+./scripts/dev.sh --demo          # لینوکس/مک
+.\scripts\dev.ps1 -Demo         # ویندوز (PowerShell)
+bash scripts/dev.sh --demo       # اگر بیت اجرا حفظ نشده بود
+```
+
+اسکریپت خودش virtualenv می‌سازد، نیازمندی‌ها را نصب می‌کند، `.env` را با
+`SECRET_KEY` تازه می‌سازد، مایگریشن می‌زند، کلاس نمونه را می‌سازد و سرور را روی
+`http://localhost:8000` بالا می‌آورد (خروجی: کد کلاس). بعد:
+
+1. `http://localhost:8000/class/<room-code>/` را باز کنید.
+2. یک بار با `owner1` / `Pass-12345` و یک بار در پنجرهٔ ناشناس با `stu1` وارد
+   شوید (هر دو کاربر با `--demo` ساخته می‌شوند) — یا با نام مهمان، چون ورود
+   مهمان پیش‌فرض فعال است.
+3. تخته را با دکمهٔ ✏️ در نوار پایین باز کنید. برای دادن اجازهٔ نوشتن به
+   دانش‌آموز: پنل میزبان → مجوزها → «تختهٔ اشتراکی».
+
+> **میکروفون/دوربین فقط روی `localhost` یا `https` کار می‌کند.** باز کردن
+> `http://192.168.x.x` روی گوشی اجازهٔ دوربین نمی‌گیرد (قانون خود مرورگر).
+> برای تست موبایل یک تونل HTTPS بسازید (مثل `cloudflared tunnel --url
+> http://localhost:8000` یا ngrok) و همان لینک را بدهید.
+
+**دستی (هر سیستم‌عاملی):**
+
+```bash
+python -m venv .venv
+source .venv/bin/activate          # ویندوز: .venv\Scripts\activate
+pip install -r requirements.txt
+cp .env.example .env               # SECRET_KEY را پر کنید
+python manage.py migrate
+python manage.py seed_demo         # اختیاری: کلاس + کاربران نمونه
+python manage.py runserver         # با Daphne: HTTP + WebSocket
+```
+
+`runserver` در این پروژه با **Daphne** اجرا می‌شود و هم HTTP و هم WebSocket را
+سرو می‌کند — پس همان یک فرمان برای تخته، چت و لابی کافی است.
+
+**برای کلاس واقعی با چند نفر** (Redis لازم است، وگرنه پخش بین پروسه‌ها کار
+نمی‌کند):
+
+```bash
+docker run -d -p 6379:6379 --name classroom-redis redis:7
+# در .env:  REDIS_URL=redis://127.0.0.1:6379/0
+python manage.py check       # باید هیچ هشدار whiteboard.W001 ندهد
+python manage.py runserver
+```
+
+اگر می‌خواهید چند نفر روی گوشی/لپ‌تاپ‌های دیگر وصل شوند و شبکه سخت است
+(NAT/فایروال)، به **TURN** نیاز دارید: راهنمای `deploy/coturn/` و متغیر
+`WEBRTC_ICE_SERVERS`. برای کلاس‌های بزرگ‌تر از ~۶ نفر هم LiveKit (SFU) را
+راه بیندازید — بخش «راه‌اندازی سرور رسانه».
+
+**تست‌ها:**
+
+```bash
+SECRET_KEY=test-only python manage.py test     # ۲۶۴ تست سرور
+cd tests_js && npm install && npm test          # ۱۴۷ چک کلاینت (شش سوئیت)
+```
+
+---
+
 ## ۱. امکانات
 
 **رسانهٔ زنده**

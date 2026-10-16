@@ -24,6 +24,9 @@ jobs:
       - name: Install LibreOffice (office-to-PDF conversion)
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libreoffice-impress libreoffice-writer
 
+      - name: Check the one-command dev runner
+        run: bash -n scripts/dev.sh
+
       - name: Django test suite
         env:
           SECRET_KEY: ci-only-not-a-secret
