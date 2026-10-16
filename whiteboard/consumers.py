@@ -1,405 +1,434 @@
 """WebSocket consumer for the collaborative whiteboard.
 
-Endpoint: ``/ws/classroom/<room_code>/whiteboard/``
+Endpoint: ``/ws/classroom/<room_code>/whiteboard/?since=<seq>``
 
 Protocol
 --------
-client → server:  ``{"action": "op", "op": {...}}`` where ``op`` is a
-    structured drawing operation (never a canvas image):
-    ``{"type": "draw", "tool": "pen", "points": [...], "color": ...,
-       "width": ..., "id": ...}``
-    ``{"type": "text", "x":.., "y":.., "text":.., ...}``
-    ``{"type": "remove", "id": ...}``
-    ``{"type": "clear"}``
+client → server::
 
-server → client:  ``whiteboard_history`` (on connect), then one
-    ``whiteboard_operation`` per accepted operation.
+    {"action": "op",     "op":  {...}}          # one operation
+    {"action": "ops",    "ops": [{...}, ...]}   # batch (≤ 64, atomic)
+    {"action": "resync", "since": 128}          # send me the tail from here
+    {"action": "snapshot", "seq": 900, "ops": [...]}   # publish flattened board
+    {"action": "presence"}                      # refresh my roster entry
+    {"action": "ping", "t": 1234}               # latency probe
 
-Authorization: only active members with effective ``can_use_whiteboard``
-may mutate the board (re-checked per operation).  ``clear`` additionally
-requires the operation to pass the same permission check; history is
-compacted server-side on clear.
+server → client::
+
+    {"type": "whiteboard_history", ...}   # first frame: metadata + ops to replay
+    {"type": "whiteboard_operation", ...} # one accepted (or relayed) operation
+    {"type": "presence", ...}             # participant joined / left / changed
+    {"type": "error", ...}                # rejection (carries the op ids)
+    {"type": "pong", "t": ...}
+
+Authorization: only active members may read the board; only members with an
+effective ``can_use_whiteboard`` may change it.  Permissions are re-checked
+inside the persistence transaction, so a revocation mid-session takes effect
+for the very next operation.
 """
 from __future__ import annotations
 
-import json
 import logging
-import math
-import re
+from urllib.parse import parse_qs
 
 from channels.db import database_sync_to_async
-from django.db import transaction
 
-from classrooms.models import ClassroomMember
-from classrooms.permissions import effective_permissions
 from classrooms.services import member_group, resolve_scope_member
-from classrooms.ws_security import RateLimiter, SafeJsonWebsocketConsumer, ws_origin_allowed
+from classrooms.ws_security import (
+    RateLimiter,
+    SafeJsonWebsocketConsumer,
+    ws_origin_allowed,
+)
 
-from .models import Whiteboard, WhiteboardEvent
+from . import services
+from .protocol import (
+    BATCH_COST_FREE,
+    EPHEMERAL_OP_TYPES,
+    MAX_BATCH_OPS,
+    MAX_OP_BYTES,
+    MAX_POINTS,
+    RATE_LIMIT_OPS,
+    validate_op,
+)
 
 logger = logging.getLogger(__name__)
 
-MAX_OP_BYTES = 64 * 1024
-OP_RATE_LIMIT = 40  # ops per second per connection (lasers included)
-HISTORY_LIMIT = 2000
-VALID_OP_TYPES = {"draw", "text", "remove", "clear", "page_add", "page_setup", "page_go", "laser"}
-# Laser pointers are ephemeral: relayed to the group, never persisted.
-EPHEMERAL_OP_TYPES = {"laser"}
-VALID_GRIDS = {"none", "grid", "dots"}
-VALID_TOOLS = {"pen", "highlighter", "eraser", "line", "arrow", "rectangle", "circle"}
+CLOSED_UNAUTHENTICATED = 4401
+CLOSED_FORBIDDEN = 4403
 
 
 class WhiteboardConsumer(SafeJsonWebsocketConsumer):
-    """Relay + persistence for structured whiteboard operations."""
+    """Validates, stores and relays structured whiteboard operations."""
 
-    max_message_bytes = 128 * 1024
 
+    # ------------------------------------------------------------------ #
+    # Connection lifecycle
+    # ------------------------------------------------------------------ #
     async def connect(self) -> None:
         self.room_code: str = self.scope["url_route"]["kwargs"]["room_code"]
         self.group_name = f"classroom_wb_{self.room_code}"
-        self.classroom = None
+        self.member_group_name = ""
         self.member = None
-        self.user = self.scope.get("user")
-        self.authenticated = bool(self.user is not None and getattr(self.user, "is_authenticated", False))
+        self.classroom = None
+        self.last_seq = 0
+        self.can_draw = False
+        self.since = self._query_int("since")
 
-        # CSWSH defence — see classrooms.ws_security.
+        user = self.scope.get("user")
+        authenticated = bool(user is not None and getattr(user, "is_authenticated", False))
+
         if not ws_origin_allowed(self.scope):
             logger.warning("ws_origin_rejected room=%s", self.room_code)
-            await self.close(code=4403)
+            await self.close(code=CLOSED_FORBIDDEN)
             return
-        self._limiter = RateLimiter(OP_RATE_LIMIT)
 
+        self._limiter = RateLimiter(RATE_LIMIT_OPS)
         self.classroom, self.member = await self._load_membership()
-        if self.member is None:
-            await self.close(code=4401 if not getattr(self.user, "is_authenticated", False) and not self.scope.get("session") else 4403)
+        if self.member is None or self.classroom is None:
+            await self.close(code=CLOSED_UNAUTHENTICATED if not authenticated else CLOSED_FORBIDDEN)
             return
-        if self.member.in_waiting_room:
-            await self.close(code=4403)
+        if not self.member.is_active or self.member.in_waiting_room:
+            await self.close(code=CLOSED_FORBIDDEN)
+            return
+
+        snapshot = await self._load_snapshot(self.since)
+        if snapshot is None:
+            await self.close(code=CLOSED_FORBIDDEN)
             return
 
         self.member_group_name = member_group(self.room_code, self.member.id)
+        # Join before reading is re-sent so no operation can slip through the
+        # window between "snapshot taken" and "socket is listening"; the client
+        # de-duplicates by sequence number.
         await self.channel_layer.group_add(self.group_name, self.channel_name)
         await self.channel_layer.group_add(self.member_group_name, self.channel_name)
         await self.accept()
 
-        # Snapshot first, then live operations.  ``seq`` lets the client
-        # discard anything already contained in the snapshot.
-        history, seq = await self._load_history()
-        self.last_seq = seq
-        await self.send_json({"type": "whiteboard_history", "events": history, "seq": seq})
+        self.last_seq = snapshot["seq"]
+        self.can_draw = snapshot["you"]["can_draw"]
+        await self.send_json(snapshot)
+        await self._broadcast_presence("join")
 
     async def disconnect(self, code: int) -> None:
-        if getattr(self, "member", None) is not None:
+        if self.member is None:
+            return
+        try:
             await self.channel_layer.group_discard(self.group_name, self.channel_name)
             await self.channel_layer.group_discard(
-                getattr(self, "member_group_name", member_group(self.room_code, self.member.id)),
+                self.member_group_name or member_group(self.room_code, self.member.id),
                 self.channel_name,
             )
+        finally:
+            await self._broadcast_presence("leave")
 
+    # ------------------------------------------------------------------ #
+    # Frame handling
+    # ------------------------------------------------------------------ #
     async def receive_json(self, content: dict, **kwargs) -> None:
-        if content.get("action") != "op":
+        action = content.get("action")
+        if action == "ping":
+            await self.send_json({"type": "pong", "t": content.get("t")})
             return
-        if not await self._member_active_now():
-            await self.close(code=4403)
+        if action == "presence":
+            await self._refresh_permissions()
+            await self._broadcast_presence("update")
+            return
+        if action == "resync":
+            await self._handle_resync(content)
+            return
+        if action == "snapshot":
+            await self._handle_snapshot(content)
+            return
+        if action in {"op", "ops"}:
+            await self._handle_ops(content)
+            return
+        # Unknown actions are ignored on purpose: a newer client may speak a
+        # dialect this build does not know yet.
+
+    async def _handle_resync(self, content: dict) -> None:
+        if not self._limiter.allow():
+            await self._error("تعداد درخواست‌ها زیاد است؛ کمی صبر کنید.", "rate-limited")
+            return
+        snapshot = await self._load_snapshot(self._as_int(content.get("since"), 0))
+        if snapshot is None:
+            await self.close(code=CLOSED_FORBIDDEN)
+            return
+        self.last_seq = snapshot["seq"]
+        self.can_draw = snapshot["you"]["can_draw"]
+        await self.send_json(snapshot)
+
+    async def _handle_snapshot(self, content: dict) -> None:
+        if not self._limiter.allow(BATCH_COST_FREE):
+            await self._error("تعداد درخواست‌ها زیاد است؛ کمی صبر کنید.", "rate-limited")
+            return
+        seq = self._as_int(content.get("seq"), -1)
+        reason = await self._store_snapshot(seq, content.get("ops"))
+        if reason is None:
+            await self.send_json({"type": "snapshot_stored", "seq": seq})
+            return
+        if reason == "forbidden":
+            await self.close(code=CLOSED_FORBIDDEN)
+            return
+        logger.info("whiteboard_snapshot_rejected room=%s reason=%s", self.room_code, reason)
+        await self.send_json({"type": "snapshot_rejected", "seq": seq, "reason": reason})
+
+    async def _handle_ops(self, content: dict) -> None:
+        if content.get("action") == "op":
+            ops = [content.get("op")]
+        else:
+            ops = content.get("ops")
+        if not isinstance(ops, list) or not ops:
+            await self._error("عملیات تخته نامعتبر است.", "invalid-op")
+            return
+        if len(ops) > MAX_BATCH_OPS:
+            await self._error("تعداد عملیات یک پیام بیش از حد مجاز است.", "batch-too-large")
             return
 
-        limiter = getattr(self, "_limiter", None)
-        if limiter is not None and not limiter.allow():
+        cost = max(1, len(ops) // BATCH_COST_FREE)
+        if not self._limiter.allow(cost):
             logger.info("whiteboard_rate_limited room=%s", self.room_code)
+            await self._error("تعداد عملیات بیش از حد مجاز است؛ کمی صبر کنید.", "rate-limited")
             return
 
-        op = content.get("op")
-        if not self._valid_op(op):
-            await self.send_json({"type": "error", "message": "عملیات تخته نامعتبر است."})
+        ids = [op.get("id") for op in ops if isinstance(op, dict) and op.get("id")]
+        for op in ops:
+            live = isinstance(op, dict) and bool(op.get("live"))
+            reason = validate_op(op, live=live)
+            if reason:
+                logger.info("whiteboard_op_rejected room=%s reason=%s", self.room_code, reason)
+                await self._error("عملیات تخته نامعتبر است.", "invalid-op", ids)
+                return
+
+        if not await self._member_active_now():
+            await self.close(code=CLOSED_FORBIDDEN)
             return
 
-        # Permission re-checked live — settings can change mid-session.
+        # Classify by position: two identical operations in one batch must
+        # never be able to drop each other (``op not in list`` compares values).
+        is_ephemeral = [
+            op.get("type") in EPHEMERAL_OP_TYPES or bool(op.get("live"))
+            for op in ops
+        ]
+        ephemeral = [op for op, flag in zip(ops, is_ephemeral) if flag]
+        persistent = [op for op, flag in zip(ops, is_ephemeral) if not flag]
+
         if not await self._can_draw_now():
-            await self.send_json({"type": "error", "message": "شما اجازهٔ استفاده از تخته را ندارید."})
+            self.can_draw = False
+            await self._error("شما اجازهٔ استفاده از تخته را ندارید.", "forbidden", ids)
             return
 
-        if op.get("type") in EPHEMERAL_OP_TYPES:
-            # Fire-and-forget relay: no DB write, no seq movement.
-            await self.channel_layer.group_send(
-                self.group_name,
-                {
-                    "type": "whiteboard.operation",
-                    "op": {**op, "page": self._normalise_page(op)},
-                    "seq": getattr(self, "last_seq", 0),
-                    "ephemeral": True,
-                    "actor_identity": self.member.identity,
-                    "actor_name": self.member.participant_name,
-                },
+        for op in ephemeral:
+            await self._relay_ephemeral(op)
+
+        if not persistent:
+            return
+
+        try:
+            result = await self._persist(persistent)
+        except services.OpRejected as exc:
+            logger.info("whiteboard_op_rejected room=%s reason=%s", self.room_code, exc.reason)
+            await self._error("عملیات تخته نامعتبر است.", exc.reason, ids)
+            return
+        if result is None:
+            self.can_draw = False
+            await self._error("شما اجازهٔ استفاده از تخته را ندارید.", "forbidden", ids)
+            return
+
+        stored, board_state = result
+        for op, seq, event_id in stored:
+            self.last_seq = max(self.last_seq, seq)
+            await self._broadcast(
+                op,
+                seq=seq,
+                event_id=event_id,
+                board=self._meta_for(op, board_state),
             )
-            return
 
-        persisted = await self._persist(op)
-        if persisted is None:
-            await self.send_json({"type": "error", "message": "شما اجازهٔ استفاده از تخته را ندارید."})
+    # ------------------------------------------------------------------ #
+    # Group handlers
+    # ------------------------------------------------------------------ #
+    async def whiteboard_operation(self, event: dict) -> None:
+        payload = {
+            "type": "whiteboard_operation",
+            "op": event["op"],
+            "seq": event.get("seq", 0),
+            "event_id": event.get("event_id"),
+            "ephemeral": bool(event.get("ephemeral")),
+            "live": bool(event.get("live")),
+            "actor_identity": event.get("actor_identity", ""),
+            "actor_name": event.get("actor_name", ""),
+        }
+        if event.get("board"):
+            payload["board"] = event["board"]
+        # The snapshot/operation race on (re)connect is resolved by sequence:
+        # everything at or below the watermark is already in the client.
+        if not payload["ephemeral"]:
+            if payload["seq"] <= self.last_seq:
+                return
+            self.last_seq = payload["seq"]
+        await self.send_json(payload)
+
+    async def board_presence(self, event: dict) -> None:
+        participant = event.get("participant") or {}
+        if participant.get("identity") == getattr(self.member, "identity", None):
             return
-        op, seq = persisted
-        self.last_seq = seq
+        await self.send_json(
+            {
+                "type": "presence",
+                "action": event.get("action", "update"),
+                "participant": participant,
+            }
+        )
+
+    async def classroom_notification(self, event: dict) -> None:
+        payload = event["payload"]
+        await self.send_json(payload)
+        if payload.get("event") in {
+            "removed",
+            "left",
+            "membership_revoked",
+            "classroom_deactivated",
+        }:
+            await self.close(code=CLOSED_FORBIDDEN)
+
+    # ------------------------------------------------------------------ #
+    # Outgoing helpers
+    # ------------------------------------------------------------------ #
+    async def _broadcast(self, op: dict, *, seq: int, event_id: int | None = None, board=None) -> None:
         await self.channel_layer.group_send(
             self.group_name,
             {
                 "type": "whiteboard.operation",
                 "op": op,
                 "seq": seq,
+                "event_id": event_id,
+                "ephemeral": False,
+                "live": False,
+                "actor_identity": self.member.identity,
+                "actor_name": self.member.participant_name,
+                "board": board,
+            },
+        )
+
+    async def _relay_ephemeral(self, op: dict) -> None:
+        live = bool(op.get("live"))
+        await self.channel_layer.group_send(
+            self.group_name,
+            {
+                "type": "whiteboard.operation",
+                "op": op,
+                "seq": self.last_seq,
+                "event_id": None,
+                "ephemeral": True,
+                "live": live,
                 "actor_identity": self.member.identity,
                 "actor_name": self.member.participant_name,
             },
         )
 
-    # -- group handler -------------------------------------------------------
-    async def whiteboard_operation(self, event: dict) -> None:
-        # Guard against the snapshot/operation race on (re)connect.
-        # Ephemeral ops (laser) carry no seq and skip the guard.
-        if not event.get("ephemeral"):
-            if event.get("seq", 0) <= getattr(self, "last_seq", 0):
-                return
-            self.last_seq = event["seq"]
-        await self.send_json({
-            "type": "whiteboard_operation",
-            "op": event["op"],
-            "seq": event["seq"],
-            "ephemeral": bool(event.get("ephemeral")),
-            "actor_identity": event.get("actor_identity", ""),
-            "actor_name": event.get("actor_name", ""),
-        })
+    async def _broadcast_presence(self, action: str) -> None:
+        await self.channel_layer.group_send(
+            self.group_name,
+            {
+                "type": "board.presence",
+                "action": action,
+                "participant": {
+                    "identity": self.member.identity,
+                    "member_id": self.member.id,
+                    "name": self.member.participant_name,
+                    "can_draw": bool(self.can_draw),
+                    "role": self.member.role,
+                    "is_guest": bool(self.member.is_guest),
+                },
+            },
+        )
 
-    async def classroom_notification(self, event: dict) -> None:
-        payload = event["payload"]
+    async def _error(self, message: str, code: str = "", ops: list | None = None) -> None:
+        payload = {"type": "error", "message": message}
+        if code:
+            payload["code"] = code
+        if ops:
+            payload["ops"] = [op for op in ops if op]
         await self.send_json(payload)
-        if payload.get("event") in {"removed", "left", "membership_revoked", "classroom_deactivated"}:
-            await self.close(code=4403)
-
-    # -- validation -------------------------------------------------------------
-    @staticmethod
-    def _normalise_page(op) -> int:
-        """Clamp a validated page number (1..999, default 1)."""
-        page = op.get("page", 1)
-        return max(1, min(999, page)) if isinstance(page, int) and not isinstance(page, bool) else 1
 
     @staticmethod
-    def _finite_number(value, *, normalized: bool = False) -> bool:
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            return False
-        limit = 2 if normalized else 1_000_000
-        if isinstance(value, int):
-            return -limit <= value <= limit
-        return math.isfinite(value) and -limit <= value <= limit
+    def _meta_for(op: dict, board_state: dict) -> dict:
+        if op.get("type") in {"page_add", "page_dup", "page_remove", "page_setup"}:
+            return board_state
+        return {"page_count": board_state["page_count"]}
 
-    @staticmethod
-    def _valid_color(value) -> bool:
-        return isinstance(value, str) and re.fullmatch(r"#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})", value) is not None
-
-    @classmethod
-    def _valid_op(cls, op) -> bool:
-        if not isinstance(op, dict) or not isinstance(op.get("type"), str) or op["type"] not in VALID_OP_TYPES:
-            return False
-        try:
-            encoded = json.dumps(op, allow_nan=False, separators=(",", ":")).encode("utf-8")
-            if len(encoded) > MAX_OP_BYTES:
-                return False
-        except (TypeError, ValueError, UnicodeError, RecursionError):
-            return False
-
-        if "id" in op and (
-            not isinstance(op["id"], str) or not op["id"] or len(op["id"]) > 128
-        ):
-            return False
-        if "page" in op and (
-            isinstance(op["page"], bool)
-            or not isinstance(op["page"], int)
-            or not 1 <= op["page"] <= 999
-        ):
-            return False
-        if "file_id" in op and (
-            isinstance(op["file_id"], bool)
-            or not isinstance(op["file_id"], int)
-            or op["file_id"] <= 0
-        ):
-            return False
-
-        normalized = op.get("norm", False)
-        if type(normalized) is bool:
-            normalized = normalized
-        elif type(normalized) is int and normalized in (0, 1):
-            normalized = bool(normalized)
-        else:
-            return False
-
-        if "color" in op and op["color"] is not None and not cls._valid_color(op["color"]):
-            return False
-        if "width" in op and (
-            not cls._finite_number(op["width"])
-            or not 0 < op["width"] <= 512
-        ):
-            return False
-
-        op_type = op["type"]
-        if op_type == "draw":
-            tool = op.get("tool")
-            if not isinstance(tool, str) or tool not in VALID_TOOLS:
-                return False
-            if tool in {"rectangle", "circle"}:
-                if not cls._finite_number(op.get("left"), normalized=normalized):
-                    return False
-                if not cls._finite_number(op.get("top"), normalized=normalized):
-                    return False
-                if tool == "rectangle":
-                    w = op.get("w", op.get("width"))
-                    h = op.get("h", op.get("height"))
-                    if not cls._finite_number(w, normalized=normalized) or w < 0:
-                        return False
-                    if not cls._finite_number(h, normalized=normalized) or h < 0:
-                        return False
-                else:
-                    rx, ry = op.get("rx"), op.get("ry")
-                    if not cls._finite_number(rx, normalized=normalized) or rx < 0:
-                        return False
-                    if not cls._finite_number(ry, normalized=normalized) or ry < 0:
-                        return False
-            else:
-                points = op.get("points")
-                if not isinstance(points, list) or not 2 <= len(points) <= 4096:
-                    return False
-                for point in points:
-                    if (
-                        not isinstance(point, (list, tuple)) or len(point) != 2
-                        or not all(cls._finite_number(v, normalized=normalized) for v in point)
-                    ):
-                        return False
-
-        elif op_type == "text":
-            text = op.get("text")
-            if not isinstance(text, str) or len(text) > 500:
-                return False
-            if not cls._finite_number(op.get("x"), normalized=normalized):
-                return False
-            if not cls._finite_number(op.get("y"), normalized=normalized):
-                return False
-            if "size" in op and (
-                not cls._finite_number(op["size"])
-                or not 1 <= op["size"] <= 1000
-            ):
-                return False
-
-        elif op_type == "remove":
-            if not isinstance(op.get("id"), str) or not op["id"]:
-                return False
-
-        elif op_type == "page_add":
-            page = op.get("page")
-            if isinstance(page, bool) or not isinstance(page, int) or not 2 <= page <= 999:
-                return False
-
-        elif op_type == "page_setup":
-            color, grid = op.get("color"), op.get("grid")
-            if color is None and grid is None:
-                return False
-            if color is not None and not cls._valid_color(color):
-                return False
-            if grid is not None and (not isinstance(grid, str) or grid not in VALID_GRIDS):
-                return False
-
-        elif op_type == "page_go":
-            page = op.get("page")
-            if isinstance(page, bool) or not isinstance(page, int) or not 1 <= page <= 999:
-                return False
-
-        elif op_type == "laser":
-            if not cls._finite_number(op.get("x"), normalized=normalized):
-                return False
-            if not cls._finite_number(op.get("y"), normalized=normalized):
-                return False
-
-        return True
-
-    # -- DB helpers ---------------------------------------------------------------
+    # ------------------------------------------------------------------ #
+    # Database helpers (all synchronous work lives in whiteboard.services)
+    # ------------------------------------------------------------------ #
     @database_sync_to_async
     def _load_membership(self):
         return resolve_scope_member(self.scope, self.room_code)
 
     @database_sync_to_async
+    def _load_snapshot(self, since: int) -> dict | None:
+        member = services.active_member(self.member.id)
+        if member is None or member.classroom_id != getattr(self.classroom, "id", None):
+            return None
+        perms = services.board_permissions(member)
+        payload = services.board_snapshot(member.classroom, since=since, member=member)
+        payload["you"] = {
+            "identity": member.identity,
+            "member_id": member.id,
+            "name": member.participant_name,
+            "role": member.role,
+            "is_guest": bool(member.is_guest),
+            "can_draw": perms["can_draw"],
+            "can_present": perms["can_present"],
+        }
+        payload["limits"] = {
+            "max_op_bytes": MAX_OP_BYTES,
+            "max_points": MAX_POINTS,
+            "batch": MAX_BATCH_OPS,
+        }
+        return payload
+
+    @database_sync_to_async
     def _member_active_now(self) -> bool:
-        return ClassroomMember.objects.filter(
-            id=self.member.id, is_active=True, in_waiting_room=False,
-            classroom__is_active=True,
-        ).exists()
+        return services.active_member(self.member.id) is not None
 
     @database_sync_to_async
     def _can_draw_now(self) -> bool:
-        # Single query: the member row + its classroom in one round trip.
-        member = (
-            ClassroomMember.objects.filter(
-                id=self.member.id, is_active=True, in_waiting_room=False,
-                classroom__is_active=True,
-            )
-            .select_related("classroom", "user")
-            .first()
-        )
+        member = services.active_member(self.member.id)
+        return bool(member and services.board_permissions(member)["can_draw"])
+
+    async def _refresh_permissions(self) -> None:
+        self.can_draw = await self._can_draw_now()
+
+    @database_sync_to_async
+    def _persist(self, ops: list[dict]):
+        member = services.active_member(self.member.id)
         if member is None:
-            return False
-        return effective_permissions(member, member.classroom)["can_use_whiteboard"]
+            return None
+        return services.persist_ops(member, ops)
 
     @database_sync_to_async
-    def _load_history(self) -> tuple[list[dict], int]:
-        """Return replayable operations plus the sequence watermark."""
-        board, _ = Whiteboard.objects.get_or_create(classroom=self.classroom)
-        # Keep the newest tail, then restore chronological order for replay.
-        events = list(
-            board.events.select_related("actor").order_by("-id")[:HISTORY_LIMIT]
-        )[::-1]
-        history = [
-            {
-                "id": e.id,
-                "op": e.operation,
-                "actor_identity": e.actor_identity,
-                "actor_name": e.actor.name if e.actor else None,
-            }
-            for e in events
-        ]
-        seq = events[-1].id if events else 0
-        return history, seq
+    def _store_snapshot(self, seq: int, ops) -> str | None:
+        member = services.active_member(self.member.id)
+        if member is None:
+            return "forbidden"
+        return services.store_snapshot(member, seq, ops)
 
-    @database_sync_to_async
-    def _persist(self, op: dict) -> tuple[dict, int] | None:
-        # Re-check inside the persistence transaction as a permission grant
-        # can be revoked between the async preflight and this DB write.
-        with transaction.atomic():
-            member = (
-                ClassroomMember.objects.select_for_update(of=("self",))
-                .filter(
-                    id=self.member.id, is_active=True, in_waiting_room=False,
-                    classroom__is_active=True,
-                )
-                .select_related("classroom", "user")
-                .first()
-            )
-            if member is None or not effective_permissions(member, member.classroom)["can_use_whiteboard"]:
-                return None
+    # ------------------------------------------------------------------ #
+    # Query string helpers
+    # ------------------------------------------------------------------ #
+    def _query(self, key: str) -> str:
+        raw = (self.scope.get("query_string") or b"").decode("latin-1")
+        values = parse_qs(raw, keep_blank_values=False).get(key) or []
+        return values[0] if values else ""
 
-            board, _ = Whiteboard.objects.get_or_create(classroom=member.classroom)
-            page = self._normalise_page(op)
-            op = {**op, "page": page}
-            if op.get("type") == "clear":
-                # Compaction: a clear invalidates prior ops on THIS page and
-                # file scope only. Page markers remain replayable.
-                qs = board.events.filter(page=page)
-                if op.get("file_id"):
-                    qs = qs.filter(operation__file_id=op["file_id"])
-                else:
-                    qs = qs.filter(operation__file_id__isnull=True)
-                qs.exclude(operation__type__in=["page_add", "page_setup"]).delete()
-            event = WhiteboardEvent.objects.create(
-                whiteboard=board,
-                actor=member.user if member.user_id else None,
-                actor_identity=member.identity[:48],
-                operation=op,
-                page=page,
-            )
-            board.save(update_fields=["updated_at"])
-            op = dict(op)
-            op["event_id"] = event.id
-            return op, event.id
+    def _query_int(self, key: str) -> int:
+        return self._as_int(self._query(key), 0)
+
+    @staticmethod
+    def _as_int(value, default: int) -> int:
+        try:
+            if value is None:
+                return default
+            return int(value)
+        except (TypeError, ValueError):
+            return default

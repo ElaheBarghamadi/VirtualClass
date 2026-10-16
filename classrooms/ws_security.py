@@ -137,13 +137,15 @@ class RateLimiter:
         self.window = window
         self._stamps: deque[float] = deque()
 
-    def allow(self) -> bool:
+    def allow(self, cost: int = 1) -> bool:
+        """Consume ``cost`` slots; ``False`` when the window is exhausted."""
+        cost = max(1, int(cost))
         now = time.monotonic()
         stamps = self._stamps
         cutoff = now - self.window
         while stamps and stamps[0] < cutoff:
             stamps.popleft()
-        if len(stamps) >= self.limit:
+        if len(stamps) + cost > self.limit:
             return False
-        stamps.append(now)
+        stamps.extend([now] * cost)
         return True

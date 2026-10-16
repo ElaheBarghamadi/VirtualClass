@@ -324,21 +324,32 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
 .screen-header { gap: .6rem; flex-wrap: wrap; }
 
 /* ---------- whiteboard ---------- */
+/* Shared by the board and by presentation.js annotations: keep the
+   .wb-tool / .wb-action base rules unscoped (they are re-used in .pres-tools)
+   and put everything board-specific under #view-whiteboard. */
 .wb-toolbar {
     display: flex; align-items: center; gap: .3rem; flex-wrap: wrap;
     background: var(--room-surface); border: 1px solid var(--room-border);
     border-radius: var(--radius-sm); padding: .35rem .55rem;
+    position: relative; z-index: 12;
 }
 .wb-tool, .wb-action {
     background: transparent; border: 1px solid transparent; border-radius: var(--radius-sm);
     font-size: 1rem; padding: .28rem .45rem; cursor: pointer; color: var(--room-text);
-    min-width: 34px;
+    min-width: 34px; line-height: 1.2;
 }
 .wb-tool:hover, .wb-action:hover { background: var(--surface-2); }
 .wb-tool.active { background: var(--accent); color: var(--accent-contrast); }
+.wb-action.active { background: var(--accent); color: var(--accent-contrast); }
+.wb-tool:disabled, .wb-action:disabled { opacity: .4; cursor: default; }
+.wb-tool:disabled:hover, .wb-action:disabled:hover { background: transparent; }
 .wb-sep { width: 1px; height: 22px; background: var(--room-border); margin: 0 .25rem; }
 .wb-color input { width: 30px; height: 26px; border: none; background: transparent; cursor: pointer; padding: 0; }
-.wb-width input { width: 70px; accent-color: var(--accent); }
+.wb-width {
+    display: inline-flex; align-items: center; gap: .3rem;
+    padding-inline: .3rem; font-size: .72rem; color: var(--room-muted);
+}
+.wb-width input { width: 74px; accent-color: var(--accent); }
 .wb-pages { display: flex; align-items: center; gap: .2rem; }
 .wb-pages button {
     background: transparent; border: 1px solid var(--room-border); border-radius: var(--radius-sm);
@@ -347,25 +358,162 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
 .wb-pages button:disabled { opacity: .38; cursor: default; }
 .wb-pages button:not(:disabled):hover { background: var(--surface-2); }
 #wb-page-label { font-size: .8rem; white-space: nowrap; padding: 0 .25rem; color: var(--room-text); }
+
+#view-whiteboard { position: relative; }
+#view-whiteboard .wb-body { flex: 1; display: flex; gap: .5rem; min-height: 0; }
 .wb-canvas-wrap { flex: 1; min-height: 0; position: relative; }
-.wb-canvas-wrap canvas { border-radius: var(--radius); cursor: crosshair; touch-action: none; background: var(--surface); }
-.wb-action.active { background: var(--accent); color: var(--accent-contrast); }
-
-/* laser pointer dot (remote + local) */
-.laser-dot {
-    position: absolute; width: 14px; height: 14px; margin: -7px 0 0 -7px;
-    border-radius: 50%; pointer-events: none; z-index: 5;
-    background: radial-gradient(circle, #ff2d2d 0%, #ff2d2d 45%, rgba(255, 45, 45, .35) 70%, transparent 72%);
-    box-shadow: 0 0 10px 2px rgba(255, 45, 45, .55);
-    opacity: 0;
-}
-.laser-dot.pulse { animation: laser-fade .9s ease-out forwards; }
-@keyframes laser-fade {
-    0% { opacity: 1; transform: scale(1); }
-    70% { opacity: .9; transform: scale(1.05); }
-    100% { opacity: 0; transform: scale(.7); }
+.wb-canvas-wrap canvas {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    border-radius: var(--radius); cursor: crosshair; touch-action: none; background: var(--surface);
 }
 
+/* --- toolbar popovers (colour / sticky / page style / export) --- */
+#view-whiteboard .wb-popover {
+    position: absolute; top: 3.6rem; inset-inline-start: .75rem; z-index: 30;
+    display: flex; flex-direction: column; gap: .45rem;
+    padding: .6rem; min-width: 12rem; max-width: min(20rem, calc(100% - 1.5rem));
+    background: var(--room-surface); border: 1px solid var(--room-border);
+    border-radius: var(--radius-md); box-shadow: 0 12px 30px rgba(0, 0, 0, .18);
+}
+.wb-palette { display: grid; grid-template-columns: repeat(5, 1fr); gap: .35rem; }
+.wb-swatch {
+    width: 30px; height: 30px; border-radius: 50%; cursor: pointer;
+    border: 2px solid var(--room-border); padding: 0;
+}
+.wb-swatch.active, .wb-swatch[aria-pressed="true"] { outline: 2px solid var(--accent); outline-offset: 1px; }
+.wb-menu-item {
+    display: block; width: 100%; text-align: start; cursor: pointer;
+    background: transparent; border: 1px solid transparent; border-radius: var(--radius-sm);
+    color: var(--room-text); font-size: .84rem; padding: .45rem .55rem;
+}
+.wb-menu-item:hover { background: var(--surface-2); }
+.wb-menu-item:disabled { opacity: .45; cursor: default; }
+.wb-field { display: flex; align-items: center; justify-content: space-between; gap: .5rem; font-size: .78rem; color: var(--room-muted); }
+.wb-field input[type="color"] { width: 34px; height: 26px; border: none; background: transparent; cursor: pointer; padding: 0; }
+.wb-field select {
+    background: var(--room-surface); color: var(--room-text); font-size: .78rem;
+    border: 1px solid var(--room-border); border-radius: var(--radius-sm); padding: .2rem .3rem;
+}
+
+/* --- pages drawer with live thumbnails --- */
+#view-whiteboard .wb-pages-panel {
+    width: 11.5rem; flex: 0 0 auto; display: flex; flex-direction: column; min-height: 0;
+    background: var(--room-surface); border: 1px solid var(--room-border);
+    border-radius: var(--radius-md); padding: .45rem;
+}
+.wb-panel-head {
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: .82rem; font-weight: 600; padding: .1rem .2rem .45rem;
+}
+.wb-x {
+    background: transparent; border: none; color: var(--room-muted); cursor: pointer;
+    font-size: .9rem; line-height: 1; padding: .15rem .3rem; border-radius: var(--radius-sm);
+}
+.wb-x:hover { background: var(--surface-2); }
+.wb-pages-list { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: .4rem; padding: .1rem; }
+.wb-page-item {
+    position: relative; cursor: pointer; border: 2px solid var(--room-border);
+    border-radius: var(--radius-sm); overflow: hidden; background: #fff;
+}
+.wb-page-item.active { border-color: var(--accent); }
+.wb-thumb { display: block; width: 100%; height: auto; }
+.wb-page-item span {
+    position: absolute; inset-block-end: 0; inset-inline-end: 0;
+    background: color-mix(in srgb, var(--room-surface) 85%, transparent);
+    font-size: .68rem; padding: 0 .3rem; color: var(--room-text);
+}
+.wb-panel-foot { display: flex; gap: .25rem; padding-top: .45rem; }
+.wb-panel-foot button {
+    flex: 1; cursor: pointer; font-size: .72rem; padding: .35rem .2rem;
+    background: transparent; border: 1px solid var(--room-border);
+    border-radius: var(--radius-sm); color: var(--room-text);
+}
+.wb-panel-foot button:not(:disabled):hover { background: var(--surface-2); }
+.wb-panel-foot button:disabled { opacity: .4; cursor: default; }
+
+/* --- selection toolbar (floats over the canvas) --- */
+#view-whiteboard .wb-selection-bar {
+    position: absolute; top: 3.6rem; inset-inline-end: .75rem; z-index: 25;
+    display: flex; align-items: center; gap: .2rem; padding: .3rem .45rem;
+    font-size: .75rem; color: var(--room-text);
+    background: var(--room-surface); border: 1px solid var(--room-border);
+    border-radius: var(--radius-md); box-shadow: 0 10px 24px rgba(0, 0, 0, .16);
+}
+#wb-selection-count { padding-inline: .25rem; white-space: nowrap; }
+#view-whiteboard .wb-selection-bar button {
+    background: transparent; border: 1px solid transparent; border-radius: var(--radius-sm);
+    color: var(--room-text); cursor: pointer; font-size: .95rem; min-width: 30px; padding: .2rem .3rem;
+}
+#view-whiteboard .wb-selection-bar button:not(:disabled):hover { background: var(--surface-2); }
+#view-whiteboard .wb-selection-bar button:disabled { opacity: .4; cursor: default; }
+
+/* --- status bar (connection + presence + zoom) --- */
+#view-whiteboard .wb-statusbar {
+    position: absolute; inset-block-end: .5rem; inset-inline-start: .5rem; z-index: 18;
+    display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;
+    max-width: calc(100% - 1rem); pointer-events: none;
+}
+#view-whiteboard .wb-statusbar > * {
+    pointer-events: auto; background: color-mix(in srgb, var(--room-surface) 88%, transparent);
+    border: 1px solid var(--room-border); border-radius: 999px;
+    padding: .2rem .55rem; font-size: .72rem; color: var(--room-muted);
+    backdrop-filter: blur(6px);
+}
+.wb-status { display: inline-flex; align-items: center; gap: .35rem; }
+.wb-status i { width: .5rem; height: .5rem; border-radius: 50%; background: var(--muted, #9ca3af); }
+.wb-status[data-state="online"] i { background: #16a34a; }
+.wb-status[data-state="connecting"] i, .wb-status[data-state="reconnecting"] i { background: #d97706; }
+.wb-status[data-state="offline"] i, .wb-status[data-state="closed"] i { background: #dc2626; }
+.wb-status-rtt { opacity: .75; }
+.wb-presence { display: inline-flex; align-items: center; gap: .3rem; max-width: 22rem; overflow: hidden; }
+.wb-presence-label { opacity: .8; }
+#wb-presence { display: inline-flex; align-items: center; gap: .3rem; overflow: hidden; }
+.wb-chip {
+    display: inline-flex; align-items: center; gap: .25rem; white-space: nowrap;
+    background: var(--surface-2); border-radius: 999px; padding: 0 .35rem; font-size: .68rem; color: var(--room-text);
+}
+.wb-chip i { width: .5rem; height: .5rem; border-radius: 50%; display: inline-block; }
+.wb-chip.viewer { opacity: .65; }
+.wb-presence-count { color: var(--room-text); }
+.wb-zoombar { display: inline-flex; align-items: center; gap: .15rem; }
+.wb-zoombar button {
+    background: transparent; border: none; color: var(--room-text); cursor: pointer;
+    font-size: .85rem; min-width: 24px; border-radius: var(--radius-sm); padding: .1rem .2rem;
+}
+.wb-zoombar button:hover { background: var(--surface-2); }
+#wb-zoom-value { min-width: 2.9rem; text-align: center; }
+
+/* --- inline text/sticky editor (a textarea laid over the canvas) --- */
+#view-whiteboard .wb-inline-editor {
+    position: absolute; z-index: 40; margin: 0;
+    background: var(--room-surface); color: var(--room-text);
+    border: 2px solid var(--accent); border-radius: var(--radius-sm);
+    box-shadow: 0 10px 26px rgba(0, 0, 0, .18);
+    padding: .35rem .45rem; line-height: 1.6; resize: none; overflow: hidden;
+    font-family: inherit;
+}
+#view-whiteboard .wb-inline-editor:focus { outline: none; }
+.wb-popover-toggle { position: relative; }
+.wb-popover-toggle[aria-expanded="true"] { background: var(--surface-2); }
+.wb-status-text, .wb-status-rtt { white-space: nowrap; }
+
+/* --- "someone is drawing elsewhere" nudge --- */
+#view-whiteboard .wb-activity {
+    position: absolute; inset-block-start: .5rem; inset-inline-start: 50%; transform: translateX(-50%);
+    z-index: 20; pointer-events: none;
+    background: color-mix(in srgb, var(--accent) 14%, var(--room-surface));
+    border: 1px solid var(--accent); border-radius: 999px;
+    color: var(--room-text); font-size: .75rem; padding: .25rem .7rem;
+}
+
+@media (max-width: 700px) {
+    /* keep the floating bits reachable instead of letting them overlap the toolbar */
+    #view-whiteboard .wb-popover,
+    #view-whiteboard .wb-selection-bar {
+        top: auto; inset-block-end: 3.2rem; inset-inline: .5rem; max-width: none;
+    }
+    #view-whiteboard .wb-pages-panel { width: 8.5rem; }
+}
 /* ---------- side panel ---------- */
 .room-side {
     display: flex; flex-direction: column;

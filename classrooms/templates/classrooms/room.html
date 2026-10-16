@@ -146,40 +146,118 @@
                         ✋ نوشتن روی تخته برای شما فعال نیست. از مالک کلاس بخواهید مجوز «تختهٔ اشتراکی» را برایتان روشن کند؛ برای دانش‌آموزان، گزینهٔ «تختهٔ دانش‌آموزان» در تنظیمات کلاس هم باید فعال باشد.
                     </div>
                     <div class="wb-error-hint hidden" id="wb-error-hint" role="alert"></div>
+
                     <div class="wb-toolbar" role="toolbar" aria-label="ابزار تخته سفید">
-                        <button type="button" class="wb-tool active" data-tool="pen" title="قلم" aria-label="قلم">✏️</button>
-                        <button type="button" class="wb-tool" data-tool="highlighter" title="هایلایت" aria-label="هایلایت">🖍️</button>
-                        <button type="button" class="wb-tool" data-tool="eraser" title="پاک‌کن" aria-label="پاک‌کن">🧽</button>
-                        <button type="button" class="wb-tool" data-tool="line" title="خط" aria-label="خط">📏</button>
-                        <button type="button" class="wb-tool" data-tool="arrow" title="فلش" aria-label="فلش">↗️</button>
-                        <button type="button" class="wb-tool" data-tool="rectangle" title="مستطیل" aria-label="مستطیل">▭</button>
-                        <button type="button" class="wb-tool" data-tool="circle" title="دایره" aria-label="دایره">◯</button>
-                        <button type="button" class="wb-tool" data-tool="text" title="متن" aria-label="متن">🔤</button>
-                        <button type="button" class="wb-tool" data-tool="laser" title="نشانگر لیزری" aria-label="نشانگر لیزری">🔴</button>
-                        <span class="wb-sep"></span>
-                        <button type="button" class="wb-action" data-action="undo" title="بازگشت" aria-label="بازگشت">↩️</button>
-                        <button type="button" class="wb-action" data-action="redo" title="جلو" aria-label="جلو">↪️</button>
-                        <button type="button" class="wb-action" data-action="clear" title="پاک کردن همه" aria-label="پاک کردن همه">🗑️</button>
-                        <span class="wb-sep"></span>
+                        <button type="button" class="wb-tool active" data-tool="pen" title="قلم (P)" aria-label="قلم" aria-pressed="true">✏️</button>
+                        <button type="button" class="wb-tool" data-tool="highlighter" title="هایلایت (H)" aria-label="هایلایت" aria-pressed="false">🖍️</button>
+                        <button type="button" class="wb-tool" data-tool="eraser" title="پاک‌کن (E)" aria-label="پاک‌کن و حذف شیء" aria-pressed="false">🧽</button>
+                        <button type="button" class="wb-tool" data-tool="select" title="انتخاب و جابه‌جایی (V)" aria-label="انتخاب" aria-pressed="false">🖱️</button>
+                        <span class="wb-sep" aria-hidden="true"></span>
+                        <button type="button" class="wb-tool" data-tool="line" title="خط (L)" aria-label="خط" aria-pressed="false">📏</button>
+                        <button type="button" class="wb-tool" data-tool="arrow" title="فلش (A)" aria-label="فلش" aria-pressed="false">↗️</button>
+                        <button type="button" class="wb-tool" data-tool="rectangle" title="مستطیل (R)" aria-label="مستطیل" aria-pressed="false">▭</button>
+                        <button type="button" class="wb-tool" data-tool="ellipse" title="بیضی (O)" aria-label="بیضی" aria-pressed="false">◯</button>
+                        <button type="button" class="wb-tool" data-tool="triangle" title="مثلث" aria-label="مثلث" aria-pressed="false">△</button>
+                        <button type="button" class="wb-tool" data-tool="diamond" title="لوزی" aria-label="لوزی" aria-pressed="false">◇</button>
+                        <button type="button" class="wb-tool" data-tool="star" title="ستاره" aria-label="ستاره" aria-pressed="false">☆</button>
+                        <span class="wb-sep" aria-hidden="true"></span>
+                        <button type="button" class="wb-tool" data-tool="text" title="متن (T)" aria-label="متن" aria-pressed="false">🔤</button>
+                        <button type="button" class="wb-tool" data-tool="sticky" data-popover="sticky" title="یادداشت چسبان (N)" aria-label="یادداشت چسبان" aria-pressed="false">🗒️</button>
+                        <button type="button" class="wb-tool" data-tool="laser" title="نشانگر لیزری" aria-label="نشانگر لیزری" aria-pressed="false">🔴</button>
+                        <button type="button" class="wb-tool" data-tool="pan" title="جابه‌جایی بوم (نگه‌داشتن فاصله + درگ)" aria-label="جابه‌جایی بوم" aria-pressed="false">✋</button>
+                        <span class="wb-sep" aria-hidden="true"></span>
+                        <button type="button" class="wb-action" data-action="undo" title="بازگشت (Ctrl+Z)" aria-label="بازگشت">↩️</button>
+                        <button type="button" class="wb-action" data-action="redo" title="جلو (Ctrl+Shift+Z)" aria-label="جلو">↪️</button>
+                        <button type="button" class="wb-action" data-action="clear" title="پاک کردن نوشته‌های این صفحه" aria-label="پاک کردن این صفحه">🗑️</button>
+                        <span class="wb-sep" aria-hidden="true"></span>
                         <div class="wb-pages" role="group" aria-label="صفحه‌های تخته">
-                            <button type="button" id="wb-prev" title="صفحهٔ قبل" aria-label="صفحهٔ قبل" disabled>‹</button>
+                            <button type="button" id="wb-prev" title="صفحهٔ قبل (Alt+←)" aria-label="صفحهٔ قبل" disabled>‹</button>
                             <span id="wb-page-label" aria-live="polite">صفحهٔ ۱ از ۱</span>
-                            <button type="button" id="wb-next" title="صفحهٔ بعد" aria-label="صفحهٔ بعد" disabled>›</button>
+                            <button type="button" id="wb-next" title="صفحهٔ بعد (Alt+→)" aria-label="صفحهٔ بعد" disabled>›</button>
                             <button type="button" id="wb-new-page" class="wb-action" title="صفحهٔ جدید" aria-label="صفحهٔ جدید">＋</button>
+                            <button type="button" id="wb-pages-toggle" class="wb-action" title="نمایش صفحه‌ها" aria-label="نمایش صفحه‌ها" aria-pressed="false">▤</button>
                         </div>
-                        <span class="wb-sep"></span>
+                        <span class="wb-sep" aria-hidden="true"></span>
+                        <button type="button" class="wb-action wb-popover-toggle" data-popover="color" title="رنگ قلم" aria-label="رنگ قلم" aria-expanded="false">🎨</button>
+                        <label class="wb-width" title="ضخامت قلم"><input type="range" id="wb-width" min="1" max="24" value="4" aria-label="ضخامت قلم"><span id="wb-width-value">۴</span></label>
+                        <button type="button" class="wb-action wb-popover-toggle" data-popover="page" title="پس‌زمینهٔ صفحه" aria-label="پس‌زمینهٔ صفحه" aria-expanded="false">▦</button>
+                        <span class="wb-sep" aria-hidden="true"></span>
                         <button type="button" id="wb-save" class="wb-action" title="ذخیرهٔ این صفحه (PNG)" aria-label="ذخیرهٔ این صفحه">💾</button>
+                        <button type="button" class="wb-action wb-popover-toggle" data-popover="export" title="خروجی گرفتن" aria-label="خروجی" aria-expanded="false">📤</button>
+                        <button type="button" id="wb-follow" class="wb-action active" title="همراهی با صفحهٔ ارائه‌دهنده" aria-label="همراهی با ارائه‌دهنده" aria-pressed="true">🧭</button>
+                        <button type="button" id="wb-help" class="wb-action" title="کلیدهای میان‌بر" aria-label="راهنما">❓</button>
                         <button type="button" class="wb-action" data-action="fullscreen-stage" title="تمام‌صفحه" aria-label="تمام‌صفحه">⛶</button>
-                        <span class="wb-sep"></span>
-                        <label class="wb-color" title="رنگ زمینهٔ صفحه"><input type="color" id="wb-bg" value="#ffffff" aria-label="رنگ زمینهٔ صفحه"></label>
-                        <button type="button" class="wb-action" id="wb-grid" title="پس‌زمینهٔ شطرنجی" aria-label="پس‌زمینهٔ شطرنجی" aria-pressed="false">▦</button>
-                        <span class="wb-sep"></span>
-                        <label class="wb-color"><input type="color" id="wb-color" value="#2563eb" aria-label="رنگ قلم"></label>
-                        <label class="wb-width"><input type="range" id="wb-width" min="1" max="24" value="3" aria-label="ضخامت قلم"></label>
                     </div>
-                    <div class="wb-canvas-wrap"><canvas id="whiteboard-canvas" aria-label="تخته سفید"></canvas></div>
+
+                    <div class="wb-popover hidden" id="wb-popover-color" role="dialog" aria-label="رنگ قلم">
+                        <div class="wb-palette" id="wb-palette"></div>
+                        <label class="wb-field">رنگ دلخواه<input type="color" id="wb-color" value="#2563eb"></label>
+                    </div>
+                    <div class="wb-popover hidden" id="wb-popover-sticky" role="dialog" aria-label="رنگ یادداشت">
+                        <div class="wb-palette" id="wb-sticky-palette"></div>
+                    </div>
+                    <div class="wb-popover hidden" id="wb-popover-page" role="dialog" aria-label="پس‌زمینهٔ صفحه">
+                        <label class="wb-field">رنگ زمینه<input type="color" id="wb-page-bg" value="#ffffff"></label>
+                        <label class="wb-field">قالب زمینه
+                            <select id="wb-page-grid">
+                                <option value="none">ساده</option>
+                                <option value="grid">شطرنجی</option>
+                                <option value="dots">نقطه‌ای</option>
+                                <option value="lines">خط‌دار</option>
+                                <option value="graph">میلی‌متری</option>
+                            </select>
+                        </label>
+                        <button type="button" class="wb-menu-item" id="wb-grid">↻ چرخش قالب زمینه</button>
+                    </div>
+                    <div class="wb-popover hidden" id="wb-popover-export" role="dialog" aria-label="خروجی">
+                        <button type="button" class="wb-menu-item" id="wb-export-all">🖼 همهٔ صفحه‌ها (PNG)</button>
+                        <button type="button" class="wb-menu-item" id="wb-export-pdf">🖨 چاپ یا PDF همهٔ صفحه‌ها</button>
+                    </div>
+
+                    <div class="wb-selection-bar hidden" id="wb-selection-bar" role="toolbar" aria-label="ابزار انتخاب">
+                        <span id="wb-selection-count"></span>
+                        <button type="button" id="wb-layers-front" title="بیاور روی همه">⤒</button>
+                        <button type="button" id="wb-layers-forward" title="یک لایه جلوتر">↑</button>
+                        <button type="button" id="wb-layers-backward" title="یک لایه عقب‌تر">↓</button>
+                        <button type="button" id="wb-layers-back" title="ببر زیر همه">⤓</button>
+                        <button type="button" id="wb-duplicate-selection" title="تکثیر (Ctrl+D)">⧉</button>
+                        <button type="button" id="wb-delete-selection" title="حذف (Delete)">🗑️</button>
+                    </div>
+
+                    <div class="wb-body">
+                        <aside class="wb-pages-panel hidden" id="wb-pages-panel" aria-label="صفحه‌های تخته">
+                            <header class="wb-panel-head">
+                                <span>صفحه‌ها</span>
+                                <button type="button" id="wb-pages-close" class="wb-x" aria-label="بستن پنل">✕</button>
+                            </header>
+                            <div class="wb-pages-list" id="wb-pages-list"></div>
+                            <footer class="wb-panel-foot">
+                                <button type="button" id="wb-page-add">＋ صفحه</button>
+                                <button type="button" id="wb-page-dup">⧉ تکثیر</button>
+                                <button type="button" id="wb-page-remove">🗑 حذف</button>
+                            </footer>
+                        </aside>
+                        <div class="wb-canvas-wrap" id="wb-canvas-wrap">
+                            <canvas id="whiteboard-canvas" aria-label="تخته سفید"></canvas>
+                            <div class="wb-activity hidden" id="wb-activity" role="status"></div>
+                            <div class="wb-statusbar">
+                                <span class="wb-status" id="wb-status" data-state="connecting">
+                                    <i aria-hidden="true"></i><span class="wb-status-text">در حال اتصال…</span><span class="wb-status-rtt"></span>
+                                </span>
+                                <span class="wb-presence">
+                                    <span class="wb-presence-label">حاضر:</span><span id="wb-presence"></span><span class="wb-presence-count" id="wb-presence-count">۱</span>
+                                </span>
+                                <span class="wb-zoombar" role="group" aria-label="بزرگ‌نمایی">
+                                    <button type="button" id="wb-zoom-out" aria-label="کوچک‌نمایی" title="کوچک‌نمایی">−</button>
+                                    <span id="wb-zoom-value">۱۰۰٪</span>
+                                    <button type="button" id="wb-zoom-in" aria-label="بزرگ‌نمایی" title="بزرگ‌نمایی">+</button>
+                                    <button type="button" id="wb-zoom-fit" aria-label="تنظیم اندازهٔ صفحه" title="تنظیم اندازه">⤢</button>
+                                    <button type="button" id="wb-zoom-reset" aria-label="بازنشانی نمای تخته" title="بازنشانی نما">⟲</button>
+                                </span>
+                            </div>
+                        </div>
+                    </div>
                 </div>
-            </div>
         </main>
 
         <aside class="room-side" id="room-side" aria-label="پنل کناری">

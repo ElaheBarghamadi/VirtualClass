@@ -1,18 +1,23 @@
-"""WebSocket tests for the collaborative whiteboard + chat moderation.
+"""Tests for the collaborative whiteboard.
 
-Consumers run through their real ASGI routing with the authenticated
-user injected into the scope the way ``AuthMiddlewareStack`` would.
+Three layers are covered:
+
+* ``whiteboard.protocol`` — pure operation validation (no database);
+* ``whiteboard.services`` — ordering, compaction, page renumbering, snapshots;
+* ``WhiteboardConsumer`` — the real ASGI websocket, including permissions,
+  ephemeral ops, batching, resync and presence.
 """
+from __future__ import annotations
+
 import asyncio
+import json
 
 from asgiref.sync import async_to_sync
 from channels.routing import URLRouter
 from channels.testing import WebsocketCommunicator
 from django.contrib.auth import get_user_model
-from django.test import TransactionTestCase
+from django.test import SimpleTestCase, TestCase, TransactionTestCase
 
-from chat.models import ChatMessage
-from chat.routing import websocket_urlpatterns as chat_routes
 from classrooms.permissions import Role
 from classrooms.services import (
     create_classroom,
@@ -20,13 +25,22 @@ from classrooms.services import (
     set_member_permission,
     set_member_role,
 )
+from classrooms.ws_security import RateLimiter
+from whiteboard import services
 from whiteboard.models import Whiteboard, WhiteboardEvent
+from whiteboard.protocol import (
+    MAX_ID_LEN,
+    normalise_op,
+    op_kind,
+    validate_op,
+)
 from whiteboard.routing import websocket_urlpatterns as wb_routes
 
 User = get_user_model()
 
 
 def app_with_user(user, routes):
+    """Websocket app with an authenticated scope (what AuthMiddlewareStack does)."""
     inner = URLRouter(routes)
 
     async def app(scope, receive, send):
@@ -37,635 +51,1059 @@ def app_with_user(user, routes):
     return app
 
 
-class WhiteboardConsumerTests(TransactionTestCase):
+def stroke(op_id="s1", **extra):
+    """A minimal valid normalised pen stroke (page fractions)."""
+    op = {
+        "type": "draw",
+        "tool": "pen",
+        "id": op_id,
+        "norm": 1,
+        "page": 1,
+        "points": [[0.1, 0.2], [0.2, 0.3], [0.3, 0.4]],
+        "color": "#2563eb",
+        "width": 4,
+    }
+    op.update(extra)
+    return op
+
+
+# --------------------------------------------------------------------------- #
+# 1. Protocol
+# --------------------------------------------------------------------------- #
+class OpValidationTests(SimpleTestCase):
+    def assert_reason(self, op, expected=None, **kwargs):
+        reason = validate_op(op, **kwargs)
+        if expected is None:
+            self.assertIsNone(reason, reason)
+        else:
+            self.assertEqual(reason, expected)
+        return reason
+
+    def test_accepts_every_documented_operation(self):
+        valid = [
+            stroke(),
+            {"type": "draw", "tool": "highlighter", "id": "h", "norm": 1, "points": [[0, 0], [1, 1]], "opacity": 0.4},
+            {"type": "draw", "tool": "eraser", "id": "e", "norm": 1, "points": [[0, 0], [1, 1]], "color": None},
+            {"type": "draw", "tool": "rectangle", "id": "r", "norm": 1, "points": [[0.1, 0.1], [0.5, 0.5]]},
+            {"type": "draw", "tool": "star", "id": "st", "norm": 1, "points": [[0.1, 0.1], [0.5, 0.5]]},
+            {"type": "text", "id": "t", "norm": 1, "x": 0.1, "y": 0.2, "text": "سلام", "size": 40, "color": "#111"},
+            {"type": "sticky", "id": "n", "norm": 1, "x": 0.1, "y": 0.1, "w": 0.2, "h": 0.2, "text": "یادداشت"},
+            {"type": "update", "id": "u", "norm": 1, "patch": {"x": 0.2, "text": "جدید", "color": "#000"}},
+            {"type": "remove", "id": "x", "norm": 1},
+            {"type": "reorder", "id": "z", "norm": 1, "move": "front"},
+            {"type": "page_add", "page": 2, "id": "pa"},
+            {"type": "page_add", "page": 2, "at": 1, "id": "pa2"},
+            {"type": "page_dup", "page": 1, "at": 2, "id": "pd"},
+            {"type": "page_remove", "page": 2, "id": "pr"},
+            {"type": "page_setup", "page": 1, "color": "#ffffff", "grid": "dots", "id": "ps"},
+            {"type": "page_go", "page": 3, "id": "pg"},
+            {"type": "laser", "norm": 1, "x": 0.5, "y": 0.5, "id": "l"},
+            {"type": "cursor", "norm": 1, "x": 0.1, "y": 0.1, "id": "c"},
+            # presentation annotations stay in page pixels (no norm flag)
+            {"type": "draw", "tool": "pen", "id": "f", "file_id": 7, "page": 2, "points": [[1.5, 2.5], [30, 40]], "width": 3},
+            {"type": "clear", "id": "c2", "file_id": 7, "page": 2},
+            # legacy geometry written by older clients must stay replayable
+            {"type": "draw", "tool": "rectangle", "id": "legacy", "left": 10, "top": 20, "w": 30, "h": 40, "width": 2},
+        ]
+        for op in valid:
+            with self.subTest(op=op.get("type"), id=op.get("id")):
+                self.assert_reason(op)
+
+    def test_creation_ops_may_omit_the_id_but_references_may_not(self):
+        # older clients (and the presentation annotator) may not name a stroke
+        self.assert_reason({"type": "draw", "tool": "pen", "file_id": 7, "page": 1, "points": [[1, 2], [2, 3]]})
+        for op in (
+            {"type": "remove", "norm": 1},
+            {"type": "update", "norm": 1, "patch": {"x": 0.1}},
+            {"type": "reorder", "norm": 1, "move": "front"},
+        ):
+            with self.subTest(op=op["type"]):
+                self.assert_reason(op, "id-required")
+
+    def test_rejects_unknown_or_malformed(self):
+        cases = [
+            ({"type": "nope"}, "unknown-type"),
+            ("not-an-object", "not-an-object"),
+            ({"type": "draw", "tool": "brush", "id": "1", "norm": 1, "points": [[0, 0], [1, 1]]}, "bad-tool"),
+            ({"type": "draw", "tool": "pen", "id": "1", "norm": 1, "points": [[0, 0]]}, "bad-points"),
+            ({"type": "draw", "tool": "pen", "id": "1", "norm": 1, "points": [[0, 0], [float("inf"), 1]]}, "not-serialisable"),
+            ({"type": "draw", "tool": "pen", "id": "1", "norm": 1, "points": [[0, 0], [9, 1]]}, "bad-points"),
+            (
+                {"type": "draw", "tool": "pen", "id": "1", "norm": 1, "points": [[0, 0], [1, 1]], "pressures": [5]},
+                "bad-pressures",
+            ),
+            ({"type": "draw", "tool": "eraser", "id": "1", "norm": 1, "points": [[0, 0], [1, 1]], "color": "#fff"}, "bad-eraser-color"),
+            ({"type": "text", "id": "1", "norm": 1, "x": 0.1, "y": 0.1, "text": "x" * 700}, "bad-text"),
+            ({"type": "text", "id": "1", "norm": 1, "x": 0.1, "y": 0.1, "text": "a", "align": "middle"}, "bad-align"),
+            ({"type": "sticky", "id": "1", "norm": 1, "x": 0.1, "y": 0.1, "w": -1, "h": 0.1}, "bad-sticky-w"),
+            ({"type": "update", "id": "1", "norm": 1, "patch": {}}, "bad-patch"),
+            ({"type": "update", "id": "1", "norm": 1, "patch": {"rotation": 30}}, "unknown-patch-key"),
+            ({"type": "update", "id": "1", "norm": 1, "patch": {"w": -0.2}}, "bad-patch-w"),
+            ({"type": "reorder", "id": "1", "norm": 1, "move": "middle"}, "bad-move"),
+            ({"type": "page_remove", "page": "2"}, "bad-page"),
+            ({"type": "page_setup", "page": 1}, "empty-page-setup"),
+            ({"type": "page_setup", "page": 1, "grid": "hex"}, "bad-grid"),
+            ({"type": "page_go", "page": True}, "bad-page"),
+            ({"type": "page_go", "page": 0}, "bad-page"),
+            ({"type": "laser", "norm": 1, "x": 0.5}, "bad-pointer"),
+            ({"type": "draw", "tool": "pen", "id": "1", "file_id": True, "points": [[0, 0], [1, 1]]}, "bad-file-id"),
+            ({"type": "draw", "tool": "pen", "id": "1", "color": "red", "norm": 1, "points": [[0, 0], [1, 1]]}, "bad-color"),
+            ({"type": "draw", "tool": "pen", "id": "1", "width": 0, "norm": 1, "points": [[0, 0], [1, 1]]}, "bad-width"),
+            (stroke(id="x" * (MAX_ID_LEN + 1)), "bad-id"),
+        ]
+        for op, expected in cases:
+            with self.subTest(expected=expected):
+                self.assert_reason(op, expected)
+
+    def test_oversized_operation_is_rejected(self):
+        huge = stroke(points=[[0.1234, 0.1234]] * 9000)
+        self.assertEqual(validate_op(huge), "too-large")
+        # just under the byte limit, still bounded by the point limit
+        self.assertEqual(validate_op(stroke(points=[[0.1, 0.1]] * 5000)), "bad-points")
+
+    def test_live_streaming_ops_are_freehand_only_and_bounded(self):
+        live = {"type": "draw", "tool": "pen", "id": "l1", "norm": 1, "live": True, "points": [[0, 0], [0.1, 0.1]]}
+        self.assert_reason(live, live=True)
+        shape_live = {"type": "draw", "tool": "rectangle", "id": "l2", "norm": 1, "live": True, "points": [[0, 0], [0.1, 0.1]]}
+        self.assert_reason(shape_live, "live-needs-freehand", live=True)
+        too_many = {"type": "draw", "tool": "pen", "id": "l3", "norm": 1, "points": [[0, 0]] * 2000}
+        self.assert_reason(too_many, "bad-points", live=True)
+
+    def test_normalise_op_rounds_and_strips_untrusted_fields(self):
+        out = normalise_op(
+            {
+                "type": "draw",
+                "tool": "pen",
+                "id": "a",
+                "norm": True,
+                "ts": 123456,
+                "live": True,
+                "points": [[0.123456789, 0.2], [0.3, 0.4]],
+                "width": 3.14159,
+                "page": "2",
+            }
+        )
+        self.assertEqual(out["page"], 1)  # bad page falls back to the default
+        self.assertEqual(out["norm"], 1)
+        self.assertNotIn("ts", out)
+        self.assertNotIn("live", out)
+        self.assertEqual(out["points"][0][0], 0.1235)
+        self.assertEqual(out["width"], 3.1416)
+
+    def test_op_kind_labels(self):
+        self.assertEqual(op_kind(stroke()), "draw:pen")
+        self.assertEqual(op_kind({"type": "clear"}), "clear")
+
+
+class RateLimiterCostTests(SimpleTestCase):
+    def test_cost_consumes_multiple_slots(self):
+        limiter = RateLimiter(5, window=60)
+        self.assertTrue(limiter.allow(3))
+        self.assertFalse(limiter.allow(3))
+        self.assertTrue(limiter.allow(2))
+        self.assertFalse(limiter.allow())
+
+
+# --------------------------------------------------------------------------- #
+# 3. Services
+# --------------------------------------------------------------------------- #
+class BoardServiceTestCase(TestCase):
+    def setUp(self):
+        self.owner = User.objects.create_user(username="srv_owner", password="x")
+        self.student = User.objects.create_user(username="srv_student", password="x")
+        self.classroom = create_classroom(self.owner, title="Board")
+        self.student_member = join_classroom(self.classroom, self.student)
+        self.owner_member = self.classroom.members.get(user=self.owner)
+
+    def member(self, user):
+        return self.classroom.members.get(user=user)
+
+
+# --------------------------------------------------------------------------- #
+# 2. Client contract (captured headless-client session)
+# --------------------------------------------------------------------------- #
+class ClientContractTests(BoardServiceTestCase):
+    """Replay of a real client session, captured from the headless JS harness.
+
+    The capture is the *verbatim* traffic of ``static/js/whiteboard.js`` driving
+    a full session (pen, highlighter, rectangle, eraser, undo/redo, text,
+    sticky, move, z-order, page add/dup/remove, page style, clear) against this
+    server.  It is a regression net for the two halves drifting apart: if the
+    client starts sending something the server refuses, the log stops growing
+    and this test fails.
+    """
+
+    SESSION = [
+            {"type": "cursor", "page": 1, "norm": 1, "tool": "pen", "x": 0.0748, "y": 0.1221},
+            {"type": "draw", "tool": "pen", "page": 1, "norm": 1, "color": "#dc2626", "width": 4, "points": [[0.0748, 0.1221], [0.1088, 0.1523], [0.1429, 0.1674], [0.1769, 0.1372], [0.2109, 0.1523], [0.2449, 0.1674], [0.2789, 0.1372], [0.3129, 0.1523], [0.3299, 0.1825]], "id": "u:7-mvaxplez-1"},
+            {"type": "cursor", "page": 1, "norm": 1, "tool": "highlighter", "x": 0.1599, "y": 0.4244},
+            {"type": "draw", "tool": "highlighter", "page": 1, "norm": 1, "color": "#dc2626", "width": 4, "points": [[0.1599, 0.4244], [0.415, 0.4546]], "opacity": 0.35, "id": "u:7-mvaxplf3-2"},
+            {"type": "cursor", "page": 1, "norm": 1, "tool": "rectangle", "x": 0.5, "y": 0.1221},
+            {"type": "draw", "tool": "rectangle", "page": 1, "norm": 1, "color": "#dc2626", "width": 4, "points": [[0.5, 0.1221], [0.6701, 0.3639]], "id": "u:7-mvaxplf5-3"},
+            {"type": "remove", "id": "u:7-mvaxplf5-3", "page": 1, "norm": 1},
+            {"type": "remove", "id": "u:7-mvaxplez-1", "page": 1, "norm": 1},
+            {"type": "remove", "id": "u:7-mvaxplf3-2", "page": 1, "norm": 1},
+            {"type": "cursor", "page": 1, "norm": 1, "tool": "pen", "x": 0.0323, "y": 0.5756},
+            {"type": "draw", "tool": "pen", "page": 1, "norm": 1, "color": "#dc2626", "width": 4, "points": [[0.0323, 0.5756], [0.1599, 0.6058]], "id": "u:7-mvaxplfd-4"},
+            {"type": "remove", "id": "u:7-mvaxplfd-4", "page": 1, "norm": 1},
+            {"type": "draw", "tool": "pen", "page": 1, "norm": 1, "color": "#dc2626", "width": 4, "points": [[0.0323, 0.5756], [0.1599, 0.6058]], "id": "u:7-mvaxplfd-4"},
+            {"type": "text", "id": "u:7-mvaxplho-5", "page": 1, "norm": 1, "x": 0.2449, "y": 0.7268, "text": "سلام تخته", "size": 30, "color": "#dc2626"},
+            {"type": "sticky", "id": "u:7-mvaxplil-6", "page": 1, "norm": 1, "x": 0.585, "y": 0.7268, "w": 0.2652, "h": 0.3571, "text": "", "size": 26, "color": "#fde68a"},
+            {"type": "update", "id": "u:7-mvaxplil-6", "page": 1, "norm": 1, "patch": {"text": "یادداشت"}},
+            {"type": "update", "id": "u:7-mvaxplfd-4", "page": 1, "norm": 1, "patch": {"points": [[0.0833, 0.6361], [0.2109, 0.6663]]}},
+            {"type": "remove", "id": "u:7-mvaxplfd-4", "page": 1, "norm": 1},
+            {"type": "text", "id": "u:7-mvaxpln7-7", "page": 1, "norm": 1, "x": 0.269, "y": 0.7697, "text": "سلام تخته", "size": 30, "color": "#dc2626"},
+            {"type": "sticky", "id": "u:7-mvaxpln7-8", "page": 1, "norm": 1, "x": 0.6091, "y": 0.7697, "w": 0.2652, "h": 0.3571, "text": "یادداشت", "size": 26, "color": "#fde68a"},
+            {"type": "reorder", "id": "u:7-mvaxpln7-7", "page": 1, "norm": 1, "move": "front"},
+            {"type": "reorder", "id": "u:7-mvaxpln7-8", "page": 1, "norm": 1, "move": "front"},
+            {"type": "page_add", "id": "u:7-mvaxplnd-9", "page": 2, "at": 2, "norm": 1},
+            {"type": "page_go", "id": "u:7-mvaxplne-10", "page": 2, "norm": 1},
+            {"type": "cursor", "page": 2, "norm": 1, "tool": "pen", "x": 0.0408, "y": 0.0616},
+            {"type": "draw", "tool": "pen", "page": 2, "norm": 1, "color": "#dc2626", "width": 4, "points": [[0.0408, 0.0616], [0.1259, 0.107]], "id": "u:7-mvaxploc-11"},
+            {"type": "page_go", "id": "u:7-mvaxplod-12", "page": 1, "norm": 1},
+            {"type": "page_dup", "id": "u:7-mvaxplpa-13", "page": 1, "at": 2, "norm": 1},
+            {"type": "page_go", "id": "u:7-mvaxplpb-14", "page": 2, "norm": 1},
+            {"type": "page_remove", "id": "u:7-mvaxplqu-15", "page": 3, "norm": 1},
+            {"type": "page_go", "id": "u:7-mvaxplqv-16", "page": 2, "norm": 1},
+            {"type": "page_setup", "id": "u:7-mvaxplrg-17", "page": 2, "color": "#fff7ed", "norm": 1},
+            {"type": "page_setup", "id": "u:7-mvaxplrh-18", "page": 2, "grid": "grid", "norm": 1},
+            {"type": "cursor", "page": 2, "norm": 1, "tool": "pen", "x": -0.0017, "y": 0.9535},
+            {"type": "draw", "tool": "pen", "page": 2, "norm": 1, "color": "#111827", "width": 12, "points": [[-0.0017, 0.9535], [0.0663, 0.9686]], "id": "u:7-mvaxpls2-19"},
+            {"type": "remove", "id": "u:7-mvaxpls2-19", "page": 2, "norm": 1},
+            {"type": "draw", "tool": "pen", "page": 2, "norm": 1, "color": "#111827", "width": 12, "points": [[-0.0017, 0.9535], [0.0663, 0.9686]], "id": "u:7-mvaxpls2-19"},
+            {"type": "cursor", "page": 2, "norm": 1, "tool": "pen", "x": 0.0153, "y": 0.8779},
+            {"type": "draw", "tool": "pen", "page": 2, "norm": 1, "color": "#111827", "width": 12, "points": [[0.0153, 0.8779], [0.1003, 0.893]], "id": "u:7-mvaxpls4-20"},
+            {"type": "cursor", "page": 2, "norm": 1, "tool": "pen", "x": 0.0663, "y": 0.107},
+            {"type": "draw", "tool": "pen", "page": 2, "norm": 1, "color": "#111827", "width": 12, "points": [[0.0663, 0.107], [0.1088, 0.1523]], "id": "u:7-mvaxpm1m-21"},
+            {"type": "clear", "id": "u:7-mvaxpm4a-22", "page": 2, "norm": 1},
+    ]
+
+    LIVE_TYPES = ("draw", "text", "sticky")
+
+    def store(self, ops):
+        """Persist a captured session the way the consumer does.
+
+        Ephemeral frames (cursors, in-progress strokes) are relayed without
+        being stored, so they are skipped here as well.
+        """
+        for op in ops:
+            if op["type"] == "cursor":
+                continue
+            result = services.persist_ops(self.owner_member, [op])
+            self.assertIsNotNone(result, f"client op rejected: {op}")
+        return Whiteboard.objects.get(classroom=self.classroom)
+
+    def expected_content(self):
+        """Tiny second implementation of what the *client* ends up showing.
+
+        Only content matters here (page structure is carried out of band by the
+        board metadata), so this reduces the captured session to
+        ``{page: {id: op}}`` exactly like ``wb/model.js`` would.
+        """
+        content = {}
+        order = {}
+        for op in self.SESSION:
+            if op["type"] not in self.LIVE_TYPES and op["type"] not in {"update", "remove", "clear"}:
+                continue
+            page = content.setdefault(op["page"], {})
+            order.setdefault(op["page"], [])
+            if op["type"] == "clear":
+                page.clear()
+                order[op["page"]] = []
+            elif op["type"] == "remove":
+                # a re-add later in the log puts it back at its old depth
+                page.pop(op["id"], None)
+                if op["id"] in order[op["page"]]:
+                    order[op["page"]].remove(op["id"])
+            elif op["type"] == "update":
+                if op["id"] in page:
+                    page[op["id"]] = {**page[op["id"]], **op["patch"]}
+            else:
+                page[op["id"]] = op
+                if op["id"] not in order[op["page"]]:
+                    order[op["page"]].append(op["id"])
+        return content, order
+
+    def live_log_content(self, board):
+        """Content the server would replay to a late joiner, reduced the same way."""
+        content = {}
+        for op in board.events.order_by("seq").values_list("operation", flat=True):
+            if op["type"] not in self.LIVE_TYPES and op["type"] not in {"update", "remove", "clear"}:
+                continue
+            page = content.setdefault(op["page"], {})
+            if op["type"] == "clear":
+                page.clear()
+            elif op["type"] == "remove":
+                page.pop(op["id"], None)
+            elif op["type"] == "update":
+                if op["id"] in page:
+                    page[op["id"]] = {**page[op["id"]], **op["patch"]}
+            else:
+                page[op["id"]] = op
+        return content
+
+    def test_a_captured_client_session_is_accepted_by_the_server(self):
+        board = self.store(self.SESSION)
+
+        # a new page, a duplicate, a page removal and a page clear all ran
+        self.assertEqual(board.page_count, 2)
+        self.assertGreater(WhiteboardEvent.objects.count(), 20)
+        # every object the client ends up showing survived with its own id
+        # (server ids are only minted for legacy id-less operations); pages the
+        # session removed are compacted away and checked separately
+        survivors = {
+            op_id for objects in self.expected_content()[0].values() for op_id in objects
+        }
+        self.assertTrue(survivors)
+        stored_ids = set(board.events.values_list("operation__id", flat=True))
+        self.assertTrue(survivors <= stored_ids, survivors - stored_ids)
+
+    def test_replayed_log_shows_the_same_picture_as_the_client(self):
+        board = self.store(self.SESSION)
+        expected, expected_order = self.expected_content()
+        replayed = self.live_log_content(board)
+
+        self.assertEqual(sorted(expected), sorted(replayed))
+        for page, objects in expected.items():
+            self.assertEqual(
+                sorted(objects), sorted(replayed[page]),
+                f"page {page}: different objects after replay",
+            )
+            # ...and in the same z-order
+            self.assertEqual(
+                list(replayed[page]), list(objects),
+                f"page {page}: different painting order after replay",
+            )
+            for op_id, op in objects.items():
+                self.assertEqual(op, replayed[page][op_id], f"{op_id} differs")
+
+    def test_erased_objects_never_come_back(self):
+        board = self.store(self.SESSION)
+        survivors = {
+            op_id for page in self.expected_content()[0].values() for op_id in page
+        }
+        self.assertTrue(survivors, "the session must leave something on the board")
+        erased = sorted(survivors)[0]
+        page = next(
+            number for number, objects in self.expected_content()[0].items()
+            if erased in objects
+        )
+        services.persist_ops(
+            self.owner_member, [{"type": "remove", "id": erased, "page": page, "norm": 1}]
+        )
+
+        replayed = self.live_log_content(Whiteboard.objects.get(classroom=self.classroom))
+        present = {op_id for objects in replayed.values() for op_id in objects}
+        self.assertNotIn(erased, present)
+        # ...and everything that was not erased is still there
+        self.assertTrue(survivors - {erased} <= present)
+
+    def test_ephemeral_traffic_is_refused_by_the_log(self):
+        """Pointers and in-progress strokes are relayed, never recorded."""
+        for op in self.SESSION:
+            if op["type"] != "cursor":
+                continue
+            with self.assertRaises(services.OpRejected):
+                services.persist_ops(self.owner_member, [op])
+        for live in (
+            {"type": "draw", "tool": "pen", "page": 1, "norm": 1, "live": True,
+             "points": [[0.1, 0.1], [0.2, 0.2]], "color": "#000000", "width": 4},
+            {"type": "laser", "page": 1, "norm": 1, "x": 0.5, "y": 0.5},
+        ):
+            with self.assertRaises(services.OpRejected):
+                services.persist_ops(self.owner_member, [live])
+        self.assertEqual(WhiteboardEvent.objects.count(), 0)
+
+    def test_replay_is_complete_for_a_late_joiner(self):
+        self.store(self.SESSION)
+        snapshot = services.board_snapshot(self.classroom, member=self.owner_member)
+        self.assertTrue(snapshot["full"])
+        self.assertFalse(snapshot["trimmed"])
+        self.assertEqual(snapshot["board"]["page_count"], 2)
+        # the replayed log is a *subsequence* of what the client sent: page
+        # removals compact whole pages away, but nothing is ever reordered
+        sent = [op.get("id") for op in self.SESSION if op.get("id")]
+        replayed = [event["op"].get("id") for event in snapshot["events"]]
+        position = 0
+        for op_id in replayed:
+            while position < len(sent) and sent[position] != op_id:
+                position += 1
+            self.assertLess(position, len(sent), f"{op_id} is not in the client log order")
+            position += 1
+
+
+class BoardOrderingTests(BoardServiceTestCase):
+    def test_sequences_are_strictly_increasing_and_survive_clear(self):
+        services.persist_ops(self.owner_member, [stroke("a"), stroke("b")])
+        services.persist_ops(self.owner_member, [{"type": "clear", "id": "c", "page": 1}])
+        services.persist_ops(self.owner_member, [stroke("c")])
+
+        board = Whiteboard.objects.get(classroom=self.classroom)
+        seqs = list(board.events.order_by("seq").values_list("seq", flat=True))
+        # the clear compacted the two strokes away (seq 1 and 2) and stayed in
+        # the log itself; the next stroke continues at 4 — sequence numbers are
+        # never reused, which is what makes reconnect/resync unambiguous
+        self.assertEqual(seqs, [3, 4])
+        self.assertEqual(board.revision, 4)
+        # the clear dropped both strokes and moved the compaction watermark
+        self.assertEqual(board.compacted_before, 2)
+        self.assertFalse(board.events.filter(kind="draw:pen", seq__lt=3).exists())
+        self.assertEqual(board.events.filter(kind="draw:pen").count(), 1)
+
+    def test_permission_is_checked_inside_the_write(self):
+        self.assertIsNone(services.persist_ops(self.member(self.student), [stroke("s")]))
+        self.assertEqual(WhiteboardEvent.objects.count(), 0)
+
+    def test_student_with_effective_permission_may_draw(self):
+        self.classroom.allow_student_whiteboard = True
+        self.classroom.save(update_fields=["allow_student_whiteboard"])
+        set_member_permission(
+            self.classroom, self.owner, self.student_member.id, "can_use_whiteboard", True
+        )
+        stored, _ = services.persist_ops(self.member(self.student), [stroke("s")])
+        self.assertEqual(stored[0][1], 1)
+        self.assertEqual(stored[0][0]["id"], "s")
+
+    def test_rejects_malformed_batches_atomically(self):
+        with self.assertRaises(services.OpRejected):
+            services.persist_ops(self.owner_member, [stroke("ok"), {"type": "draw", "id": "bad"}])
+        self.assertEqual(WhiteboardEvent.objects.count(), 0)
+
+
+class PageStructureTests(BoardServiceTestCase):
+    def test_page_add_appends_and_inserts_with_shift(self):
+        services.persist_ops(self.owner_member, [stroke("p1"), {"type": "page_add", "page": 2, "id": "a2"}])
+        services.persist_ops(self.owner_member, [stroke("p2", page=2)])
+        # insert a fresh page before page 2 → the old page 2 moves to page 3
+        services.persist_ops(self.owner_member, [{"type": "page_add", "page": 2, "at": 2, "id": "a3"}])
+
+        board = Whiteboard.objects.get(classroom=self.classroom)
+        self.assertEqual(board.page_count, 3)
+        self.assertEqual(board.events.get(operation__id="p2").page, 3)
+        self.assertEqual(board.events.get(operation__id="p2").operation["page"], 3)
+        self.assertEqual(board.events.get(operation__id="a3").page, 2)
+
+    def test_page_remove_renumbers_and_protects_the_last_page(self):
+        services.persist_ops(
+            self.owner_member,
+            [stroke("one"), {"type": "page_add", "page": 2, "id": "a2"}, stroke("two", page=2)],
+        )
+        services.persist_ops(self.owner_member, [{"type": "page_remove", "page": 1, "id": "rm"}])
+        board = Whiteboard.objects.get(classroom=self.classroom)
+        self.assertEqual(board.page_count, 1)
+        self.assertEqual(board.events.get(operation__id="two").page, 1)
+        self.assertFalse(board.events.filter(operation__id="one").exists())
+        with self.assertRaises(services.OpRejected):
+            services.persist_ops(self.owner_member, [{"type": "page_remove", "page": 1, "id": "rm2"}])
+
+    def test_page_duplicate_copies_content(self):
+        services.persist_ops(self.owner_member, [stroke("orig")])
+        services.persist_ops(self.owner_member, [{"type": "page_dup", "page": 1, "id": "dup"}])
+        board = Whiteboard.objects.get(classroom=self.classroom)
+        self.assertEqual(board.page_count, 2)
+        copies = board.events.filter(kind="draw:pen", page=2)
+        self.assertEqual(copies.count(), 1)
+        self.assertEqual(copies.first().operation["id"], "orig")
+        self.assertEqual(copies.first().operation["page"], 2)
+
+    def test_page_setup_updates_styles(self):
+        services.persist_ops(
+            self.owner_member,
+            [{"type": "page_setup", "page": 1, "color": "#ffefc2", "grid": "graph", "id": "s1"}],
+        )
+        board = Whiteboard.objects.get(classroom=self.classroom)
+        self.assertEqual(board.page_style(1), {"color": "#ffefc2", "grid": "graph"})
+        # unknown pages fall back to the defaults
+        self.assertEqual(board.page_style(4), {"color": "#ffffff", "grid": "none"})
+
+    def test_document_annotations_are_not_renumbered_by_page_ops(self):
+        annotation = {
+            "type": "draw",
+            "tool": "pen",
+            "id": "annot",
+            "file_id": 9,
+            "page": 3,
+            "points": [[10, 10], [20, 20]],
+            "width": 3,
+        }
+        services.persist_ops(self.owner_member, [annotation])
+        services.persist_ops(self.owner_member, [{"type": "page_add", "page": 2, "id": "a2"}])
+        services.persist_ops(self.owner_member, [{"type": "page_remove", "page": 1, "id": "rm"}])
+        row = WhiteboardEvent.objects.get(operation__id="annot")
+        self.assertEqual(row.scope, "file")
+        self.assertEqual(row.page, 3)
+        self.assertEqual(row.operation["page"], 3)
+
+    def test_board_clear_keeps_page_structure_but_drops_content(self):
+        services.persist_ops(
+            self.owner_member,
+            [
+                stroke("a"),
+                {"type": "page_setup", "page": 1, "grid": "lines", "id": "s"},
+                {"type": "page_add", "page": 2, "id": "a2"},
+                stroke("b", page=2),
+            ],
+        )
+        services.persist_ops(self.owner_member, [{"type": "clear", "id": "c1", "page": 1}])
+        board = Whiteboard.objects.get(classroom=self.classroom)
+        self.assertFalse(board.events.filter(operation__id="a").exists())
+        self.assertTrue(board.events.filter(operation__id="b").exists())
+        self.assertTrue(board.events.filter(operation__id="s").exists())
+        self.assertEqual(board.page_count, 2)
+        self.assertEqual(board.page_style(1)["grid"], "lines")
+
+    def test_file_clear_is_scoped_to_that_document(self):
+        def annot(op_id, file_id, page=1):
+            return {
+                "type": "draw",
+                "tool": "pen",
+                "id": op_id,
+                "file_id": file_id,
+                "page": page,
+                "points": [[1, 1], [2, 2]],
+                "width": 2,
+            }
+
+        services.persist_ops(
+            self.owner_member,
+            [annot("f1", 5), annot("f2", 6), stroke("board")],
+        )
+        services.persist_ops(self.owner_member, [{"type": "clear", "id": "cf", "file_id": 5, "page": 1}])
+        self.assertFalse(WhiteboardEvent.objects.filter(operation__id="f1").exists())
+        self.assertTrue(WhiteboardEvent.objects.filter(operation__id="f2").exists())
+        self.assertTrue(WhiteboardEvent.objects.filter(operation__id="board").exists())
+
+
+class SnapshotTests(BoardServiceTestCase):
+    def test_snapshot_is_delivered_and_compacts_the_log(self):
+        services.persist_ops(self.owner_member, [stroke("keep"), stroke("drop")])
+        services.persist_ops(
+            self.owner_member, [{"type": "remove", "id": "drop", "norm": 1, "page": 1}]
+        )
+        board = Whiteboard.objects.get(classroom=self.classroom)
+        seq = board.revision
+        self.assertIsNone(
+            services.store_snapshot(self.owner_member, seq, [stroke("keep")])
+        )
+        board.refresh_from_db()
+        self.assertEqual(board.snapshot_seq, seq)
+        self.assertEqual(board.compacted_before, seq)
+        self.assertFalse(board.events.exists())
+
+        payload = services.board_snapshot(self.classroom)
+        self.assertEqual(payload["snapshot"], [normalise_op(stroke("keep"))])
+        self.assertEqual(payload["snapshot_seq"], seq)
+        self.assertEqual(payload["events"], [])
+        self.assertFalse(payload["trimmed"])
+
+    def test_snapshot_rejects_stale_or_structural_payloads(self):
+        services.persist_ops(self.owner_member, [stroke("a")])
+        board = Whiteboard.objects.get(classroom=self.classroom)
+        self.assertEqual(
+            services.store_snapshot(self.owner_member, board.revision - 1, [stroke("a")]),
+            "stale-snapshot",
+        )
+        self.assertEqual(
+            services.store_snapshot(
+                self.owner_member, board.revision, [{"type": "page_add", "page": 2, "id": "p"}]
+            ),
+            "bad-snapshot-op:structural",
+        )
+        self.assertEqual(
+            services.store_snapshot(
+                self.owner_member, board.revision, [stroke("no-id", id=None) if False else {"type": "draw", "tool": "pen", "norm": 1, "points": [[0, 0], [1, 1]]}]
+            ),
+            "bad-snapshot-op:id-required",
+        )
+        # a member who may not draw may not publish board state either
+        self.assertEqual(
+            services.store_snapshot(self.member(self.student), board.revision, []), "forbidden"
+        )
+
+    def test_snapshot_is_not_taken_when_it_compacts_nothing(self):
+        services.persist_ops(self.owner_member, [stroke("a"), stroke("b")])
+        board = Whiteboard.objects.get(classroom=self.classroom)
+        self.assertIsNone(
+            services.store_snapshot(self.owner_member, board.revision, [stroke("a"), stroke("b")])
+        )
+        board.refresh_from_db()
+        self.assertEqual(board.snapshot_seq, 0)
+        self.assertEqual(board.events.count(), 2)
+
+
+class BoardSnapshotSyncTests(BoardServiceTestCase):
+    def test_first_connect_is_a_full_replay(self):
+        services.persist_ops(self.owner_member, [stroke("a"), stroke("b")])
+        payload = services.board_snapshot(self.classroom)
+        self.assertTrue(payload["full"])
+        self.assertEqual(payload["seq"], 2)
+        self.assertEqual([event["op"]["id"] for event in payload["events"]], ["a", "b"])
+        self.assertEqual(payload["board"]["page_count"], 1)
+
+    def test_tail_resync_only_sends_what_is_missing(self):
+        services.persist_ops(self.owner_member, [stroke("a")])
+        services.persist_ops(self.owner_member, [stroke("b")])
+        payload = services.board_snapshot(self.classroom, since=1)
+        self.assertFalse(payload["full"])
+        self.assertEqual([event["op"]["id"] for event in payload["events"]], ["b"])
+
+    def test_cursor_behind_the_compaction_watermark_forces_a_full_replay(self):
+        services.persist_ops(self.owner_member, [stroke("a"), stroke("b")])
+        services.persist_ops(self.owner_member, [{"type": "clear", "id": "c", "page": 1}])
+        board = Whiteboard.objects.get(classroom=self.classroom)
+        payload = services.board_snapshot(self.classroom, since=1)
+        self.assertTrue(payload["full"])
+        self.assertEqual(payload["seq"], board.revision)
+
+    def test_cursor_ahead_of_the_server_is_reset(self):
+        services.persist_ops(self.owner_member, [stroke("a")])
+        payload = services.board_snapshot(self.classroom, since=999)
+        self.assertTrue(payload["full"])
+
+    def test_needs_snapshot_flag_follows_the_threshold(self):
+        services.persist_ops(self.owner_member, [stroke("a")])
+        payload = services.board_snapshot(self.classroom, member=self.owner_member)
+        self.assertFalse(payload["needs_snapshot"])
+
+        board = Whiteboard.objects.get(classroom=self.classroom)
+        Whiteboard.objects.filter(pk=board.pk).update(revision=services.SNAPSHOT_THRESHOLD + 5)
+        payload = services.board_snapshot(self.classroom, member=self.owner_member)
+        self.assertTrue(payload["needs_snapshot"])
+        # a member who may not draw is never asked to publish state
+        payload = services.board_snapshot(self.classroom, member=self.member(self.student))
+        self.assertFalse(payload["needs_snapshot"])
+
+    def test_replay_is_truncated_for_absurdly_long_logs(self):
+        board = Whiteboard.objects.create(classroom=self.classroom)
+        WhiteboardEvent.objects.bulk_create(
+            [
+                WhiteboardEvent(
+                    whiteboard=board,
+                    seq=i + 1,
+                    kind="draw:pen",
+                    actor=self.owner,
+                    actor_identity=f"u:{self.owner.id}",
+                    operation=stroke(f"s{i}"),
+                    page=1,
+                )
+                for i in range(services.HISTORY_LIMIT + 25)
+            ]
+        )
+        Whiteboard.objects.filter(pk=board.pk).update(revision=services.HISTORY_LIMIT + 25)
+        payload = services.board_snapshot(self.classroom)
+        self.assertTrue(payload["trimmed"])
+        self.assertEqual(len(payload["events"]), services.HISTORY_LIMIT)
+
+
+# --------------------------------------------------------------------------- #
+# 3. Websocket consumer
+# --------------------------------------------------------------------------- #
+class WhiteboardConsumerTestCase(TransactionTestCase):
     def setUp(self):
         self.owner = User.objects.create_user(username="wb_owner", password="x")
         self.presenter = User.objects.create_user(username="wb_presenter", password="x")
         self.student = User.objects.create_user(username="wb_student", password="x")
+        self.outsider = User.objects.create_user(username="wb_outsider", password="x")
         self.classroom = create_classroom(self.owner, title="WB")
-        pm = join_classroom(self.classroom, self.presenter)
-        join_classroom(self.classroom, self.student)
-        set_member_role(self.classroom, self.owner, pm.id, Role.PRESENTER)
+        presenter_member = join_classroom(self.classroom, self.presenter)
+        self.student_member = join_classroom(self.classroom, self.student)
+        set_member_role(self.classroom, self.owner, presenter_member.id, Role.PRESENTER)
 
-    def _ws(self, user):
+    def ws(self, user, query=""):
         return WebsocketCommunicator(
-            app_with_user(user, wb_routes), f"/ws/classroom/{self.classroom.room_code}/whiteboard/"
+            app_with_user(user, wb_routes),
+            f"/ws/classroom/{self.classroom.room_code}/whiteboard/{query}",
         )
 
-    def test_draw_op_broadcast_and_persist(self):
+    @staticmethod
+    async def recv(ws, wanted: str, limit: int = 10):
+        """Next frame of ``wanted`` type (presence frames may interleave)."""
+        for _ in range(limit):
+            message = await ws.receive_json_from()
+            if message.get("type") == wanted:
+                return message
+        raise AssertionError(f"no {wanted} frame within {limit} messages")
+
+
+class WhiteboardConnectionTests(WhiteboardConsumerTestCase):
+    def test_history_is_the_first_frame_and_carries_board_metadata(self):
         async def scenario():
-            owner_ws = self._ws(self.owner)
-            connected, _ = await owner_ws.connect()
-            assert connected
-            history = await owner_ws.receive_json_from()
-            assert history["type"] == "whiteboard_history"
-
-            student_ws = self._ws(self.student)  # students lack whiteboard by default
-            connected, _ = await student_ws.connect()
-            assert connected
-            await student_ws.receive_json_from()
-
-            presenter_ws = self._ws(self.presenter)
-            connected, _ = await presenter_ws.connect()
-            assert connected
-            await presenter_ws.receive_json_from()
-
-            # Note: senders apply ops optimistically and are not echoed
-            # back their own op (the consumer's seq guard drops it).
-            op = {"type": "draw", "tool": "pen", "points": [[1, 2], [3, 4]], "color": "#000", "width": 2, "id": "op-1"}
-            await presenter_ws.send_json_to({"action": "op", "op": op})
-
-            msg = await owner_ws.receive_json_from()
-            assert msg["type"] == "whiteboard_operation", msg
-            assert msg["op"]["tool"] == "pen"
-            assert msg["actor_identity"] == f"u:{self.presenter.id}"
-
-            # The student (viewer, no draw permission) still sees the op,
-            # but their own draw attempt is refused server-side.
-            seen = await student_ws.receive_json_from()
-            assert seen["type"] == "whiteboard_operation"
-            await student_ws.send_json_to({"action": "op", "op": op})
-            err = await student_ws.receive_json_from()
-            assert err["type"] == "error", err
-
-            await owner_ws.disconnect()
-            await student_ws.disconnect()
-            await presenter_ws.disconnect()
-
-        async_to_sync(scenario)()
-
-        board = Whiteboard.objects.get(classroom=self.classroom)
-        self.assertEqual(board.events.count(), 1)
-        self.assertEqual(board.events.first().operation["tool"], "pen")
-
-    def test_student_granted_permission_can_draw(self):
-        member = self.classroom.members.get(user=self.student)
-        # Both layers must allow it: the member flag AND the room setting.
-        self.classroom.allow_student_whiteboard = True
-        self.classroom.save()
-        set_member_permission(self.classroom, self.owner, member.id, "can_use_whiteboard", True)
-
-        async def scenario():
-            ws = self._ws(self.student)
+            ws = self.ws(self.owner)
             connected, _ = await ws.connect()
             assert connected
+            first = await ws.receive_json_from()
+            await ws.disconnect()
+            return first
+
+        first = async_to_sync(scenario)()
+        self.assertEqual(first["type"], "whiteboard_history")
+        self.assertTrue(first["full"])
+        self.assertEqual(first["seq"], 0)
+        self.assertEqual(first["board"]["page_count"], 1)
+        self.assertTrue(first["you"]["can_draw"])
+        self.assertEqual(first["you"]["identity"], f"u:{self.owner.id}")
+        self.assertIn("max_op_bytes", first["limits"])
+
+    def test_viewer_without_permission_still_sees_the_board(self):
+        async def scenario():
+            ws = self.ws(self.student)
+            connected, _ = await ws.connect()
+            assert connected
+            first = await ws.receive_json_from()
+            await ws.send_json_to({"action": "op", "op": stroke("nope")})
+            err = await self.recv(ws, "error")
+            await ws.disconnect()
+            return first, err
+
+        first, err = async_to_sync(scenario)()
+        self.assertFalse(first["you"]["can_draw"])
+        self.assertEqual(err["type"], "error")
+        self.assertEqual(err["code"], "forbidden")
+        self.assertEqual(err["ops"], ["nope"])
+        self.assertEqual(WhiteboardEvent.objects.count(), 0)
+
+    def test_non_member_and_anonymous_are_closed(self):
+        async def scenario(user, expected):
+            ws = self.ws(user)
+            connected, code = await ws.connect()
+            if connected:
+                await ws.disconnect()
+            return connected, code
+
+        connected, code = async_to_sync(scenario)(self.outsider, 4403)
+        self.assertFalse(connected)
+        self.assertEqual(code, 4403)
+
+        from django.contrib.auth.models import AnonymousUser
+
+        connected, code = async_to_sync(scenario)(AnonymousUser(), 4401)
+        self.assertFalse(connected)
+        self.assertEqual(code, 4401)
+
+    def test_waiting_room_guest_cannot_open_the_board(self):
+        guest_member = join_classroom(self.classroom, self.student)
+        guest_member.in_waiting_room = True
+        guest_member.save(update_fields=["in_waiting_room"])
+
+        async def scenario():
+            ws = self.ws(self.student)
+            connected, code = await ws.connect()
+            if connected:
+                await ws.disconnect()
+            return connected, code
+
+        connected, code = async_to_sync(scenario)()
+        self.assertFalse(connected)
+        self.assertEqual(code, 4403)
+
+    def test_ping_is_answered_with_pong(self):
+        async def scenario():
+            ws = self.ws(self.owner)
+            await ws.connect()
             await ws.receive_json_from()
-            await ws.send_json_to({
-                "action": "op",
-                "op": {"type": "draw", "tool": "line", "points": [[0, 0], [9, 9]], "color": "#f00", "width": 1, "id": "op-2"},
-            })
-            await asyncio.sleep(0.2)  # sender is not echoed its own op
+            await ws.send_json_to({"action": "ping", "t": 42})
+            pong = await ws.receive_json_from()
+            await ws.disconnect()
+            return pong
+
+        self.assertEqual(async_to_sync(scenario)(), {"type": "pong", "t": 42})
+
+
+class WhiteboardLiveTests(WhiteboardConsumerTestCase):
+    def test_draw_is_relayed_to_peers_and_persisted(self):
+        async def scenario():
+            owner_ws = self.ws(self.owner)
+            await owner_ws.connect()
+            await owner_ws.receive_json_from()
+            student_ws = self.ws(self.student)
+            await student_ws.connect()
+            await student_ws.receive_json_from()
+            await self.recv(owner_ws, "presence")  # the student joined
+
+            await student_ws.send_json_to({"action": "op", "op": {"type": "page_go", "page": 1, "id": "g"}})
+            # a viewer may not draw, whatever the op is
+            err = await self.recv(student_ws, "error")
+            assert err["type"] == "error"
+            await owner_ws.send_json_to({"action": "op", "op": stroke("s1")})
+            seen = await self.recv(student_ws, "whiteboard_operation")
+            await student_ws.disconnect()
+            await owner_ws.disconnect()
+            return seen
+
+        seen = async_to_sync(scenario)()
+        self.assertEqual(seen["type"], "whiteboard_operation")
+        self.assertEqual(seen["op"]["id"], "s1")
+        self.assertEqual(seen["seq"], 1)
+        self.assertFalse(seen["ephemeral"])
+        self.assertEqual(seen["actor_identity"], f"u:{self.owner.id}")
+        self.assertIsNotNone(seen["event_id"])
+        self.assertEqual(seen["board"]["page_count"], 1)
+        row = WhiteboardEvent.objects.get()
+        self.assertEqual(row.seq, 1)
+        self.assertEqual(row.kind, "draw:pen")
+        self.assertEqual(row.scope, "board")
+
+    def test_batch_operations_are_stored_in_order(self):
+        async def scenario():
+            ws = self.ws(self.owner)
+            await ws.connect()
+            await ws.receive_json_from()
+            await ws.send_json_to(
+                {
+                    "action": "ops",
+                    "ops": [stroke("b1"), stroke("b2"), {"type": "page_add", "page": 2, "id": "b3"}],
+                }
+            )
+            await asyncio.sleep(0.3)
             await ws.disconnect()
 
         async_to_sync(scenario)()
-        board = Whiteboard.objects.get(classroom=self.classroom)
-        self.assertEqual(board.events.count(), 1)
-        self.assertEqual(board.events.first().actor, self.student)
+        rows = list(WhiteboardEvent.objects.order_by("seq"))
+        self.assertEqual([row.operation["id"] for row in rows], ["b1", "b2", "b3"])
+        self.assertEqual([row.seq for row in rows], [1, 2, 3])
+        self.assertEqual(Whiteboard.objects.get().page_count, 2)
 
-    def test_invalid_op_rejected(self):
+    def test_too_many_operations_in_one_frame_is_rejected(self):
         async def scenario():
-            ws = self._ws(self.owner)
+            ws = self.ws(self.owner)
             await ws.connect()
             await ws.receive_json_from()
-            await ws.send_json_to({"action": "op", "op": {"type": "draw", "tool": "laser", "points": []}})
-            msg = await ws.receive_json_from()
-            assert msg["type"] == "error"
+            await ws.send_json_to(
+                {"action": "ops", "ops": [stroke(f"x{i}") for i in range(70)]}
+            )
+            err = await self.recv(ws, "error")
             await ws.disconnect()
+            return err
+
+        err = async_to_sync(scenario)()
+        self.assertEqual(err["code"], "batch-too-large")
+        self.assertEqual(WhiteboardEvent.objects.count(), 0)
+
+    def test_invalid_operation_is_rejected_with_its_id(self):
+        async def scenario():
+            ws = self.ws(self.owner)
+            await ws.connect()
+            await ws.receive_json_from()
+            await ws.send_json_to({"action": "op", "op": {"type": "draw", "tool": "pen", "id": "bad"}})
+            err = await self.recv(ws, "error")
+            await ws.disconnect()
+            return err
+
+        err = async_to_sync(scenario)()
+        self.assertEqual(err["type"], "error")
+        self.assertEqual(err["code"], "invalid-op")
+        self.assertEqual(err["ops"], ["bad"])
+
+    def test_ephemeral_operations_are_relayed_but_never_stored(self):
+        async def scenario():
+            owner_ws = self.ws(self.owner)
+            await owner_ws.connect()
+            await owner_ws.receive_json_from()
+            student_ws = self.ws(self.student)
+            await student_ws.connect()
+            await student_ws.receive_json_from()
+            await self.recv(owner_ws, "presence")
+
+            for op in (
+                {"type": "laser", "id": "l1", "norm": 1, "x": 0.4, "y": 0.4},
+                {"type": "cursor", "id": "c1", "norm": 1, "x": 0.2, "y": 0.2},
+                {"type": "draw", "tool": "pen", "id": "live1", "norm": 1, "live": True, "points": [[0.1, 0.1], [0.2, 0.2]]},
+            ):
+                await owner_ws.send_json_to({"action": "op", "op": op})
+                seen = await self.recv(student_ws, "whiteboard_operation")
+                assert seen["ephemeral"], seen
+                assert seen["op"]["id"] == op["id"], seen
+
+            await student_ws.disconnect()
+            await owner_ws.disconnect()
 
         async_to_sync(scenario)()
         self.assertEqual(WhiteboardEvent.objects.count(), 0)
 
-    def test_non_object_json_frame_is_rejected_without_crashing_socket(self):
+    def test_permission_can_be_granted_and_revoked_live(self):
         async def scenario():
-            ws = self._ws(self.owner)
-            connected, _ = await ws.connect()
-            assert connected
-            await ws.receive_json_from()  # history
-            await ws.send_to(text_data="[]")
-            error = await ws.receive_json_from(timeout=3)
-            assert error["type"] == "error", error
-            await ws.send_json_to({"action": "op", "op": {
-                "type": "draw", "tool": "pen", "points": [[1, 2], [3, 4]],
-                "color": "#000", "width": 2, "id": "after-bad-frame",
-            }})
+            ws = self.ws(self.student)
+            await ws.connect()
+            await ws.receive_json_from()
+            await ws.send_json_to(
+                {"action": "op", "op": {"type": "draw", "tool": "pen", "id": "s1", "norm": 1, "points": [[0.1, 0.1], [0.2, 0.2]]}}
+            )
+            refused = await self.recv(ws, "error")
+            await ws.disconnect()
+            return refused
+
+        refused = async_to_sync(scenario)()
+        self.assertEqual(refused["code"], "forbidden")
+
+        self.classroom.allow_student_whiteboard = True
+        self.classroom.save(update_fields=["allow_student_whiteboard"])
+        set_member_permission(
+            self.classroom, self.owner, self.student_member.id, "can_use_whiteboard", True
+        )
+
+        async def scenario_granted():
+            ws = self.ws(self.student)
+            await ws.connect()
+            first = await ws.receive_json_from()
+            assert first["you"]["can_draw"] is True, first
+            await ws.send_json_to(
+                {"action": "op", "op": {"type": "draw", "tool": "pen", "id": "ok1", "norm": 1, "points": [[0.1, 0.1], [0.2, 0.2]]}}
+            )
             await asyncio.sleep(0.2)
             await ws.disconnect()
 
-        async_to_sync(scenario)()
-        self.assertTrue(WhiteboardEvent.objects.filter(operation__id="after-bad-frame").exists())
+        async_to_sync(scenario_granted)()
+        self.assertTrue(WhiteboardEvent.objects.filter(operation__id="ok1").exists())
 
-    def test_clear_compacts_history(self):
-        async def scenario():
-            ws = self._ws(self.owner)
-            await ws.connect()
-            await ws.receive_json_from()
-            for i in range(3):
-                await ws.send_json_to({
-                    "action": "op",
-                    "op": {"type": "draw", "tool": "pen", "points": [[i, i], [i + 1, i + 1]], "color": "#000", "width": 1, "id": f"c-{i}"},
-                })
-            await ws.send_json_to({"action": "op", "op": {"type": "clear", "id": "clr"}})
-            await asyncio.sleep(0.3)
-            await ws.disconnect()
-
-        async_to_sync(scenario)()
-
-        board = Whiteboard.objects.get(classroom=self.classroom)
-        self.assertEqual(board.events.count(), 1)  # only the clear event
-        self.assertEqual(board.events.first().operation["type"], "clear")
-
-    def test_non_member_rejected(self):
-        stranger = User.objects.create_user(username="wb_stranger", password="x")
-
-        async def scenario():
-            ws = self._ws(stranger)
-            connected, code = await ws.connect()
-            assert not connected and code == 4403
-
-        async_to_sync(scenario)()
-
-
-class ChatModerationTests(TransactionTestCase):
-    def setUp(self):
-        self.owner = User.objects.create_user(username="cm_owner", password="x")
-        self.student = User.objects.create_user(username="cm_student", password="x")
-        self.classroom = create_classroom(self.owner, title="CM")
-        join_classroom(self.classroom, self.student)
-
-    def _ws(self, user):
-        return WebsocketCommunicator(
-            app_with_user(user, chat_routes), f"/ws/classroom/{self.classroom.room_code}/chat/"
+        # revoke while the socket is open → the very next op is refused
+        set_member_permission(
+            self.classroom, self.owner, self.student_member.id, "can_use_whiteboard", False
         )
 
-    def test_moderator_can_delete_message(self):
+        async def scenario_revoked():
+            ws = self.ws(self.student)
+            await ws.connect()
+            await ws.receive_json_from()
+            await ws.send_json_to(
+                {"action": "op", "op": {"type": "draw", "tool": "pen", "id": "no2", "norm": 1, "points": [[0.1, 0.1], [0.2, 0.2]]}}
+            )
+            err = await self.recv(ws, "error")
+            await ws.disconnect()
+            return err
+
+        err = async_to_sync(scenario_revoked)()
+        self.assertEqual(err["code"], "forbidden")
+        self.assertEqual(WhiteboardEvent.objects.filter(operation__id="no2").count(), 0)
+
+    def test_page_operations_broadcast_the_new_board_state(self):
         async def scenario():
-            student_ws = self._ws(self.student)
+            owner_ws = self.ws(self.owner)
+            await owner_ws.connect()
+            await owner_ws.receive_json_from()
+            student_ws = self.ws(self.student)
             await student_ws.connect()
             await student_ws.receive_json_from()
-            owner_ws = self._ws(self.owner)
+            await self.recv(owner_ws, "presence")
+
+            await owner_ws.send_json_to(
+                {"action": "op", "op": {"type": "page_setup", "page": 1, "grid": "dots", "color": "#fff7d6", "id": "set"}}
+            )
+            seen = await self.recv(student_ws, "whiteboard_operation")
+            await student_ws.disconnect()
+            await owner_ws.disconnect()
+            return seen
+
+        seen = async_to_sync(scenario)()
+        self.assertEqual(seen["board"]["pages"]["1"]["grid"], "dots")
+        self.assertEqual(seen["board"]["page_count"], 1)
+
+
+class WhiteboardSyncTests(WhiteboardConsumerTestCase):
+    def test_resync_sends_only_the_missing_tail(self):
+        async def scenario():
+            ws = self.ws(self.owner)
+            await ws.connect()
+            first = await ws.receive_json_from()
+            await ws.send_json_to({"action": "op", "op": stroke("a")})
+            await ws.send_json_to({"action": "op", "op": stroke("b")})
+            await asyncio.sleep(0.3)
+            await ws.send_json_to({"action": "resync", "since": 1})
+            tail = await ws.receive_json_from()
+            await ws.disconnect()
+            return first, tail
+
+        first, tail = async_to_sync(scenario)()
+        self.assertTrue(first["full"])
+        self.assertFalse(tail["full"])
+        self.assertEqual([event["op"]["id"] for event in tail["events"]], ["b"])
+        self.assertEqual(tail["seq"], 2)
+
+    def test_reconnect_with_since_gets_the_tail(self):
+        async def scenario():
+            ws = self.ws(self.owner)
+            await ws.connect()
+            await ws.receive_json_from()
+            await ws.send_json_to({"action": "op", "op": stroke("a")})
+            await asyncio.sleep(0.2)
+            await ws.disconnect()
+
+            again = self.ws(self.owner, query="?since=1")
+            await again.connect()
+            payload = await again.receive_json_from()
+            await again.disconnect()
+            return payload
+
+        payload = async_to_sync(scenario)()
+        self.assertFalse(payload["full"])
+        self.assertEqual(payload["events"], [])
+        self.assertEqual(payload["seq"], 1)
+
+    def test_published_snapshot_is_acknowledged_and_replaces_the_log(self):
+        async def scenario():
+            ws = self.ws(self.owner)
+            await ws.connect()
+            await ws.receive_json_from()
+            await ws.send_json_to({"action": "op", "op": stroke("s1")})
+            await ws.send_json_to({"action": "op", "op": stroke("s2")})
+            await asyncio.sleep(0.3)
+            await ws.send_json_to({"action": "snapshot", "seq": 2, "ops": [stroke("s1")]})
+            ack = await self.recv(ws, "snapshot_stored")
+            await ws.disconnect()
+            return ack
+
+        ack = async_to_sync(scenario)()
+        self.assertEqual(ack, {"type": "snapshot_stored", "seq": 2})
+        board = Whiteboard.objects.get()
+        self.assertEqual(board.snapshot_seq, 2)
+        self.assertEqual(len(board.snapshot_ops), 1)
+
+    def test_presence_join_and_leave_are_broadcast(self):
+        async def scenario():
+            owner_ws = self.ws(self.owner)
             await owner_ws.connect()
             await owner_ws.receive_json_from()
 
-            await student_ws.send_json_to({"action": "send_message", "message": "حذف شو"})
-            await owner_ws.receive_json_from()   # broadcast
-            echo = await student_ws.receive_json_from()
-            message_id = echo["message"]["id"]
-
-            await owner_ws.send_json_to({"action": "delete_message", "message_id": message_id})
-            del_msg = await student_ws.receive_json_from()
-            assert del_msg["type"] == "chat_deleted" and del_msg["message_id"] == message_id
-            assert (await owner_ws.receive_json_from())["type"] == "chat_deleted"
-
+            student_ws = self.ws(self.student)
+            await student_ws.connect()
+            await student_ws.receive_json_from()
+            joined = await self.recv(owner_ws, "presence")
             await student_ws.disconnect()
+            left = await self.recv(owner_ws, "presence")
             await owner_ws.disconnect()
+            return joined, left
 
-        async_to_sync(scenario)()
-        self.assertTrue(ChatMessage.objects.first().is_deleted)
+        joined, left = async_to_sync(scenario)()
+        self.assertEqual(joined["type"], "presence")
+        self.assertEqual(joined["action"], "join")
+        self.assertEqual(joined["participant"]["identity"], f"u:{self.student.id}")
+        self.assertFalse(joined["participant"]["can_draw"])
+        self.assertEqual(left["action"], "leave")
 
-    def test_student_cannot_delete(self):
+    def test_unknown_actions_do_not_break_the_socket(self):
         async def scenario():
-            student_ws = self._ws(self.student)
-            await student_ws.connect()
-            await student_ws.receive_json_from()
-            await student_ws.send_json_to({"action": "send_message", "message": "سلام"})
-            await student_ws.receive_json_from()
-            await student_ws.send_json_to({"action": "delete_message", "message_id": 1})
-            err = await student_ws.receive_json_from()
-            assert err["type"] == "error"
-            await student_ws.disconnect()
-
-        async_to_sync(scenario)()
-        self.assertFalse(ChatMessage.objects.first().is_deleted)
-
-    def test_chat_disabled_blocks_students_live(self):
-        self.classroom.chat_disabled = True
-        self.classroom.save()
-
-        async def scenario():
-            student_ws = self._ws(self.student)
-            await student_ws.connect()
-            await student_ws.receive_json_from()
-            await student_ws.send_json_to({"action": "send_message", "message": "هست کسی؟"})
-            err = await student_ws.receive_json_from()
-            assert err["type"] == "error", err
-            await student_ws.disconnect()
-
-        async_to_sync(scenario)()
-        self.assertEqual(ChatMessage.objects.count(), 0)
-
-
-class WhiteboardPageTests(TransactionTestCase):
-    """Multi-page whiteboard: page tagging, isolation and validation."""
-
-    def setUp(self):
-        self.owner = User.objects.create_user(username="pg_owner", password="x")
-        self.classroom = create_classroom(self.owner, title="Pages")
-
-    def _ws(self, user):
-        return WebsocketCommunicator(
-            app_with_user(user, wb_routes), f"/ws/classroom/{self.classroom.room_code}/whiteboard/"
-        )
-
-    def test_ops_carry_pages_and_clear_is_per_page(self):
-        async def scenario():
-            ws = self._ws(self.owner)
-            connected, _ = await ws.connect()
-            assert connected
-            await ws.receive_json_from()  # history
-
-            draw1 = {"type": "draw", "tool": "pen", "points": [[1, 2], [3, 4]], "color": "#000", "width": 2, "id": "p1"}
-            await ws.send_json_to({"action": "op", "op": draw1})
-            await ws.send_json_to({"action": "op", "op": {"type": "page_add", "page": 2, "id": "padd"}})
-            draw2 = {"type": "draw", "tool": "pen", "points": [[5, 6], [7, 8]], "color": "#f00", "width": 2, "id": "p2", "page": 2}
-            await ws.send_json_to({"action": "op", "op": draw2})
-            await ws.send_json_to({"action": "op", "op": {"type": "clear", "id": "clr", "page": 2}})
-            await asyncio.sleep(0.4)
-            await ws.disconnect()
-
-        async_to_sync(scenario)()
-
-        events = list(WhiteboardEvent.objects.order_by("id"))
-        pages = [(e.operation.get("type"), e.page) for e in events]
-        # draw p1 survives; page 2 was compacted by the clear (its draw is
-        # gone) but the page_add marker stays so the page still exists
-        assert pages == [("draw", 1), ("page_add", 2), ("clear", 2)], pages
-        # page 1 drawing survived the page-2 clear (only page 2 compacted)
-        surviving = WhiteboardEvent.objects.filter(operation__type="draw")
-        assert [(e.page) for e in surviving] == [1], [(e.page) for e in surviving]
-        # op payloads are tagged too (clients filter by page)
-        assert events[0].operation["page"] == 1
-        assert events[1].operation["page"] == 2
-
-    def test_page_add_validation(self):
-        async def scenario():
-            ws = self._ws(self.owner)
-            connected, _ = await ws.connect()
-            assert connected
+            ws = self.ws(self.owner)
+            await ws.connect()
             await ws.receive_json_from()
-
-            # page must be an int ≥ 2
-            await ws.send_json_to({"action": "op", "op": {"type": "page_add", "page": 1}})
-            msg = await ws.receive_json_from()
-            assert msg["type"] == "error", msg
-
-            await ws.send_json_to({"action": "op", "op": {"type": "page_add"}})
-            msg = await ws.receive_json_from()
-            assert msg["type"] == "error", msg
-
-            await ws.send_json_to({"action": "op", "op": {"type": "page_add", "page": 3, "id": "ok"}})
-            await asyncio.sleep(0.3)
+            await ws.send_json_to({"action": "from-the-future", "payload": {}})
+            await ws.send_json_to({"action": "ping", "t": 1})
+            pong = await ws.receive_json_from()
             await ws.disconnect()
+            return pong
 
-        async_to_sync(scenario)()
-        assert WhiteboardEvent.objects.filter(operation__type="page_add", page=3).exists()
+        self.assertEqual(async_to_sync(scenario)()["type"], "pong")
 
-    def test_history_returns_pages_for_replay(self):
+    def test_non_object_json_frame_gets_an_error_not_a_crash(self):
         async def scenario():
-            ws = self._ws(self.owner)
-            connected, _ = await ws.connect()
-            assert connected
+            ws = self.ws(self.owner)
+            await ws.connect()
             await ws.receive_json_from()
-            await ws.send_json_to({"action": "op", "op": {
-                "type": "draw", "tool": "pen", "points": [[1, 2], [3, 4]],
-                "color": "#000", "width": 2, "id": "h1", "page": 4,
-            }})
-            await asyncio.sleep(0.3)
+            await ws.send_to(text_data=json.dumps(["not", "an", "object"]))
+            err = await ws.receive_json_from()
+            await ws.send_json_to({"action": "ping", "t": 7})
+            pong = await ws.receive_json_from()
             await ws.disconnect()
+            return err, pong
 
-            ws2 = self._ws(self.owner)
-            connected, _ = await ws2.connect()
-            assert connected
-            history = await ws2.receive_json_from()
-            assert history["type"] == "whiteboard_history"
-            assert history["events"][0]["op"]["page"] == 4, history
-            await ws2.disconnect()
-
-        async_to_sync(scenario)()
-
-
-class WhiteboardStyleOpsTests(TransactionTestCase):
-    """page_setup / page_go / laser: validation, persistence, relay."""
-
-    def setUp(self):
-        self.owner = User.objects.create_user(username="st_owner", password="x")
-        self.viewer = User.objects.create_user(username="st_viewer", password="x")
-        self.classroom = create_classroom(self.owner, title="Style")
-        join_classroom(self.classroom, self.viewer)
-
-    def _ws(self, user):
-        return WebsocketCommunicator(
-            app_with_user(user, wb_routes), f"/ws/classroom/{self.classroom.room_code}/whiteboard/"
-        )
-
-    def test_page_setup_persisted_and_broadcast(self):
-        async def scenario():
-            ow = self._ws(self.owner)
-            connected, _ = await ow.connect()
-            assert connected
-            await ow.receive_json_from()
-            vw = self._ws(self.viewer)
-            connected, _ = await vw.connect()
-            assert connected
-            await vw.receive_json_from()
-
-            await ow.send_json_to({"action": "op", "op": {
-                "type": "page_setup", "page": 1, "color": "#123abc", "grid": "grid", "id": "ps1",
-            }})
-            msg = await vw.receive_json_from()
-            assert msg["type"] == "whiteboard_operation", msg
-            assert msg["op"]["color"] == "#123abc" and msg["op"]["grid"] == "grid"
-
-            # invalid colour rejected
-            await ow.send_json_to({"action": "op", "op": {"type": "page_setup", "page": 1, "color": "red"}})
-            msg = await ow.receive_json_from()
-            assert msg["type"] == "error", msg
-            # invalid grid rejected
-            await ow.send_json_to({"action": "op", "op": {"type": "page_setup", "page": 1, "grid": "waves"}})
-            msg = await ow.receive_json_from()
-            assert msg["type"] == "error", msg
-            await ow.disconnect()
-            await vw.disconnect()
-
-        async_to_sync(scenario)()
-        ev = WhiteboardEvent.objects.get(operation__type="page_setup")
-        assert ev.page == 1 and ev.operation["color"] == "#123abc"
-        assert WhiteboardEvent.objects.filter(operation__type="page_setup").count() == 1
-
-    def test_page_go_relayed_and_validated(self):
-        async def scenario():
-            ow = self._ws(self.owner)
-            connected, _ = await ow.connect()
-            assert connected
-            await ow.receive_json_from()
-            vw = self._ws(self.viewer)
-            connected, _ = await vw.connect()
-            assert connected
-            await vw.receive_json_from()
-
-            await ow.send_json_to({"action": "op", "op": {"type": "page_go", "page": 3, "id": "go1"}})
-            msg = await vw.receive_json_from()
-            assert msg["type"] == "whiteboard_operation" and msg["op"]["type"] == "page_go", msg
-            assert msg["op"]["page"] == 3
-
-            await ow.send_json_to({"action": "op", "op": {"type": "page_go"}})
-            msg = await ow.receive_json_from()
-            assert msg["type"] == "error", msg
-            await ow.disconnect()
-            await vw.disconnect()
-
-        async_to_sync(scenario)()
-        assert WhiteboardEvent.objects.filter(operation__type="page_go", page=3).exists()
-
-    def test_laser_is_ephemeral_and_relayed(self):
-        async def scenario():
-            ow = self._ws(self.owner)
-            connected, _ = await ow.connect()
-            assert connected
-            await ow.receive_json_from()
-            vw = self._ws(self.viewer)
-            connected, _ = await vw.connect()
-            assert connected
-            await vw.receive_json_from()
-
-            await ow.send_json_to({"action": "op", "op": {"type": "laser", "page": 1, "x": 42, "y": 7}})
-            msg = await vw.receive_json_from()
-            assert msg["type"] == "whiteboard_operation", msg
-            assert msg["op"]["type"] == "laser" and msg["op"]["x"] == 42
-            assert msg.get("ephemeral") is True
-
-            # invalid laser rejected (skip our own relayed-laser echo first)
-            await ow.send_json_to({"action": "op", "op": {"type": "laser", "page": 1, "x": "a", "y": 2}})
-            for _ in range(5):
-                msg = await ow.receive_json_from()
-                if msg.get("type") == "error":
-                    break
-            assert msg["type"] == "error", msg
-            await ow.disconnect()
-            await vw.disconnect()
-
-        async_to_sync(scenario)()
-        assert not WhiteboardEvent.objects.filter(operation__type="laser").exists()
-
-    def test_clear_keeps_page_setup_marker(self):
-        async def scenario():
-            ow = self._ws(self.owner)
-            connected, _ = await ow.connect()
-            assert connected
-            await ow.receive_json_from()
-            await ow.send_json_to({"action": "op", "op": {
-                "type": "draw", "tool": "pen", "points": [[1, 2], [3, 4]],
-                "color": "#000", "width": 2, "id": "d1", "page": 1,
-            }})
-            await ow.send_json_to({"action": "op", "op": {
-                "type": "page_setup", "page": 1, "color": "#fefefe", "id": "ps",
-            }})
-            await ow.send_json_to({"action": "op", "op": {"type": "clear", "id": "cl", "page": 1}})
-            await asyncio.sleep(0.4)
-            await ow.disconnect()
-
-        async_to_sync(scenario)()
-        remaining = [(e.operation.get("type"), e.page) for e in WhiteboardEvent.objects.order_by("id")]
-        # the draw is compacted; the setup marker + the clear itself remain
-        assert ("draw", 1) not in remaining, remaining
-        assert ("page_setup", 1) in remaining, remaining
-
-
-class PresentationAnnotationTests(TransactionTestCase):
-    """File annotations ride the whiteboard protocol tagged with file_id."""
-
-    def setUp(self):
-        self.owner = User.objects.create_user(username="pa_owner", password="x")
-        self.viewer = User.objects.create_user(username="pa_viewer", password="x")
-        self.classroom = create_classroom(self.owner, title="Annot")
-        join_classroom(self.classroom, self.viewer)
-
-    def _ws(self, user):
-        return WebsocketCommunicator(
-            app_with_user(user, wb_routes), f"/ws/classroom/{self.classroom.room_code}/whiteboard/"
-        )
-
-    def test_file_ops_relayed_and_clear_is_scoped(self):
-        async def scenario():
-            ow = self._ws(self.owner)
-            connected, _ = await ow.connect()
-            assert connected
-            await ow.receive_json_from()
-            vw = self._ws(self.viewer)
-            connected, _ = await vw.connect()
-            assert connected
-            await vw.receive_json_from()
-
-            # a board stroke and a file annotation on the same page number
-            await ow.send_json_to({"action": "op", "op": {
-                "type": "draw", "tool": "pen", "points": [[1, 2], [3, 4]],
-                "color": "#000", "width": 2, "id": "board1", "page": 1,
-            }})
-            msg = await vw.receive_json_from()
-            assert msg["op"]["id"] == "board1" and "file_id" not in msg["op"]
-
-            await ow.send_json_to({"action": "op", "op": {
-                "type": "draw", "tool": "highlighter", "points": [[5, 6], [7, 8]],
-                "color": "#ff0", "width": 8, "id": "file1", "page": 1, "file_id": 42,
-            }})
-            msg = await vw.receive_json_from()
-            assert msg["op"]["id"] == "file1" and msg["op"]["file_id"] == 42
-
-            # clearing the FILE annotations must not touch the board stroke
-            await ow.send_json_to({"action": "op", "op": {
-                "type": "clear", "id": "fclr", "page": 1, "file_id": 42,
-            }})
-            await asyncio.sleep(0.3)
-
-            # clearing the BOARD must not re-remove file rows (already gone)
-            # but we assert board clear leaves nothing of the board either
-            await ow.send_json_to({"action": "op", "op": {
-                "type": "draw", "tool": "pen", "points": [[9, 9], [8, 8]],
-                "color": "#0f0", "width": 2, "id": "board2", "page": 1,
-            }})
-            await ow.send_json_to({"action": "op", "op": {
-                "type": "draw", "tool": "pen", "points": [[2, 2], [4, 4]],
-                "color": "#00f", "width": 2, "id": "file2", "page": 1, "file_id": 42,
-            }})
-            await ow.send_json_to({"action": "op", "op": {"type": "clear", "id": "bclr", "page": 1}})
-            await asyncio.sleep(0.4)
-            await ow.disconnect()
-            await vw.disconnect()
-
-        async_to_sync(scenario)()
-
-        draws = [(e.operation.get("id"), e.operation.get("file_id"))
-                 for e in WhiteboardEvent.objects.filter(operation__type="draw")]
-        # board1 compacted by board clear; file2 survives (different scope)
-        assert ("board1", None) not in draws, draws
-        assert ("file2", 42) in draws, draws
-
-    def test_invalid_file_id_rejected(self):
-        async def scenario():
-            ow = self._ws(self.owner)
-            connected, _ = await ow.connect()
-            assert connected
-            await ow.receive_json_from()
-            await ow.send_json_to({"action": "op", "op": {
-                "type": "draw", "tool": "pen", "points": [[1, 2], [3, 4]],
-                "color": "#000", "width": 2, "id": "bad", "page": 1, "file_id": "x",
-            }})
-            msg = await ow.receive_json_from()
-            assert msg["type"] == "error", msg
-            await ow.disconnect()
-
-        async_to_sync(scenario)()
-        assert not WhiteboardEvent.objects.filter(operation__id="bad").exists()
-
-
-class OpValidationTests(TransactionTestCase):
-    """Unit tests for the consumer's op validator (pure function)."""
-
-    def setUp(self):
-        from whiteboard.consumers import WhiteboardConsumer
-        self.valid = WhiteboardConsumer._valid_op
-
-    def test_pen_points_ok(self):
-        self.assertTrue(self.valid({
-            "type": "draw", "tool": "pen", "norm": 1,
-            "points": [[0.1, 0.2], [0.3, 0.4]], "color": "#000000", "width": 3,
-            "id": "x-1", "page": 1,
-        }))
-
-    def test_rectangle_geometry_ok(self):
-        # normalised rect (w/h) — previously REJECTED for missing points
-        self.assertTrue(self.valid({
-            "type": "draw", "tool": "rectangle", "norm": 1,
-            "left": 0.1, "top": 0.2, "w": 0.3, "h": 0.4,
-            "color": "#000000", "width": 3, "id": "x-2", "page": 1,
-        }))
-
-    def test_circle_geometry_ok(self):
-        self.assertTrue(self.valid({
-            "type": "draw", "tool": "circle", "norm": 1,
-            "left": 0.1, "top": 0.2, "rx": 0.15, "ry": 0.1,
-            "color": "#000000", "width": 3, "id": "x-3", "page": 1,
-        }))
-
-    def test_rectangle_missing_geometry_rejected(self):
-        self.assertFalse(self.valid({"type": "draw", "tool": "rectangle", "id": "x", "page": 1}))
-
-    def test_pen_without_points_rejected(self):
-        self.assertFalse(self.valid({"type": "draw", "tool": "pen", "id": "x", "page": 1}))
-
-    def test_unknown_tool_rejected(self):
-        self.assertFalse(self.valid({"type": "draw", "tool": "spray", "points": [], "id": "x", "page": 1}))
-
-    def test_non_finite_coordinates_rejected(self):
-        import math
-        base = {"type": "draw", "tool": "pen", "points": [[0, 0], [1, 1]], "id": "x"}
-        self.assertFalse(self.valid({**base, "points": [[0, 0], [math.inf, 1]]}))
-        self.assertFalse(self.valid({**base, "points": [[0, 0], [math.nan, 1]]}))
-
-    def test_out_of_range_normalized_coordinates_rejected(self):
-        self.assertFalse(self.valid({
-            "type": "draw", "tool": "pen", "norm": 1,
-            "points": [[0, 0], [5000, 1]], "id": "x",
-        }))
-
-    def test_malformed_or_excessive_points_rejected(self):
-        self.assertFalse(self.valid({
-            "type": "draw", "tool": "pen", "points": [[1, 2]], "id": "x",
-        }))
-        self.assertFalse(self.valid({
-            "type": "draw", "tool": "pen", "points": [[1, 2], [3]], "id": "x",
-        }))
-        self.assertFalse(self.valid({
-            "type": "draw", "tool": "pen", "points": [[0, 0], [1, 1]] * 4097, "id": "x",
-        }))
-
-    def test_non_boolean_normalization_and_invalid_page_rejected(self):
-        self.assertFalse(self.valid({
-            "type": "draw", "tool": "pen", "norm": "false",
-            "points": [[0, 0], [1, 1]], "id": "x",
-        }))
-        self.assertFalse(self.valid({"type": "page_go", "page": True}))
-        self.assertFalse(self.valid({"type": "page_go", "page": 1000}))
-
-
-class WhiteboardHistoryTailTests(TransactionTestCase):
-    """Reconnections receive the most recent events in chronological order."""
-
-    def setUp(self):
-        self.owner = User.objects.create_user(username="hist_owner", password="x")
-        self.classroom = create_classroom(self.owner, title="History tail")
-
-    def test_load_history_keeps_newest_two_thousand_events(self):
-        board = Whiteboard.objects.create(classroom=self.classroom)
-        WhiteboardEvent.objects.bulk_create([
-            WhiteboardEvent(
-                whiteboard=board,
-                actor=self.owner,
-                actor_identity=f"u:{self.owner.id}",
-                operation={"type": "clear", "page": 1, "id": f"event-{i}"},
-                page=1,
-            )
-            for i in range(2001)
-        ])
-        expected = list(WhiteboardEvent.objects.filter(whiteboard=board).order_by("id"))
-
-        async def scenario():
-            ws = WebsocketCommunicator(
-                app_with_user(self.owner, wb_routes),
-                f"/ws/classroom/{self.classroom.room_code}/whiteboard/",
-            )
-            connected, code = await ws.connect()
-            assert connected, code
-            history = await ws.receive_json_from(timeout=5)
-            await ws.disconnect()
-            return history
-
-        history = async_to_sync(scenario)()
-        self.assertEqual(history["type"], "whiteboard_history")
-        self.assertEqual(len(history["events"]), 2000)
-        self.assertEqual(history["events"][0]["id"], expected[1].id)
-        self.assertEqual(history["events"][-1]["id"], expected[-1].id)
-        self.assertEqual(history["seq"], expected[-1].id)
-        self.assertEqual(
-            [event["id"] for event in history["events"]],
-            sorted(event["id"] for event in history["events"]),
-        )
+        err, pong = async_to_sync(scenario)()
+        self.assertEqual(err["type"], "error")
+        self.assertEqual(pong, {"type": "pong", "t": 7})

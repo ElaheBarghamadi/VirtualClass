@@ -201,3 +201,80 @@ class ChatConsumerTests(TransactionTestCase):
             assert code == 4403
 
         async_to_sync(scenario)()
+
+
+class ChatModerationTests(TransactionTestCase):
+    """Deleting messages and the room-wide chat switch (owner/moderator only)."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="cm_owner", password="x")
+        self.student = User.objects.create_user(username="cm_student", password="x")
+        self.classroom = create_classroom(self.owner, title="CM")
+        join_classroom(self.classroom, self.student)
+
+    def _ws(self, user):
+        return WebsocketCommunicator(
+            app_with_user(user, chat_routes), f"/ws/classroom/{self.classroom.room_code}/chat/"
+        )
+
+    def test_moderator_can_delete_message(self):
+        from chat.models import ChatMessage
+
+        async def scenario():
+            student_ws = self._ws(self.student)
+            await student_ws.connect()
+            await student_ws.receive_json_from()
+            owner_ws = self._ws(self.owner)
+            await owner_ws.connect()
+            await owner_ws.receive_json_from()
+
+            await student_ws.send_json_to({"action": "send_message", "message": "حذف شو"})
+            await owner_ws.receive_json_from()   # broadcast
+            echo = await student_ws.receive_json_from()
+            message_id = echo["message"]["id"]
+
+            await owner_ws.send_json_to({"action": "delete_message", "message_id": message_id})
+            deleted = await student_ws.receive_json_from()
+            assert deleted["type"] == "chat_deleted" and deleted["message_id"] == message_id
+            assert (await owner_ws.receive_json_from())["type"] == "chat_deleted"
+
+            await student_ws.disconnect()
+            await owner_ws.disconnect()
+
+        async_to_sync(scenario)()
+        self.assertTrue(ChatMessage.objects.first().is_deleted)
+
+    def test_student_cannot_delete(self):
+        from chat.models import ChatMessage
+
+        async def scenario():
+            student_ws = self._ws(self.student)
+            await student_ws.connect()
+            await student_ws.receive_json_from()
+            await student_ws.send_json_to({"action": "send_message", "message": "سلام"})
+            await student_ws.receive_json_from()
+            await student_ws.send_json_to({"action": "delete_message", "message_id": 1})
+            err = await student_ws.receive_json_from()
+            assert err["type"] == "error"
+            await student_ws.disconnect()
+
+        async_to_sync(scenario)()
+        self.assertFalse(ChatMessage.objects.first().is_deleted)
+
+    def test_chat_disabled_blocks_students_live(self):
+        from chat.models import ChatMessage
+
+        self.classroom.chat_disabled = True
+        self.classroom.save()
+
+        async def scenario():
+            student_ws = self._ws(self.student)
+            await student_ws.connect()
+            await student_ws.receive_json_from()
+            await student_ws.send_json_to({"action": "send_message", "message": "هست کسی؟"})
+            err = await student_ws.receive_json_from()
+            assert err["type"] == "error", err
+            await student_ws.disconnect()
+
+        async_to_sync(scenario)()
+        self.assertEqual(ChatMessage.objects.count(), 0)

@@ -26,3 +26,7 @@ Thumbs.db
 .coverage
 htmlcov/
 .pytest_cache/
+
+# Node (the whiteboard client test harness in tests_js/)
+node_modules/
+tests_js/.build/

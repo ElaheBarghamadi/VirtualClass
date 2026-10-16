@@ -44,3 +44,22 @@ jobs:
         run: |
           ROOM=$(grep -oP 'room code: \K\S+' /tmp/seed.log)
           python tests_e2e/run_e2e.py --base http://127.0.0.1:8123 --room "$ROOM"
+
+  client:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: tests_js/package-lock.json
+
+      - name: Install the whiteboard client test runner
+        working-directory: tests_js
+        run: npm ci --no-audit --no-fund
+
+      - name: Whiteboard client engine tests
+        working-directory: tests_js
+        run: npm test

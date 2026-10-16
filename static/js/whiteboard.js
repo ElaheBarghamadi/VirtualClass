@@ -1,773 +1,867 @@
 /**
- * whiteboard.js — collaborative, multi-page whiteboard on Fabric.js.
+ * whiteboard.js — collaborative whiteboard facade.
  *
- * Synchronisation model: every stroke/shape/text/clear/page op is a
- * structured operation (JSON) sent over the whiteboard WebSocket — never
- * a canvas image.  The server validates permissions + shape, persists
- * the op (tagged with its page) and relays it; on connect we replay the
- * stored history page by page.
+ * This module is the one the room talks to (``Whiteboard.init(...)``,
+ * ``setPermission``, ``resize``).  It owns the pieces and keeps them in sync:
  *
- * Pages: every op carries `page`.  A privileged user's page navigation
- * is SHARED (`page_go`) so the whole class follows the presenter;
- * everybody can still browse locally.  Each page remembers its own
- * background color and grid style (`page_setup`).  Pages persist
- * server-side automatically; 💾 exports the visible page as PNG.
+ * ``wb/model.js``      the replayable document (operations → objects)
+ * ``wb/render.js``     the painter (board units → canvas pixels)
+ * ``wb/tools.js``      pointer/keyboard interaction
+ * ``wb/transport.js``  the websocket (reconnect, resync, presence, snapshot)
+ * ``wb/ui.js``         toolbar, palette, pages panel, zoom bar, status
  *
- * Laser pointer ops are ephemeral — relayed live, never stored.
- *
- * Local undo/redo affects only this user's own operations.
+ * Design notes
+ * ------------
+ * * Drawing is **optimistic**: an operation is applied locally and shown
+ *   immediately, then sent.  When the server echoes it back (with its
+ *   sequence number) the local copy is confirmed; if the server *refuses* it
+ *   (permission revoked, stale page, rate limit) the change is rolled back so
+ *   the board never shows something the rest of the class cannot see.
+ * * Reconnecting asks for the operations it missed (``since``); when the
+ *   server cannot serve a tail any more it sends a full replay instead.
+ * * A client that is completely caught up publishes a flattened snapshot when
+ *   the server asks for one, which lets the log be compacted without ever
+ *   losing what is drawn on the board.
  */
+import { BoardModel } from './wb/model.js';
+import { BoardRenderer, colorForIdentity } from './wb/render.js';
+import { BoardTools, textSizeFor } from './wb/tools.js';
+import { BoardSocket } from './wb/transport.js';
+import { BoardChrome } from './wb/ui.js';
+import { PAGE_H, PAGE_W, clamp, opPoints, opX, opY } from './wb/geometry.js';
+
+const GRID_ORDER = ['none', 'grid', 'dots', 'lines', 'graph'];
+const CURSOR_TTL = 6000;
+const GHOST_TTL = 4000;
+const SNAPSHOT_DELAY = 2500;
+
 class WhiteboardImpl {
     constructor() {
-        this.canvas = null;        // fabric.Canvas
-        this.ws = null;
-        this.tool = 'pen';
-        this.color = '#2563eb';
-        this.width = 3;
-        this.drawing = false;
-        this.startPoint = null;
-        this.liveShape = null;
-        this.idCounter = 0;
-        this.myUndo = [];
-        this.myRedo = [];
-        this.remote = false;       // suppress broadcast while applying remote ops
-        this._replaying = false;   // history replay: record only, paint once
-        this.canDraw = false;
-        this.unavailable = false;  // fabric failed to load
+        this.roomCode = null;
         this.identity = null;
-        this.retryDelay = 1000;
-        // multi-page state
-        this.page = 1;
-        this.pageCount = 1;
-        this._pageOps = new Map();    // page → ordered ops (source of truth for repaint)
-        this._pageColors = new Map(); // page → '#rrggbb'
-        this._pageGrid = new Map();   // page → 'none'|'grid'|'dots'
-        this._lastLaser = 0;
-        this._laserTimer = null;
-    }
-
-    init({ roomCode, identity, canDraw }) {
-        this.identity = identity;
-        this.canDraw = canDraw;
-        // Clear, permanent feedback for viewers who may not draw — instead of
-        // a toolbar that looks usable but silently does nothing.
-        if (!canDraw) {
-            document.querySelector('.wb-toolbar')?.classList.add('no-draw');
-            document.getElementById('wb-nodraw-hint')?.classList.remove('hidden');
-        }
-        if (typeof fabric === 'undefined') {
-            this._showUnavailable('کتابخانهٔ تخته بارگذاری نشد. صفحه را تازه‌سازی کنید؛ اگر مشکل ادامه داشت، به پشتیبانی اطلاع دهید.');
-            console.warn('[whiteboard] fabric.js is not loaded');
-            return;
-        }
-        const el = document.getElementById('whiteboard-canvas');
-        if (!el) {
-            this._showUnavailable('بوم تخته پیدا نشد. صفحه را تازه‌سازی کنید.');
-            return;
-        }
-        try {
-            this.canvas = new fabric.Canvas(el, {
-                backgroundColor: '#ffffff',
-                selection: false,
-                isDrawingMode: false,
-                preserveObjectStacking: true,
-            });
-        } catch (err) {
-            this._showUnavailable('بوم تخته ساخته نشد. صفحه را تازه‌سازی کنید؛ اگر مشکل ادامه داشت، به پشتیبانی اطلاع دهید.');
-            console.error('[whiteboard] canvas initialization failed:', err);
-            return;
-        }
+        this.participantName = '';
+        this.canDraw = false;
+        this.canPresent = false;
         this.unavailable = false;
+        this.page = 1;
+        this.follow = true;
+        this.ready = false;
+        this.model = new BoardModel();
+        this.renderer = null;
+        this.tools = null;
+        this.socket = null;
+        this.chrome = null;
+        this._idCounter = 0;
+        this._laser = null;
+        this._laserTimer = null;
+        this._remoteCursors = new Map();
+        this._ghosts = new Map();
+        this._cursorTimer = null;
+        this._renderQueued = false;
+        this._snapshotTimer = null;
+        this._snapshotBlockedUntil = 0;
+        this._ghostRenderer = null;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* lifecycle                                                          */
+    /* ------------------------------------------------------------------ */
+
+    init({ roomCode, identity, canDraw = false, canPresent = false, participantName = '' } = {}) {
+        if (this.ready) return;
+        const root = document.getElementById('classroom-root');
+        this.roomCode = roomCode;
+        this.identity = identity;
+        // presence chips show the display name the room already knows about
+        this.participantName = participantName || root?.dataset.participantName || '';
+        this.canDraw = Boolean(canDraw);
+        this.canPresent = Boolean(canPresent);
+
+        const canvas = document.getElementById('whiteboard-canvas');
+        const wrap = document.getElementById('wb-canvas-wrap');
+        if (!canvas || !wrap) {
+            this._unavailable('بوم تخته پیدا نشد. صفحه را تازه‌سازی کنید.');
+            return;
+        }
+        this.renderer = new BoardRenderer(canvas);
+        if (this.renderer.unavailable) {
+            this._unavailable('مرورگر شما از بوم گرافیکی پشتیبانی نمی‌کند؛ تخته در این مرورگر کار نمی‌کند.');
+            return;
+        }
+
+        this.tools = new BoardTools({
+            canvas,
+            renderer: this.renderer,
+            getModel: () => this.model,
+            getPage: () => this.page,
+            getHost: () => wrap,
+            newId: () => this.newId(),
+            commit: (ops, meta) => this._commit(ops, meta),
+            ephemeral: (op) => this._sendEphemeral(op),
+            requestRender: () => this.render(),
+        });
+        this.tools.onUndo = (kind) => (kind === 'redo' ? this.redo() : this.undo());
+        this.tools.onPageChange = (delta) => this.setPage(this.page + delta);
+
+        this.chrome = new BoardChrome(this);
+        this.chrome.init();
+        this.setPermission(this.canDraw);
+
         this.resize();
+        if (window.ResizeObserver && wrap) {
+            this._resizeObserver = new ResizeObserver(() => this.resize());
+            this._resizeObserver.observe(wrap);
+        }
         window.addEventListener('resize', () => this.resize());
-        // The wrap changes size on view-switch, panel toggles and
-        // fullscreen — observe it directly instead of guessing.
-        const wrap = this._wrapEl();
-        if (wrap && window.ResizeObserver) {
-            this._resizeObs = new ResizeObserver(() => this.resize());
-            this._resizeObs.observe(wrap);
-        }
 
-        this._bindToolbar();
-        this._bindPages();
-        this._bindDrawing();
-        this._connect(roomCode);
+        this._bindCanvas(canvas);
+        this._bindKeyboard(wrap);
+
+        this.socket = new BoardSocket({
+            roomCode,
+            identity,
+            hooks: {
+                onSync: (payload) => this._onSync(payload),
+                onOperation: (message) => this._onOperation(message),
+                onError: (message) => this._onError(message),
+                onPresence: (roster) => this._refreshPresence(roster),
+                onStatus: (status, extra) => this._onStatus(status, extra),
+                onSnapshotResult: (message) => this._onSnapshotResult(message),
+                onNotification: (message) => this._onNotification(message),
+            },
+        });
+        this.ready = true;
+        this.render();
+        this.socket.connect();
     }
 
-    _showUnavailable(message) {
+    _unavailable(message) {
         this.unavailable = true;
-        const hint = document.getElementById('wb-error-hint');
-        if (hint) {
-            hint.textContent = message;
-            hint.classList.remove('hidden');
-        }
-        document.querySelector('.wb-toolbar')?.classList.add('is-unavailable');
-    }
-
-    /** The element whose size the canvas should match (.wb-canvas-wrap). */
-    _wrapEl() {
-        // fabric wraps our <canvas> in .canvas-container (wrapperEl);
-        // the layout parent of THAT is what we must measure.
-        return this.canvas?.wrapperEl?.parentElement || null;
-    }
-
-    _w() { return (this.canvas && this.canvas.getWidth()) || 1; }
-    _h() { return (this.canvas && this.canvas.getHeight()) || 1; }
-
-    // ------------------------------------------------------------ transport
-    _connect(roomCode) {
-        const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-        this.ws = new WebSocket(`${proto}://${location.host}/ws/classroom/${roomCode}/whiteboard/`);
-        this.ws.onopen = () => { this.retryDelay = 1000; };
-        this.ws.onclose = (evt) => {
-            if (evt.code === 4401 || evt.code === 4403) return;
-            setTimeout(() => this._connect(roomCode), this.retryDelay = Math.min(this.retryDelay * 2, 15000));
-        };
-        this.ws.onmessage = (evt) => {
-            const data = JSON.parse(evt.data);
-            if (data.type === 'whiteboard_history') {
-                this._pageOps.clear();
-                this._pageColors.clear();
-                this._pageGrid.clear();
-                this.remote = true;
-                this._replaying = true;
-                data.events.forEach((e) => this._applyOp(e.op));
-                this._replaying = false;
-                this.remote = false;
-                // one clean repaint (with the right background) for the
-                // page the presenter last shared — much faster than
-                // rendering every op as it replays
-                this.page = Math.max(1, Math.min(this.pageCount, this.page));
-                this._repaintPage();
-                this._updatePageUI();
-            } else if (data.type === 'whiteboard_operation') {
-                if (data.actor_identity === this.identity) return; // already applied locally
-                this.remote = true;
-                this._applyOp(data.op, data.actor_name);
-                this.remote = false;
-                this._updatePageUI();
-            } else if (data.type === 'error') {
-                import('./toast.js').then(({ toast }) => toast(data.message || 'خطا در تخته.', 'error'));
-            }
-        };
-    }
-
-    _sendOp(op) {
-        if (this.ws?.readyState === WebSocket.OPEN) {
-            this.ws.send(JSON.stringify({ action: 'op', op }));
-        }
-    }
-
-    // ------------------------------------------------------------ tools
-    _bindToolbar() {
-        // Scope strictly to OUR toolbar: the presentation toolbar reuses the
-        // .wb-tool/.wb-action classes, and unscoped handlers used to fight
-        // over `active` states (and set this.tool to undefined).
-        document.querySelectorAll('.wb-toolbar .wb-tool').forEach((btn) => {
-            btn.addEventListener('click', () => {
-                document.querySelectorAll('.wb-toolbar .wb-tool').forEach((b) => {
-                    b.classList.remove('active');
-                    b.setAttribute('aria-pressed', 'false');
-                });
-                btn.classList.add('active');
-                btn.setAttribute('aria-pressed', 'true');
-                this.tool = btn.dataset.tool;
-            });
-        });
-        document.querySelectorAll('.wb-toolbar .wb-action').forEach((btn) => {
-            btn.addEventListener('click', () => this.run(btn.dataset.action));
-        });
-        document.getElementById('wb-color')?.addEventListener('input', (e) => { this.color = e.target.value; });
-        document.getElementById('wb-width')?.addEventListener('input', (e) => { this.width = Number(e.target.value); });
-
-        // page background colour
-        document.getElementById('wb-bg')?.addEventListener('input', (e) => {
-            if (!this.canDraw) return this._deny();
-            this._applyOp({ type: 'page_setup', page: this.page, color: e.target.value, id: this._id() });
-            this._sendOp({ type: 'page_setup', page: this.page, color: e.target.value, id: this._id() });
-        });
-        // grid style cycler: none → grid → dots → none
-        const gridBtn = document.getElementById('wb-grid');
-        gridBtn?.addEventListener('click', () => {
-            if (!this.canDraw) return this._deny();
-            const order = ['none', 'grid', 'dots'];
-            const cur = this._pageGrid.get(this.page) || 'none';
-            const next = order[(order.indexOf(cur) + 1) % order.length];
-            const op = { type: 'page_setup', page: this.page, grid: next, id: this._id() };
-            this._applyOp(op);
-            this._sendOp(op);
-        });
-    }
-
-    _bindPages() {
-        document.getElementById('wb-prev')?.addEventListener('click', () => this.setPage(this.page - 1));
-        document.getElementById('wb-next')?.addEventListener('click', () => this.setPage(this.page + 1));
-        document.getElementById('wb-new-page')?.addEventListener('click', () => this.addPage());
-        document.getElementById('wb-save')?.addEventListener('click', () => this.exportPNG());
-    }
-
-    _updatePageUI() {
-        const label = document.getElementById('wb-page-label');
-        if (label) label.textContent = `صفحهٔ ${Number(this.page).toLocaleString('fa-IR')} از ${Number(this.pageCount).toLocaleString('fa-IR')}`;
-        const prev = document.getElementById('wb-prev');
-        const next = document.getElementById('wb-next');
-        if (prev) prev.disabled = this.page <= 1;
-        if (next) next.disabled = this.page >= this.pageCount;
-        // reflect current page style on the controls
-        const bg = document.getElementById('wb-bg');
-        if (bg) bg.value = this._pageColors.get(this.page) || '#ffffff';
-        const gridBtn = document.getElementById('wb-grid');
-        if (gridBtn) {
-            const mode = this._pageGrid.get(this.page) || 'none';
-            gridBtn.textContent = mode === 'dots' ? '⁙' : '▦';
-            gridBtn.classList.toggle('active', mode !== 'none');
-            gridBtn.setAttribute('aria-pressed', String(mode !== 'none'));
-            gridBtn.title = mode === 'none' ? 'پس‌زمینهٔ شطرنجی' : (mode === 'grid' ? 'پس‌زمینهٔ نقطه‌ای' : 'بدون پس‌زمینه');
-        }
-    }
-
-    setPage(n, { broadcast = true } = {}) {
-        n = Math.max(1, Math.min(this.pageCount, n));
-        if (n === this.page) return;
-        this.page = n;
-        this._repaintPage();
-        this._updatePageUI();
-        // presenters take the whole class with them
-        if (broadcast && this.canDraw) {
-            this._sendOp({ type: 'page_go', page: n, id: this._id() });
-        }
-    }
-
-    addPage() {
-        if (!this.canDraw) return this._deny();
-        const target = this.pageCount + 1;
-        const op = { type: 'page_add', page: target, id: this._id() };
-        // apply locally first (we are the actor — server echo is filtered out)
-        this._applyOp(op);
-        this._sendOp(op);
-        this.setPage(target); // shared: everybody follows to the new page
-        this._updatePageUI();
-    }
-
-    /** Re-render the current page from its recorded ops. */
-    _repaintPage() {
-        if (!this.canvas) return;
-        this.canvas.clear();
-        this._applyBg();
-        for (const op of this._pageOps.get(this.page) || []) this._paintOp(op);
-        this.canvas.requestRenderAll();
-    }
-
-    // ------------------------------------------------------------ page look
-    _pageColor() {
-        return this._pageColors.get(this.page) || '#ffffff';
-    }
-
-    /** Slightly darker shade of a hex colour — for grid lines on any bg. */
-    _shade(hex, amt) {
-        const n = parseInt(hex.slice(1), 16);
-        const r = Math.max(0, Math.min(255, (n >> 16) + amt));
-        const g = Math.max(0, Math.min(255, ((n >> 8) & 0xff) + amt));
-        const b = Math.max(0, Math.min(255, (n & 0xff) + amt));
-        return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')}`;
-    }
-
-    /** Background: plain colour, or a repeating grid/dots pattern. */
-    _applyBg() {
-        const color = this._pageColor();
-        const mode = this._pageGrid.get(this.page) || 'none';
-        if (mode === 'none') {
-            this.canvas.backgroundColor = color;
+        if (this.chrome) {
+            this.chrome.setUnavailable(message);
         } else {
-            const cell = 28;
-            const c = document.createElement('canvas');
-            c.width = cell; c.height = cell;
-            const ctx = c.getContext('2d');
-            ctx.fillStyle = color;
-            ctx.fillRect(0, 0, cell, cell);
-            const line = this._shade(color, -22);
-            if (mode === 'grid') {
-                ctx.strokeStyle = line;
-                ctx.lineWidth = 1;
-                ctx.beginPath();
-                ctx.moveTo(0, cell - 0.5); ctx.lineTo(cell, cell - 0.5);
-                ctx.moveTo(cell - 0.5, 0); ctx.lineTo(cell - 0.5, cell);
-                ctx.stroke();
-            } else { // dots
-                ctx.fillStyle = line;
-                ctx.beginPath();
-                ctx.arc(cell - 1.5, cell - 1.5, 1.5, 0, Math.PI * 2);
-                ctx.fill();
+            const hint = document.getElementById('wb-error-hint');
+            if (hint) {
+                hint.textContent = message;
+                hint.classList.remove('hidden');
             }
-            this.canvas.backgroundColor = new fabric.Pattern({ source: c, repeat: 'repeat' });
         }
-        this.canvas.requestRenderAll();
+        document.querySelector('#view-whiteboard .wb-toolbar')?.classList.add('is-unavailable');
     }
 
-    /** Export the visible page as a downloadable PNG. */
-    exportPNG() {
-        if (!this.canvas) return;
-        const url = this.canvas.toDataURL({ format: 'png', multiplier: 2 });
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `whiteboard-page-${this.page}.png`;
-        a.click();
+    /** Live permission updates (grant/revoke while the board is open). */
+    setPermission(canDraw) {
+        this.canDraw = Boolean(canDraw);
+        this.tools?.setLocked(!this.canDraw);
+        this.chrome?.setPermission(this.canDraw);
+        this.chrome?.setHistoryState({
+            canUndo: this.model.canUndo(this.page),
+            canRedo: this.model.canRedo(this.page),
+        });
+        // tell the roster about the new capability right away
+        this.socket?.send({ action: 'presence' });
     }
 
-    // ------------------------------------------------------------ drawing
-    _bindDrawing() {
-        this.canvas.on('mouse:down', (opt) => this._down(opt));
-        this.canvas.on('mouse:move', (opt) => this._move(opt));
-        this.canvas.on('mouse:up', () => this._up());
-        // A touch/pen pointer can be lifted outside Fabric's canvas element.
-        // Finish the stroke on the window too; _up() safely ignores duplicates.
-        const finishStroke = () => this._up();
-        window.addEventListener('mouseup', finishStroke);
-        window.addEventListener('pointerup', finishStroke);
-        window.addEventListener('pointercancel', finishStroke);
-        window.addEventListener('touchend', finishStroke, { passive: true });
-    }
-
-    _deny(reason = 'برای حساب شما نوشتن روی تخته فعال نیست. از مالک کلاس بخواهید مجوز «تختهٔ اشتراکی» را روشن کند و در صورت نیاز تنظیمات کلاس را بررسی کند.') {
-        if (!this._warned) {
-            import('./toast.js').then(({ toast }) => toast(reason, 'warning'));
-            this._warned = true;
-            setTimeout(() => { this._warned = false; }, 4000);
-        }
+    deny() {
+        if (this._deniedAt && Date.now() - this._deniedAt < 4000) return false;
+        this._deniedAt = Date.now();
+        this.toast(
+            'برای حساب شما نوشتن روی تخته فعال نیست. از مالک کلاس بخواهید مجوز «تختهٔ اشتراکی» را روشن کند.',
+            'warning',
+        );
         return false;
     }
 
-    _down(opt) {
-        if (this.tool === 'laser') return; // laser needs no down/up
-        if (!this.canDraw) return this._deny();
-        const p = { x: opt.pointer.x, y: opt.pointer.y };
-
-        if (this.tool === 'text') {
-            const text = prompt('متن مورد نظر:');
-            if (text && text.trim()) {
-                const op = {
-                    type: 'text', id: this._id(), page: this.page,
-                    x: +(p.x / this._w()).toFixed(4), y: +(p.y / this._h()).toFixed(4),
-                    norm: 1,
-                    text: text.slice(0, 500), color: this.color, size: 18 + this.width * 2,
-                };
-                this._applyOp(op);
-                this._sendOp(op);
-                this._pushUndo(op);
-            }
-            return;
-        }
-
-        this.drawing = true;
-        this.startPoint = p;
-        if (this.tool === 'pen' || this.tool === 'highlighter' || this.tool === 'eraser') {
-            this.liveShape = new fabric.Polyline([p, p], {
-                stroke: this.tool === 'eraser' ? this._pageColor() : this.color,
-                strokeWidth: this.tool === 'eraser' ? this.width * 6 : this.width,
-                strokeLineCap: 'round',
-                strokeLineJoin: 'round',
-                fill: '',
-                opacity: this.tool === 'highlighter' ? 0.35 : 1,
-                selectable: false,
-                objectCaching: false,
-            });
-            this.liveShape._wbTool = this.tool;
-            this.canvas.add(this.liveShape);
-        } else if (['line', 'arrow', 'rectangle', 'circle'].includes(this.tool)) {
-            this.liveShape = this._makeShape(this.tool, p, p);
-            this.liveShape._wbTool = this.tool;
-            this.canvas.add(this.liveShape);
-        }
+    newId() {
+        this._idCounter += 1;
+        return `${this.identity || 'anon'}-${Date.now().toString(36)}-${this._idCounter}`;
     }
 
-    _move(opt) {
-        if (this.tool === 'laser') {
-            if (!this.canDraw) return;
-            const now = Date.now();
-            if (now - this._lastLaser < 60) return; // ~16 Hz max
-            this._lastLaser = now;
-            const p = { x: opt.pointer.x, y: opt.pointer.y };
-            this._showLaser(p.x, p.y);
-            this._sendOp({
-                type: 'laser', page: this.page, norm: 1,
-                x: +(p.x / this._w()).toFixed(4), y: +(p.y / this._h()).toFixed(4),
+    /* ------------------------------------------------------------------ */
+    /* wiring                                                             */
+    /* ------------------------------------------------------------------ */
+
+    _bindCanvas(canvas) {
+        canvas.addEventListener('pointerdown', (event) => this.tools.onPointerDown(event));
+        canvas.addEventListener('pointermove', (event) => this.tools.onPointerMove(event));
+        canvas.addEventListener('pointerup', (event) => this.tools.onPointerUp(event));
+        canvas.addEventListener('pointercancel', (event) => this.tools.onPointerUp(event));
+        canvas.addEventListener('pointerleave', () => this.tools.onPointerLeave());
+        canvas.addEventListener('dblclick', (event) => this.tools.onDoubleClick(event));
+        canvas.addEventListener('wheel', (event) => this.tools.onWheel(event), { passive: false });
+        canvas.addEventListener('contextmenu', (event) => {
+            // right click = quick erase of whatever sits under the pointer
+            event.preventDefault();
+            this.tools.eraseAtPointer(event);
+        });
+    }
+
+    _bindKeyboard(scope) {
+        document.addEventListener('keydown', (event) => {
+            if (document.getElementById('view-whiteboard')?.classList.contains('hidden')) return;
+            if (document.getElementById('settings-dialog')?.open) return;
+            if (event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement) return;
+            const handled = this.tools.handleKeyDown(event);
+            if (handled) this.chrome.setHistoryState({
+                canUndo: this.model.canUndo(this.page),
+                canRedo: this.model.canRedo(this.page),
             });
+        });
+        document.addEventListener('keyup', (event) => this.tools.handleKeyUp(event));
+        scope?.addEventListener('contextmenu', (event) => {
+            if (event.target === scope) event.preventDefault();
+        });
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* socket hooks                                                       */
+    /* ------------------------------------------------------------------ */
+
+    _onSync(payload) {
+        const wasFull = Boolean(payload.full);
+        this.model.sync(payload);
+        if (wasFull) {
+            this.tools.clearSelection();
+            this.tools.cancelEditing();
+            this.model.pending.clear();
+            if (payload.trimmed) {
+                this.toast('تاریخچهٔ تخته کوتاه شده است؛ بخش قدیمی برای صرفه‌جویی در حافظه حذف شده و باید بازخوانی شود.', 'warning', 6000);
+            }
+        }
+        this.page = clamp(this.page, 1, this.model.pageCount);
+        this.chrome.setPage(this.page, this.model.pageCount);
+        this.chrome.setHistoryState({
+            canUndo: this.model.canUndo(this.page),
+            canRedo: this.model.canRedo(this.page),
+        });
+        this.chrome.scheduleThumbnails();
+        this._refreshPresence(this.socket?.roster() || []);
+        this.render();
+        if (payload.needs_snapshot) this._scheduleSnapshot();
+    }
+
+    _onOperation(message) {
+        const op = message.op;
+        if (!op) return;
+        if (message.ephemeral) {
+            this._onEphemeral(message);
             return;
         }
-        if (!this.drawing || !this.liveShape) return;
-        const p = { x: opt.pointer.x, y: opt.pointer.y };
-        if (['pen', 'highlighter', 'eraser'].includes(this.tool)) {
-            const pts = this.liveShape.points;
-            pts.push(p);
-            this.liveShape.set({ points: pts });
-            this.canvas.requestRenderAll();
+        const seq = Number(message.seq) || 0;
+        if (seq && seq <= this.model.revision) return;
+        const mine = message.actor_identity === this.identity;
+
+        if (mine && op.id) {
+            const pending = this.model.pending.get(op.id);
+            if (pending) {
+                const current = this.model.getOp(Math.max(1, op.page || 1), op.id);
+                // the server is authoritative: adopt its version of the op
+                if (current && JSON.stringify(current) !== JSON.stringify(op)) this.model.apply(op);
+                else if (!current) this.model.apply(op);
+                this.model.confirmPending(op.id);
+            } else {
+                this.model.apply(op);
+            }
         } else {
-            this._updateShape(this.liveShape, this.startPoint, p);
+            this.model.apply(op);
         }
-    }
+        if (seq) this.model.revision = seq;
+        if (message.board) this.model.applyBoardMeta(message.board);
 
-    _up() {
-        if (!this.drawing || !this.liveShape) { this.drawing = false; return; }
-        const obj = this.liveShape;
-        this.liveShape = null;
-        this.drawing = false;
-
-        const op = this._serialize(obj);
-        if (!op) { this.canvas.remove(obj); return; }
-        op.page = this.page;
-        obj.set('data', { opId: op.id });
-        // record it (source of truth for page switches); the canvas paint
-        // is idempotent and skips the object that is already there
-        this._applyOp(op);
-        this._sendOp(op);
-        this._pushUndo(op);
-    }
-
-    _makeShape(tool, a, b) {
-        const common = {
-            stroke: this.color,
-            strokeWidth: this.width,
-            fill: '',
-            selectable: false,
-            objectCaching: false,
-        };
-        if (tool === 'line' || tool === 'arrow') {
-            return new fabric.Line([a.x, a.y, b.x, b.y], common);
-        }
-        const left = Math.min(a.x, b.x), top = Math.min(a.y, b.y);
-        const w = Math.abs(b.x - a.x), h = Math.abs(b.y - a.y);
-        if (tool === 'rectangle') return new fabric.Rect({ left, top, width: w, height: h, ...common });
-        return new fabric.Ellipse({ left, top, rx: w / 2, ry: h / 2, ...common });
-    }
-
-    _updateShape(shape, a, b) {
-        if (shape.type === 'line') {
-            shape.set({ x1: a.x, y1: a.y, x2: b.x, y2: b.y });
-        } else if (shape.type === 'rect') {
-            shape.set({
-                left: Math.min(a.x, b.x), top: Math.min(a.y, b.y),
-                width: Math.abs(b.x - a.x), height: Math.abs(b.y - a.y),
-            });
-        } else if (shape.type === 'ellipse') {
-            shape.set({
-                left: Math.min(a.x, b.x), top: Math.min(a.y, b.y),
-                rx: Math.abs(b.x - a.x) / 2, ry: Math.abs(b.y - a.y) / 2,
-            });
-        }
-        shape.setCoords();
-        this.canvas.requestRenderAll();
-    }
-
-    // ------------------------------------------------------------ laser
-    _showLaser(x, y) {
-        const wrap = this._wrapEl();
-        if (!wrap) return;
-        let dot = wrap.querySelector('.laser-dot');
-        if (!dot) {
-            dot = document.createElement('div');
-            dot.className = 'laser-dot';
-            wrap.appendChild(dot);
-        }
-        dot.style.left = `${x}px`;
-        dot.style.top = `${y}px`;
-        dot.classList.remove('pulse');
-        void dot.offsetWidth; // restart the animation
-        dot.classList.add('pulse');
-        clearTimeout(this._laserTimer);
-        this._laserTimer = setTimeout(() => dot.remove(), 900);
-    }
-
-    // ------------------------------------------------------------ serialization
-    _id() {
-        return `${this.identity}-${Date.now()}-${++this.idCounter}`;
-    }
-
-    _serialize(obj) {
-        // Coordinates travel NORMALISED (0..1 of the sender's canvas) so the
-        // same op renders in the same relative place on any screen size.
-        // `norm:1` marks new ops; legacy pixel ops render 1:1.
-        const W = this._w(), H = this._h();
-        const nx = (v) => +(v / W).toFixed(4);
-        const ny = (v) => +(v / H).toFixed(4);
-        const tool = obj._wbTool || 'pen';
-        const common = {
-            id: obj.data?.opId || this._id(), tool, norm: 1,
-            width: +((obj.strokeWidth) * (WhiteboardImpl.REF_H / H)).toFixed(2),
-        };
-        if (obj.type === 'polyline') {
-            return {
-                type: 'draw', ...common,
-                points: obj.points.map((p) => [nx(p.x), ny(p.y)]),
-                color: tool === 'eraser' ? null : obj.stroke,
-            };
-        }
-        if (obj.type === 'line') {
-            return {
-                type: 'draw', ...common,
-                points: [[nx(obj.x1), ny(obj.y1)], [nx(obj.x2), ny(obj.y2)]],
-                color: obj.stroke,
-            };
-        }
-        if (obj.type === 'rect') {
-            // NB: shape size uses w/h — the `width` key is the STROKE width
-            // (a legacy duplicate-key bug had collapsed the two).
-            return {
-                type: 'draw', ...common,
-                left: nx(obj.left), top: ny(obj.top),
-                w: nx(obj.width), h: ny(obj.height),
-                color: obj.stroke,
-            };
-        }
-        if (obj.type === 'ellipse') {
-            return {
-                type: 'draw', ...common,
-                left: nx(obj.left), top: ny(obj.top),
-                rx: nx(obj.rx), ry: ny(obj.ry),
-                color: obj.stroke,
-            };
-        }
-        return null;
-    }
-
-    // ------------------------------------------------------------ applying ops
-    /** Record an op, track page state, paint it when it is visible. */
-    _applyOp(op, actorName = '') {
-        if (!op || !op.type) return;
-        // file-tagged ops are presentation annotations — presentation.js owns them
-        if (op.file_id) return;
-        const pg = Math.max(1, parseInt(op.page || 1, 10) || 1);
-        op = { ...op, page: pg };
-
-        // ---- view ops (not page content) --------------------------------
-        if (op.type === 'laser') {
-            if (!this._replaying && pg === this.page) {
-                let { x, y } = op;
-                if (op.norm) {
-                    const r = this._wrapEl()?.getBoundingClientRect();
-                    if (!r) return;
-                    x *= r.width; y *= r.height;
-                }
-                this._showLaser(x, y);
-            }
-            return;
-        }
         if (op.type === 'page_go') {
-            if (this._replaying) {
-                this.page = pg;                 // silent — repaint happens once
-            } else {
-                this.setPage(pg, { broadcast: false });
-                if (actorName) {
-                    import('./toast.js').then(({ toast }) =>
-                        toast(`${actorName} به صفحهٔ ${pg} رفت.`, 'info', 2000));
-                }
-            }
-            return;
+            if (!mine && this.follow) this.setPage(op.page, { broadcast: false });
+        } else if (['page_add', 'page_dup', 'page_remove', 'page_setup'].includes(op.type)) {
+            if (!mine) this.toast(`${message.actor_name || 'کاربر'} ساختار صفحه‌ها را تغییر داد.`, 'info', 2600);
+            this.page = clamp(this.page, 1, this.model.pageCount);
+            this.chrome.setPage(this.page, this.model.pageCount);
+            this.chrome.scheduleThumbnails();
+        } else if (!mine && op.type === 'clear') {
+            this.toast(`${message.actor_name || 'کاربر'} صفحهٔ ${op.page} را پاک کرد.`, 'info', 2600);
+        } else if (!mine) {
+            this._noteRemoteActivity(message);
         }
-        if (op.type === 'page_add') {
-            if (pg > this.pageCount) this.pageCount = pg;
-            // NB: no page jump here — the actor switches in addPage() AFTER
-            // the page_add op is on the wire, so remote peers never receive
-            // a page_go for a page they don't know about yet.
-            return;
-        }
-        if (op.type === 'page_setup') {
-            if (op.color) this._pageColors.set(pg, op.color);
-            if (op.grid) this._pageGrid.set(pg, op.grid);
-            if (pg === this.page && !this._replaying) {
-                this._applyBg();
-                // recolour eraser strokes against the new background
-                this._repaintPage();
-                this._updatePageUI();
-            }
-            // keep it in the page ops so replay-after-clear still knows the style
-            const list = this._pageOps.get(pg) || [];
-            if (!list.some((o) => o.id === op.id)) list.push(op);
-            this._pageOps.set(pg, list);
-            return;
-        }
-
-        // ---- page content ------------------------------------------------
-        const list = this._pageOps.get(pg) || [];
-        if (op.type === 'clear') {
-            // compaction (mirrors the server): keep page_add/page_setup markers
-            this._pageOps.set(pg, list.filter((o) => o.type === 'page_setup'));
-        } else if (op.type === 'remove') {
-            this._pageOps.set(pg, list.filter((o) => o.id !== op.id));
-        } else if (!list.some((o) => o.id === op.id)) {
-            // Idempotency: an op may arrive both in the snapshot and live.
-            list.push(op);
-            this._pageOps.set(pg, list);
-        }
-        if (pg > this.pageCount) this.pageCount = pg;
-
-        if (pg === this.page && !this._replaying) {
-            if (op.type === 'clear') {
-                this.canvas.clear();
-                this._applyBg();
-                this.myUndo = [];
-                this.myRedo = [];
-                this.canvas.requestRenderAll();
-            } else if (op.type === 'remove') {
-                this._removeById(op.id);
-            } else {
-                this._paintOp(op);
-            }
-        }
+        this.chrome.setHistoryState({
+            canUndo: this.model.canUndo(this.page),
+            canRedo: this.model.canRedo(this.page),
+        });
+        this.render();
     }
 
-    /** Canvas-level rendering of a single op (current page assumed). */
-    _paintOp(op) {
-        if (op.type === 'text') {
-            const W = this._w(), H = this._h(), n = !!op.norm;
-            const text = new fabric.Text(op.text, {
-                left: n ? op.x * W : op.x,
-                top: n ? op.y * H : op.y,
-                fill: op.color,
-                fontSize: (op.size || 20) * (n ? H / WhiteboardImpl.REF_H : 1),
-                selectable: false,
-            });
-            text.set('data', { opId: op.id });
-            this.canvas.add(text);
+    _onEphemeral(message) {
+        const op = message.op;
+        const from = message.actor_identity;
+        if (!op || from === this.identity) return;
+        this.socket?.touchPresence(from);
+        if (op.type === 'laser') {
+            this._laser = { x: opX(op), y: opY(op), at: performance.now() };
+            clearTimeout(this._laserTimer);
+            this._laserTimer = setTimeout(() => {
+                this._laser = null;
+                this.render();
+            }, 900);
+            this.render();
             return;
         }
-        if (op.type === 'draw') {
-            if (op.id && this.canvas.getObjects().some((o) => o.data?.opId === op.id)) return;
-            const obj = this._opToShape(op);
-            if (obj) {
-                obj.set('data', { opId: op.id });
-                this.canvas.add(obj);
-            }
-        }
-    }
-
-    _opToShape(op) {
-        const isEraser = op.tool === 'eraser';
-        // Denormalise: new ops (norm:1) carry 0..1 coordinates and are
-        // scaled to THIS canvas; legacy ops carry pixels and render 1:1.
-        const W = this._w(), H = this._h();
-        const n = !!op.norm;
-        const px = (v, dim) => (n ? v * dim : v);
-        const common = {
-            stroke: isEraser ? this._pageColor() : (op.color || '#000'),
-            strokeWidth: n ? (op.width || 3) * (H / WhiteboardImpl.REF_H) : (op.width || 3),
-            fill: '',
-            selectable: false,
-            objectCaching: false,
-        };
-        switch (op.tool) {
-            case 'pen':
-            case 'highlighter':
-            case 'eraser': {
-                const pts = (op.points || []).map(([x, y]) => ({ x: px(x, W), y: px(y, H) }));
-                if (pts.length < 2) return null;
-                return new fabric.Polyline(pts, {
-                    ...common,
-                    opacity: op.tool === 'highlighter' ? 0.35 : 1,
+        if (op.type === 'cursor') {
+            if (op.gone) this._remoteCursors.delete(from);
+            else {
+                this._remoteCursors.set(from, {
+                    identity: from,
+                    name: message.actor_name || '',
+                    color: colorForIdentity(from),
+                    x: opX(op),
+                    y: opY(op),
+                    at: Date.now(),
                 });
             }
-            case 'line':
-            case 'arrow': {
-                const [a, b] = op.points || [[0, 0], [0, 0]];
-                const A = { x: px(a[0], W), y: px(a[1], H) };
-                const B = { x: px(b[0], W), y: px(b[1], H) };
-                const line = new fabric.Line([A.x, A.y, B.x, B.y], common);
-                if (op.tool === 'arrow') this._addArrowHead([A, B], common, op.id);
-                return line;
-            }
-            case 'rectangle': {
-                const w = op.w !== undefined ? px(op.w, W) : op.width;
-                const h = op.h !== undefined ? px(op.h, H) : op.height;
-                return new fabric.Rect({ left: px(op.left, W), top: px(op.top, H), width: w, height: h, ...common });
-            }
-            case 'circle':
-                return new fabric.Ellipse({ left: px(op.left, W), top: px(op.top, H), rx: px(op.rx, W), ry: px(op.ry, H), ...common });
-            default:
-                return null;
+            this._scheduleCursorSweep();
+            this.render();
+            return;
+        }
+        if (op.type === 'draw' && op.live) {
+            this._ghosts.set(op.id || `${from}-ghost`, { op, at: Date.now(), actor: message.actor_name });
+            this._scheduleCursorSweep();
+            this.render();
         }
     }
 
-    _addArrowHead(pts, common, opId) {
-        const [a, b] = pts;
-        const angle = Math.atan2(b.y - a.y, b.x - a.x);
-        const size = 8 + (common.strokeWidth || 3) * 2;
-        const p1 = { x: b.x - size * Math.cos(angle - Math.PI / 7), y: b.y - size * Math.sin(angle - Math.PI / 7) };
-        const p2 = { x: b.x - size * Math.cos(angle + Math.PI / 7), y: b.y - size * Math.sin(angle + Math.PI / 7) };
-        const head = new fabric.Polygon([b, p1, p2], { fill: common.stroke, stroke: common.stroke, selectable: false });
-        head.set('data', { opId }); // removed together with the line
-        this.canvas.add(head);
+    _onError(message) {
+        const code = message.code || '';
+        const ids = Array.isArray(message.ops) ? message.ops : [];
+        let structural = false;
+        for (const id of ids) {
+            const pending = this.model.pending.get(id);
+            if (pending) {
+                const page = this.model.pages.get(pending.page);
+                structural = structural || Boolean(page && !page.ops.has(id) && pending.previous === null);
+                this.model.revertPending(id);
+            }
+        }
+        if (code === 'forbidden') {
+            this.setPermission(false);
+            this.toast(message.message || 'اجازهٔ نوشتن روی تخته را ندارید.', 'warning');
+            this.chrome.setPermission(false);
+        } else if (code === 'rate-limited') {
+            this.toast('سرعت تغییرات بیش از حد مجاز است؛ چند لحظه صبر کنید.', 'warning');
+        } else {
+            this.toast(message.message || 'این تغییر روی تخته پذیرفته نشد.', 'error');
+            if (structural || code.startsWith('page-') || code === 'board-full') this.requestFullSync();
+        }
+        this.chrome.setHistoryState({
+            canUndo: this.model.canUndo(this.page),
+            canRedo: this.model.canRedo(this.page),
+        });
+        this.render();
     }
 
-    // ------------------------------------------------------------ actions
+    _onStatus(status, extra) {
+        this.chrome?.setStatus(status, extra);
+        if (status === 'online') {
+            this.toast('تخته وصل شد.', 'success', 1800);
+        } else if (status === 'offline') {
+            this.toast('اتصال تخته قطع شد؛ تلاش برای وصل مجدد…', 'warning', 3000);
+        } else if (status === 'closed' && extra?.code === 4403) {
+            this.setPermission(false);
+        }
+    }
+
+    _onSnapshotResult(message) {
+        if (message.type === 'snapshot_rejected') {
+            const reason = message.reason || '';
+            if (reason === 'stale-snapshot') this._scheduleSnapshot(4000, true);
+            else this._snapshotBlockedUntil = Date.now() + 120000;
+        } else if (message.type === 'snapshot_stored') {
+            this.model.pending.clear();
+        }
+    }
+
+    _onNotification(message) {
+        if (!message || typeof message !== 'object') return;
+        const permissions = message.permissions;
+        if (permissions && typeof permissions.can_use_whiteboard === 'boolean') {
+            this.setPermission(permissions.can_use_whiteboard);
+        }
+        if (message.type === 'permission_changed' && message.identity === this.identity) {
+            const value = message.permission === 'can_use_whiteboard' ? message.value : undefined;
+            if (typeof value === 'boolean') this.setPermission(value);
+        }
+        if (message.event === 'removed' || message.event === 'membership_revoked') {
+            this.toast('دسترسی شما به این کلاس بسته شد.', 'error', 5000);
+        }
+    }
+
+    _refreshPresence(roster) {
+        this.chrome?.setPresence(roster, this._selfParticipant());
+    }
+
+    _selfParticipant() {
+        return {
+            identity: this.identity,
+            name: this.participantName || 'شما',
+            can_draw: this.canDraw,
+        };
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* outgoing operations                                                */
+    /* ------------------------------------------------------------------ */
+
+    _sendEphemeral(op) {
+        if (this.socket?.status === 'online') this.socket.sendEphemeral(op);
+    }
+
+    /**
+     * Apply → send → (optionally) remember how to undo a local change.
+     */
+    _commit(ops, { record = true, undoHint = 'add', snapshots = null } = {}) {
+        if (!Array.isArray(ops) || !ops.length) return false;
+        if (!this.canDraw) {
+            this.deny();
+            return false;
+        }
+        const undoOps = [];
+        const redoOps = [];
+        for (const raw of ops) {
+            const page = Math.max(1, Number(raw.page) || this.page);
+            const op = { ...raw, page, norm: raw.norm ?? 1 };
+            const previous = snapshots?.[op.id]
+                ? { ...snapshots[op.id] }
+                : (op.id ? this.model.getOp(page, op.id) : null);
+
+            if (record) {
+                if (op.type === 'remove' && previous) {
+                    undoOps.push({ ...previous, page });
+                } else if (op.type === 'update' && op.patch) {
+                    const inverse = {};
+                    for (const key of Object.keys(op.patch)) {
+                        const value = previous ? previous[key] : undefined;
+                        if (value !== undefined) inverse[key] = value;
+                    }
+                    if (Object.keys(inverse).length) {
+                        undoOps.push({ type: 'update', id: op.id, page, norm: 1, patch: inverse });
+                    }
+                } else if (op.id && !['clear', 'page_add', 'page_dup', 'page_remove', 'page_setup', 'page_go', 'reorder'].includes(op.type)) {
+                    undoOps.push({ type: 'remove', id: op.id, page, norm: 1 });
+                }
+                redoOps.push(op);
+            }
+            this.model.notePending(op);
+            this.model.apply(op);
+            this.socket?.sendOp(op);
+        }
+        if (record && undoOps.length) {
+            this.model.pushUndo({ page: this.page, ops: undoOps, redo: redoOps, hint: undoHint });
+        }
+        this.chrome?.setHistoryState({
+            canUndo: this.model.canUndo(this.page),
+            canRedo: this.model.canRedo(this.page),
+        });
+        this.chrome?.scheduleThumbnails();
+        this.render();
+        return true;
+    }
+
+    undo() {
+        if (!this.canDraw) return this.deny();
+        const entry = this.model.takeUndo(this.page);
+        if (!entry) return false;
+        for (const op of entry.ops) {
+            const wire = { ...op, norm: op.norm ?? 1 };
+            this.model.notePending(wire);
+            this.model.apply(wire);
+            this.socket?.sendOp(wire);
+        }
+        this.chrome?.scheduleThumbnails();
+        this.chrome?.setHistoryState({ canUndo: this.model.canUndo(this.page), canRedo: this.model.canRedo(this.page) });
+        this.render();
+        return true;
+    }
+
+    redo() {
+        if (!this.canDraw) return this.deny();
+        const entry = this.model.takeRedo(this.page);
+        if (!entry) return false;
+        for (const op of entry.redo) {
+            const wire = { ...op, norm: op.norm ?? 1 };
+            this.model.notePending(wire);
+            this.model.apply(wire);
+            this.socket?.sendOp(wire);
+        }
+        this.chrome?.scheduleThumbnails();
+        this.chrome?.setHistoryState({ canUndo: this.model.canUndo(this.page), canRedo: this.model.canRedo(this.page) });
+        this.render();
+        return true;
+    }
+
+    /** Force a full replay (used after a rejected structural change). */
+    requestFullSync() {
+        this.model.revision = 0;
+        this.model.snapshotSeq = 0;
+        if (!this.socket?.requestResync(0)) this.socket?.connect();
+    }
+
+    _scheduleSnapshot(delay = SNAPSHOT_DELAY, force = false) {
+        if (this._snapshotTimer) return;
+        if (!force && Date.now() < this._snapshotBlockedUntil) return;
+        this._snapshotTimer = setTimeout(() => {
+            this._snapshotTimer = null;
+            this._publishSnapshot();
+        }, delay);
+    }
+
+    _publishSnapshot() {
+        if (!this.canDraw || this.socket?.status !== 'online') return;
+        if (this.model.pending.size) return this._scheduleSnapshot(3000, true);
+        const ops = this.model.mergedOps();
+        if (!ops || !ops.length) return;
+        this.socket.publishSnapshot(ops, this.model.revision);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* view state                                                         */
+    /* ------------------------------------------------------------------ */
+
+    setPage(page, { broadcast = true } = {}) {
+        const target = clamp(Number(page) || 1, 1, Math.max(1, this.model.pageCount));
+        if (target === this.page) {
+            this.chrome?.setPage(this.page, this.model.pageCount);
+            return;
+        }
+        this.page = target;
+        this.tools?.cancelEditing();
+        this.tools?.clearSelection();
+        this.chrome?.setPage(this.page, this.model.pageCount);
+        this.chrome?.scheduleThumbnails();
+        this.render();
+        if (broadcast && this.canDraw) {
+            this._commit([{ type: 'page_go', id: this.newId(), page: target }], { record: false });
+        }
+    }
+
+    addPage(at = null) {
+        if (!this.canDraw) return this.deny();
+        const target = clamp(Number(at) || this.page + 1, 1, Math.min(999, this.model.pageCount + 1));
+        const op = { type: 'page_add', id: this.newId(), page: target, at: target };
+        this._commit([op], { record: false });
+        this.setPage(target, { broadcast: false });
+        this._commit([{ type: 'page_go', id: this.newId(), page: target }], { record: false });
+        this.toast(`صفحهٔ ${target} ساخته شد.`, 'success', 1800);
+    }
+
+    duplicatePage(page = null) {
+        if (!this.canDraw) return this.deny();
+        const source = clamp(Number(page) || this.page, 1, this.model.pageCount);
+        const target = Math.min(999, source + 1);
+        const op = { type: 'page_dup', id: this.newId(), page: source, at: target };
+        this._commit([op], { record: false });
+        this.setPage(target, { broadcast: false });
+        this._commit([{ type: 'page_go', id: this.newId(), page: target }], { record: false });
+    }
+
+    async removePage(page = null) {
+        if (!this.canDraw) return this.deny();
+        const target = clamp(Number(page) || this.page, 1, this.model.pageCount);
+        if (this.model.pageCount <= 1) {
+            this.toast('آخرین صفحهٔ تخته را نمی‌توان حذف کرد.', 'warning');
+            return;
+        }
+        const confirmed = await this.chrome.confirm(
+            'حذف صفحه',
+            `صفحهٔ ${target} و نوشته‌های آن برای همه حذف می‌شود. این کار بازگشت‌پذیر نیست.`,
+            { danger: true, okLabel: 'حذف صفحه' },
+        );
+        if (!confirmed) return;
+        this._commit([{ type: 'page_remove', id: this.newId(), page: target }], { record: false });
+        this.setPage(Math.max(1, target - 1), { broadcast: false });
+        this._commit([{ type: 'page_go', id: this.newId(), page: this.page }], { record: false });
+    }
+
+    async clearPage() {
+        if (!this.canDraw) return this.deny();
+        const confirmed = await this.chrome.confirm(
+            'پاک کردن صفحه',
+            'همهٔ نوشته‌های این صفحه برای همهٔ اعضا پاک می‌شود (پس‌زمینه و صفحه‌ها دست‌نخورده می‌مانند).',
+            { danger: true, okLabel: 'پاک کن' },
+        );
+        if (!confirmed) return;
+        this._commit([{ type: 'clear', id: this.newId(), page: this.page }], { record: false });
+        this.tools.clearSelection();
+    }
+
+    setPageStyle({ color, grid } = {}) {
+        if (!this.canDraw) return this.deny();
+        const op = { type: 'page_setup', id: this.newId(), page: this.page };
+        if (color !== undefined) op.color = color;
+        if (grid !== undefined) op.grid = grid;
+        this._commit([op], { record: false });
+        this.chrome.setPage(this.page, this.model.pageCount);
+    }
+
+    cycleGrid() {
+        const current = this.model.style(this.page).grid || 'none';
+        const next = GRID_ORDER[(GRID_ORDER.indexOf(current) + 1) % GRID_ORDER.length];
+        this.setPageStyle({ grid: next });
+    }
+
+    setTool(tool) {
+        if (!this.canDraw && tool !== 'select') return this.deny();
+        this.tools.setTool(tool);
+        this.chrome.setTool(tool);
+    }
+
+    setColor(color) {
+        this.tools.setColor(color);
+        this.chrome.setStyleState({ color });
+    }
+
+    setWidth(width) {
+        this.tools.setWidth(width);
+        this.chrome.setStyleState({ width: this.tools.width });
+    }
+
+    /** Toolbar actions land here (see the markup's ``data-action``). */
     run(action) {
-        if (action === 'undo') {
-            if (!this.canDraw) return this._deny();
-            // undo only touches this user's ops on the CURRENT page
-            for (let i = this.myUndo.length - 1; i >= 0; i--) {
-                if (this.myUndo[i].page !== this.page) continue;
-                const [op] = this.myUndo.splice(i, 1);
-                this._applyOp({ type: 'remove', id: op.id, page: this.page });
-                this._sendOp({ type: 'remove', id: op.id, page: this.page });
-                this.myRedo.push(op);
-                return;
-            }
-        } else if (action === 'redo') {
-            if (!this.canDraw) return this._deny();
-            for (let i = this.myRedo.length - 1; i >= 0; i--) {
-                if (this.myRedo[i].page !== this.page) continue;
-                const [op] = this.myRedo.splice(i, 1);
-                this._applyOp(op);
-                this._sendOp(op);
-                this.myUndo.push(op);
-                return;
-            }
-        } else if (action === 'clear') {
-            if (!this.canDraw) return this._deny();
-            if (!confirm('فقط صفحهٔ جاری برای همه پاک شود؟')) return;
-            const op = { type: 'clear', id: this._id(), page: this.page };
-            this._applyOp(op);
-            this._sendOp(op);
+        switch (action) {
+            case 'undo': return this.undo();
+            case 'redo': return this.redo();
+            case 'clear': return this.clearPage();
+            case 'delete-selection': return this.tools.deleteSelection();
+            case 'duplicate-selection': return this.tools.duplicateSelection();
+            case 'zoom-in': return this.zoomBy(1.15);
+            case 'zoom-out': return this.zoomBy(1 / 1.15);
+            case 'zoom-fit': return this.resetView();
+            case 'next-page': return this.setPage(this.page + 1);
+            case 'prev-page': return this.setPage(this.page - 1);
+            case 'follow': return this.toggleFollow();
+            case 'help': return this.showShortcuts();
+            default: return undefined;
         }
     }
 
-    _removeById(id) {
-        const targets = this.canvas.getObjects().filter((o) => o.data?.opId === id);
-        if (targets.length) this.canvas.remove(...targets);
+    toggleFollow() {
+        this.follow = !this.follow;
+        this.chrome.setFollowState(this.follow);
+        this.toast(this.follow ? 'صفحهٔ شما با ارائه‌دهنده همراه می‌شود.' : 'همراهی با ارائه‌دهنده خاموش شد.', 'info', 2000);
     }
 
-    _pushUndo(op) {
-        this.myUndo.push(op);
-        this.myRedo = [];
-        if (this.myUndo.length > 50) this.myUndo.shift();
+    zoomBy(factor) {
+        const center = [this.renderer.width / 2, this.renderer.height / 2];
+        this.renderer.zoomAt(center[0], center[1], factor);
+        this.render();
     }
+
+    resetView() {
+        this.renderer.resetView();
+        this.render();
+    }
+
+    async showShortcuts() {
+        const { infoDialog } = await import('./modal.js');
+        const rows = [
+            ['P / H / E', 'قلم، هایلایت، پاک‌کن'],
+            ['L / A / R / O', 'خط، فلش، مستطیل، بیضی'],
+            ['T / N', 'متن، یادداشت چسبان'],
+            ['V', 'ابزار انتخاب'],
+            ['Ctrl + Z / Ctrl + Shift + Z', 'بازگشت / جلو'],
+            ['Ctrl + D', 'تکثیر انتخاب'],
+            ['Delete', 'حذف انتخاب'],
+            ['Ctrl + A', 'انتخاب همه'],
+            ['جهت‌ها', 'جابه‌جایی انتخاب (Shift: سریع‌تر)'],
+            ['Alt + ← / →', 'صفحهٔ قبل / بعد'],
+            ['Ctrl + چرخ ماوس', 'بزرگ‌نمایی'],
+            ['فاصله + درگ', 'جابه‌جایی بوم'],
+            ['دابل‌کلیک', 'ویرایش متن یا یادداشت'],
+        ];
+        const html = `<table class="wb-shortcuts">${rows
+            .map(([keys, text]) => `<tr><th>${keys}</th><td>${text}</td></tr>`)
+            .join('')}</table>`;
+        return infoDialog('کلیدهای میان‌بر تخته', html);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* export                                                             */
+    /* ------------------------------------------------------------------ */
+
+    exportPNG(page = null) {
+        const target = clamp(Number(page) || this.page, 1, this.model.pageCount);
+        const url = this.renderer.exportDataURL(this.model, target, 1.6);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `whiteboard-page-${target}.png`;
+        link.click();
+        return url;
+    }
+
+    async exportAllPNG() {
+        for (let page = 1; page <= this.model.pageCount; page += 1) {
+            this.exportPNG(page);
+            // small gap so browsers do not drop concurrent downloads
+            await new Promise((resolve) => setTimeout(resolve, 320));
+        }
+    }
+
+    /**
+     * Multi-page print view: every page becomes one sheet, so browsers can
+     * "save as PDF" without shipping a PDF library to the browser.
+     */
+    printAll() {
+        const limit = Math.min(this.model.pageCount, 40);
+        const images = [];
+        for (let page = 1; page <= limit; page += 1) {
+            images.push(this.renderer.exportDataURL(this.model, page, 1.4));
+        }
+        const win = window.open('', '_blank');
+        if (!win) {
+            this.toast('مرورگر پنجرهٔ چاپ را باز نکرد؛ اجازهٔ پاپ‌آپ را فعال کنید.', 'warning');
+            return;
+        }
+        const title = `تخته سفید — ${this.roomCode || ''}`;
+        win.document.write(`<!doctype html><html dir="rtl" lang="fa"><head><meta charset="utf-8"><title>${title}</title>
+            <style>
+                @page { size: A4 landscape; margin: 8mm; }
+                body { margin: 0; font-family: Tahoma, sans-serif; }
+                figure { margin: 0 0 6mm; page-break-after: always; text-align: center; }
+                figure:last-child { page-break-after: auto; }
+                img { width: 100%; border: 1px solid #cbd5e1; }
+                figcaption { font-size: 11px; color: #475569; margin-top: 2mm; }
+            </style></head><body>
+            ${images.map((src, index) => `<figure><img src="${src}" alt="صفحهٔ ${index + 1}"><figcaption>صفحهٔ ${index + 1}</figcaption></figure>`).join('')}
+            <script>window.onload = () => setTimeout(() => window.print(), 200);<\/script>
+            </body></html>`);
+        win.document.close();
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* rendering                                                          */
+    /* ------------------------------------------------------------------ */
 
     resize() {
-        if (!this.canvas) return;
-        const wrap = this._wrapEl();
+        if (!this.renderer) return;
+        const wrap = document.getElementById('wb-canvas-wrap');
         if (!wrap || wrap.offsetParent === null) return;
         const rect = wrap.getBoundingClientRect();
-        if (rect.width < 10 || rect.height < 10) return;
-        const sizeChanged =
-            Math.abs(this.canvas.getWidth() - rect.width) > 1 ||
-            Math.abs(this.canvas.getHeight() - rect.height) > 1;
-        this.canvas.setDimensions({ width: rect.width, height: rect.height });
-        // Normalised ops must be re-scaled to the new size — repaint the
-        // page from its ops.  Skip mid-stroke so an in-progress line is
-        // not erased under the user's pointer.
-        if (sizeChanged && !this.drawing) this._repaintPage();
-        this.canvas.requestRenderAll();
+        if (rect.width < 20 || rect.height < 20) return;
+        this.renderer.setSize(rect.width, rect.height);
+        this.render();
     }
 
-    setPermission(canDraw) {
-        this.canDraw = canDraw;
-        // Live grant/revoke must re-style the toolbar + hint immediately —
-        // otherwise a newly-authorized presenter still sees a greyed board
-        // (or a revoked one keeps a falsely enabled toolbar).
-        document.querySelector('.wb-toolbar')?.classList.toggle('no-draw', !canDraw);
-        document.getElementById('wb-nodraw-hint')?.classList.toggle('hidden', canDraw);
+    render() {
+        if (!this.renderer || this._renderQueued) return;
+        this._renderQueued = true;
+        requestAnimationFrame(() => {
+            this._renderQueued = false;
+            if (!this.renderer) return;
+            const cursors = [...this._remoteCursors.values()].map((cursor) => ({
+                x: cursor.x,
+                y: cursor.y,
+                name: cursor.name,
+                color: cursor.color,
+                identity: cursor.identity,
+            }));
+            this.renderer.render({
+                model: this.model,
+                page: this.page,
+                cursors,
+                laser: this._laser,
+                ghosts: [...this._ghosts.values()].map((entry) => entry.op),
+                ...this.tools.state(),
+            });
+            this._updateZoomLabel();
+            this.chrome?.setSelectionState({
+                count: this.tools.selection.size,
+                canReorder: this.tools.selection.size > 0,
+            });
+        });
+    }
+
+    _updateZoomLabel() {
+        const label = document.getElementById('wb-zoom-value');
+        if (label) label.textContent = `${Math.round(this.renderer.zoom * 100).toLocaleString('fa-IR')}٪`;
+    }
+
+    _scheduleCursorSweep() {
+        if (this._cursorTimer) return;
+        this._cursorTimer = setTimeout(() => {
+            this._cursorTimer = null;
+            const now = Date.now();
+            let changed = false;
+            for (const [identity, cursor] of this._remoteCursors) {
+                if (now - cursor.at > CURSOR_TTL) {
+                    this._remoteCursors.delete(identity);
+                    changed = true;
+                }
+            }
+            for (const [id, ghost] of this._ghosts) {
+                if (now - ghost.at > GHOST_TTL) {
+                    this._ghosts.delete(id);
+                    changed = true;
+                }
+            }
+            if (changed) this.render();
+            else if (this._remoteCursors.size || this._ghosts.size) this._scheduleCursorSweep();
+        }, 1000);
+    }
+
+    _noteRemoteActivity(message) {
+        const op = message.op;
+        if (op && op.page && op.page !== this.page) {
+            this.chrome?.showRemoteActivity(
+                `${message.actor_name || 'کاربر'} در صفحهٔ ${op.page} می‌نویسد.`,
+            );
+        }
+    }
+
+    toast(message, level = 'info', ms) {
+        import('./toast.js').then(({ toast }) => toast(message, level, ms));
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* compatibility surface (room.js + automated smoke tests)             */
+    /* ------------------------------------------------------------------ */
+
+    /** page → list of raw operations (mirrors the old private map). */
+    get _pageOps() {
+        return this.model.rawPageMap();
+    }
+
+    get pageCount() {
+        return this.model.pageCount;
+    }
+
+    get tool() {
+        return this.tools?.tool || 'pen';
+    }
+
+    /** Presentation annotation coordinates are document pixels. */
+    static get PAGE() {
+        return { width: PAGE_W, height: PAGE_H };
+    }
+
+    /** Board units of one page (document pixels for annotations). */
+    get PAGE() {
+        return { width: PAGE_W, height: PAGE_H };
+    }
+
+    /** Text size used for a given slider width (shared with the tools). */
+    static textSizeFor(width) {
+        return textSizeFor(width);
+    }
+
+    /** Instance form of :attr:`PAGE`, kept for the old call sites. */
+    textSizeFor(width) {
+        return textSizeFor(width);
+    }
+
+    /** Convenience for tests/debugging: board objects of one page. */
+    objects(page = this.page) {
+        return this.model.objects(page);
+    }
+
+    /** All points of a page in board units (debug helper). */
+    pointsOf(page = this.page) {
+        return this.model.objects(page).flatMap((op) => (op.points ? opPoints(op) : []));
     }
 }
 
-/** Reference canvas height used to normalise stroke/text sizes. */
-WhiteboardImpl.REF_H = 700;
-
 export const Whiteboard = new WhiteboardImpl();
+export default Whiteboard;

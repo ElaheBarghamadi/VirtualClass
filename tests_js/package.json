@@ -1,0 +1,14 @@
+{
+  "name": "virtualclass-whiteboard-tests",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Headless harness for the whiteboard client engine (jsdom + a real canvas)",
+  "type": "module",
+  "scripts": {
+    "test": "node whiteboard.test.mjs"
+  },
+  "dependencies": {
+    "@napi-rs/canvas": "^1.0.11",
+    "jsdom": "^30.1.3"
+  }
+}
