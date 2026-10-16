@@ -35,6 +35,7 @@ from urllib.parse import parse_qs
 
 from channels.db import database_sync_to_async
 from channels.layers import get_channel_layer
+from django.db import DatabaseError
 
 from classrooms.services import member_group, resolve_scope_member
 from classrooms.ws_security import (
@@ -118,11 +119,19 @@ class WhiteboardConsumer(SafeJsonWebsocketConsumer):
             await self.close(code=CLOSED_FORBIDDEN)
             return
 
-        snapshot = await self._load_snapshot(self.since)
+        try:
+            snapshot = await self._load_snapshot(self.since)
+        except DatabaseError as exc:
+            # The database schema is older than this build (a missing
+            # migration).  Without this the client only sees a socket that
+            # connects and dies, and the console shows a SQL traceback.
+            await self._schema_outdated(exc)
+            return
         if snapshot is None:
             await self.close(code=CLOSED_FORBIDDEN)
             return
 
+        self._accepted = False
         self.member_group_name = member_group(self.room_code, self.member.id)
         # Join before reading is re-sent so no operation can slip through the
         # window between "snapshot taken" and "socket is listening"; the client
@@ -130,6 +139,7 @@ class WhiteboardConsumer(SafeJsonWebsocketConsumer):
         await self.channel_layer.group_add(self.group_name, self.channel_name)
         await self.channel_layer.group_add(self.member_group_name, self.channel_name)
         await self.accept()
+        self._accepted = True
 
         self.last_seq = snapshot["seq"]
         self.can_draw = snapshot["you"]["can_draw"]
@@ -263,6 +273,9 @@ class WhiteboardConsumer(SafeJsonWebsocketConsumer):
         # authoritative place), so no second round trip is needed out here.
         try:
             result = await self._persist(persistent)
+        except DatabaseError as exc:
+            await self._schema_outdated(exc)
+            return
         except services.OpRejected as exc:
             logger.info("whiteboard_op_rejected room=%s reason=%s", self.room_code, exc.reason)
             await self._error("عملیات تخته نامعتبر است.", exc.reason, ids)
@@ -410,6 +423,29 @@ class WhiteboardConsumer(SafeJsonWebsocketConsumer):
                 },
             },
         )
+
+    async def _schema_outdated(self, exc: Exception) -> None:
+        """Tell the user the database needs ``manage.py migrate``.
+
+        This is deliberately loud on both ends: the log line names the app, the
+        exception and the command, and the client shows a persistent banner with
+        the same instruction instead of an empty board that keeps reconnecting.
+        """
+        logger.error(
+            "whiteboard_schema_outdated room=%s error=%s hint='python manage.py migrate'",
+            self.room_code, exc,
+        )
+        message = (
+            "دیتابیس سرور به‌روز نیست؛ مدیر سرور باید یک بار "
+            "«python manage.py migrate» را اجرا کند و صفحه را تازه کند."
+        )
+        if not getattr(self, "_accepted", False):
+            # nothing was sent yet — the socket has to be accepted before any
+            # frame can be delivered
+            await self.accept()
+            self._accepted = True
+        await self.send_json({"type": "error", "code": "migrate-required", "message": message})
+        await self.close(code=1011)
 
     async def _error(self, message: str, code: str = "", ops: list | None = None) -> None:
         payload = {"type": "error", "message": message}

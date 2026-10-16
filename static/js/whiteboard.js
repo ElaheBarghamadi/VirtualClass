@@ -429,7 +429,21 @@ class WhiteboardImpl {
                 this.model.revertPending(id);
             }
         }
-        if (code === 'forbidden') {
+        if (code === 'migrate-required') {
+            // The server's database is older than this build: nothing will work
+            // until it is migrated, so say exactly that and stop retrying.
+            const text = message.message
+                || 'دیتابیس سرور به‌روز نیست؛ «python manage.py migrate» لازم است.';
+            if (typeof console !== 'undefined' && console.error) {
+                console.error(`[whiteboard] ${text} (server: run "python manage.py migrate")`);
+            }
+            this.unavailable = true;
+            this._unavailableReason = text;
+            this.chrome?.setUnavailable(text);
+            this.chrome?.setStatus?.('closed', {});
+            if (this.socket) this.socket.closed = true;   // no reconnect loop
+            this.toast(text, 'error', 15000);
+        } else if (code === 'forbidden') {
             this.setPermission(false);
             this.toast(message.message || 'اجازهٔ نوشتن روی تخته را ندارید.', 'warning');
             this.chrome.setPermission(false);

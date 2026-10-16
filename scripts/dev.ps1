@@ -57,6 +57,14 @@ if (-not (Test-Path $EnvFile)) {
 Info 'applying migrations'
 & $VenvPy manage.py migrate --noinput | Out-Null
 
+# `migrate` exits 0 even when a migration could not be applied; an outdated
+# schema then shows up as a WebSocket that connects and dies, which reads as
+# "the whiteboard is broken".
+& $VenvPy manage.py migrate --check --noinput 2>$null | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    throw "The database still has unapplied migrations. Run '$VenvPy manage.py migrate' and read the error it prints."
+}
+
 if ($Demo) {
     Info 'seeding the demo classroom'
     & $VenvPy manage.py seed_demo

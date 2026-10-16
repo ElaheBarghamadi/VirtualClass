@@ -11,7 +11,7 @@ cd tests_js
 npm install
 npm test                                   # all six suites
 node whiteboard.test.mjs                   # 47 checks — stubbed canvas, deep DOM coverage
-node board.test.mjs                        # 48 checks — real rasterizer, pixel assertions
+node board.test.mjs                        # 49 checks — real rasterizer, pixel assertions
 node offline.test.mjs                      # 18 checks — works with no socket at all
 node dom_contract.test.mjs                 #  7 checks — markup ↔ client contract
 node policy.test.mjs                       # 17 checks — quality/bitrate/ICE/backoff policy
@@ -65,7 +65,9 @@ class of bug that only shows up in a browser:
 * the keyboard: every tool letter the tooltips advertise, `Ctrl+A/D/Z/Y`,
   `Delete`, `Escape`, arrow nudging and `Alt+←/→` page navigation;
 * `__wb.diag()` reports the state support needs (`fresh`, canvas size, dpr,
-  socket state, pending ops).
+  socket state, pending ops, latency, broadcast layer);
+* an outdated server database (`error: migrate-required`) stops the board with
+  a visible explanation instead of reconnecting forever.
 
 ## `offline.test.mjs` — the class without a socket
 

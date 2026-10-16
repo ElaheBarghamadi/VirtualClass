@@ -1306,3 +1306,121 @@ class HotPathTests(WhiteboardConsumerTestCase):
 
         first = async_to_sync(scenario)()
         self.assertIn(first["limits"]["layer"], {"redis", "memory", "none"})
+
+
+class BoardMigrationUpgradeTests(TransactionTestCase):
+    """A board written by the pre-rewrite client must survive `migrate`.
+
+    The upgrade is a data migration (sequence numbers, page backgrounds, the
+    board metadata the client resyncs from), and a mistake in it means an
+    existing class opens an empty — or missing — board.  It is therefore
+    exercised end to end: an old-schema board with real operations is built,
+    0004 is applied on top of it, and the board has to come back intact.
+    """
+
+    def setUp(self):
+        super().setUp()
+        from django.db import connection
+        from django.db.migrations.executor import MigrationExecutor
+
+        self.connection = connection
+        self.executor = MigrationExecutor(connection)
+        self.migrate_from = [("whiteboard", "0003_whiteboardevent_page")]
+        self.migrate_to = [("whiteboard", "0004_board_revision_and_snapshot")]
+        self.executor.migrate(self.migrate_from)
+        self.old_apps = self.executor.loader.project_state(self.migrate_from).apps
+
+    def tearDown(self):
+        # put the database back so the rest of the suite sees the real schema
+        from django.db.migrations.executor import MigrationExecutor
+
+        executor = MigrationExecutor(self.connection)
+        executor.loader.build_graph()
+        executor.migrate(executor.loader.graph.leaf_nodes())
+        super().tearDown()
+
+    def _legacy_board(self):
+        """A board exactly as the previous client stored one."""
+        User = get_user_model()
+        owner, _ = User.objects.get_or_create(username="migration_owner")
+        classroom = create_classroom(owner, title="Legacy board")
+        Board = self.old_apps.get_model("whiteboard", "Whiteboard")
+        Event = self.old_apps.get_model("whiteboard", "WhiteboardEvent")
+        board = Board.objects.create(classroom_id=classroom.id)
+        rows = [
+            ({"type": "draw", "tool": "pen", "id": "old-1",
+              "points": [[0.1, 0.1], [0.2, 0.3]], "color": "#b91c1c", "width": 3}, 1),
+            ({"type": "page_setup", "page": 2, "color": "#fff7ed", "grid": "dots"}, 2),
+            ({"type": "draw", "tool": "highlighter", "id": "old-2", "page": 2,
+              "points": [[0.3, 0.4], [0.5, 0.6]]}, 2),
+        ]
+        for operation, page in rows:
+            Event.objects.create(whiteboard_id=board.id, operation=operation, page=page)
+        return classroom.room_code, board.id
+
+    def _migrate_forward(self):
+        from django.db.migrations.executor import MigrationExecutor
+
+        executor = MigrationExecutor(self.connection)
+        executor.loader.build_graph()
+        executor.migrate(self.migrate_to)
+
+    def test_a_legacy_board_upgrades_without_losing_anything(self):
+        room_code, board_id = self._legacy_board()
+        self._migrate_forward()
+
+        board = Whiteboard.objects.get(pk=board_id)
+        self.assertEqual(board.revision, 3, "every stored operation must get a sequence number")
+        self.assertEqual(board.page_count, 2, "the second page came from a page_setup op")
+        styles = board.page_styles()
+        self.assertEqual(styles[2]["color"], "#fff7ed",
+                         "the per-page background must be recovered from the log")
+        self.assertEqual(styles[2]["grid"], "dots")
+        self.assertEqual(styles[1]["color"], "#ffffff",
+                         "a page with no page_setup keeps the default background")
+
+        events = list(WhiteboardEvent.objects.filter(whiteboard=board).order_by("seq"))
+        self.assertEqual([event.seq for event in events], [1, 2, 3], "sequence must follow insertion order")
+        self.assertEqual([event.operation["id"] for event in events if event.operation.get("id")],
+                         ["old-1", "old-2"], "the operations themselves must be untouched")
+        self.assertEqual(events[1].kind, "page_setup")
+
+    def test_the_upgraded_board_serves_a_normal_snapshot(self):
+        """The call that used to crash with a traceback has to work."""
+        room_code, board_id = self._legacy_board()
+        self._migrate_forward()
+
+        from classrooms.models import Classroom
+
+        classroom = Classroom.objects.get(room_code=room_code)
+        payload = services.board_snapshot(classroom, since=0)
+        self.assertTrue(payload["full"])
+        self.assertEqual(payload["board"]["page_count"], 2)
+        self.assertEqual(payload["board"]["revision"], 3)
+        self.assertEqual(len(payload["events"]), 3)
+        self.assertEqual(payload["events"][-1]["op"]["id"], "old-2")
+
+
+class SchemaOutdatedGuardTests(WhiteboardConsumerTestCase):
+    """A missing migration must read as an instruction, not a SQL traceback."""
+
+    def test_an_outdated_schema_is_reported_instead_of_crashing(self):
+        from django.db.utils import OperationalError
+
+        async def scenario():
+            with patch.object(
+                services, "board_snapshot",
+                side_effect=OperationalError("no such column: whiteboard_whiteboard.page_count"),
+            ):
+                ws = self.ws(self.owner)
+                connected, _ = await ws.connect()
+                first = await ws.receive_json_from()
+                closed = await ws.receive_output()
+                return connected, first, closed
+
+        connected, first, closed = async_to_sync(scenario)()
+        self.assertTrue(connected, "the socket has to be accepted before it can explain itself")
+        self.assertEqual(first["type"], "error")
+        self.assertEqual(first["code"], "migrate-required")
+        self.assertIn("migrate", first["message"])
+        self.assertEqual(closed["type"], "websocket.close")

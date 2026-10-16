@@ -47,9 +47,10 @@ function same(actual, expected, message = '') {
 const near = (a, b, slack) => Math.abs(a - b) <= slack;
 
 export async function main({ dump = null } = {}) {
+    const env = await boot({ canDraw: true });
     const {
         window, document, Whiteboard, socket, canvas, wrap, helpers, send,
-    } = await boot({ canDraw: true });
+    } = env;
     const { pointer, stroke: drawStroke, pixel, inkCount, inkBox, click, key, acceptDialog } = helpers;
 
     /* ---------------------------------------------------------------- */
@@ -913,6 +914,26 @@ export async function main({ dump = null } = {}) {
 
     await check('connections: the broadcast layer the server uses is reported', () => {
         same(Whiteboard.diag().layer, 'redis', 'the history frame carries the channel layer');
+    });
+
+    await check('schema: an outdated server database is explained, not silent', async () => {
+        const before = Whiteboard.unavailable;
+        same(Boolean(before), false, 'the board started out available');
+        send({
+            type: 'error', code: 'migrate-required',
+            message: 'دیتابیس سرور به‌روز نیست؛ «python manage.py migrate» لازم است.',
+        });
+        await tick(40);
+
+        same(Whiteboard.unavailable, true, 'the board must stop pretending it works');
+        const hint = document.getElementById('wb-error-hint');
+        assert(hint && !hint.classList.contains('hidden'), 'the red hint stayed hidden');
+        assert(/migrate/.test(hint.textContent), `the hint does not name the command: ${hint.textContent}`);
+        assert(/migrate/.test(Whiteboard.diag().unavailableReason || ''), 'diag() must carry the reason');
+        assert(document.querySelector('.wb-toolbar')?.classList.contains('is-unavailable'),
+            'the toolbar should look unavailable');
+        same(Whiteboard.socket.closed, true, 'the client must not keep reconnecting');
+        assert(env.log().some((line) => /migrate/.test(line)), 'nothing was logged for support');
     });
 
     await check('diagnostics: the build stamp lives in the bundle', () => {

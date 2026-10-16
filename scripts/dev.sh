@@ -79,6 +79,13 @@ fi
 info "applying migrations"
 "$VENV_PY" manage.py migrate --noinput >/dev/null
 
+# ``migrate`` exits 0 even when a migration could not be applied (a broken
+# dependency, a locked database); an outdated schema then shows up later as a
+# WebSocket that connects and dies, which reads as "the whiteboard is broken".
+if ! "$VENV_PY" manage.py migrate --check --noinput >/dev/null 2>&1; then
+    die "the database still has unapplied migrations — run '$VENV_PY manage.py migrate' and read the error it prints."
+fi
+
 if [ "$SEED" = "1" ]; then
     info "seeding the demo classroom"
     "$VENV_PY" manage.py seed_demo
