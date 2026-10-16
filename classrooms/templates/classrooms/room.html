@@ -242,9 +242,10 @@
                             <canvas id="whiteboard-canvas" aria-label="تخته سفید"></canvas>
                             <div class="wb-activity hidden" id="wb-activity" role="status"></div>
                             <div class="wb-statusbar">
-                                <span class="wb-status" id="wb-status" data-state="connecting">
-                                    <i aria-hidden="true"></i><span class="wb-status-text">در حال اتصال…</span><span class="wb-status-rtt"></span>
+                                <span class="wb-status" id="wb-status" data-state="connecting" title="وضعیت اتصال تخته">
+                                    <i aria-hidden="true"></i><span class="wb-status-text">در حال اتصال…</span><span class="wb-status-rtt" id="wb-status-rtt"></span>
                                 </span>
+                                <span class="wb-lag hidden" id="wb-lag" title="زمان رفت‌وبرگشت هر تغییر تا تأیید سرور"></span>
                                 <span class="wb-presence">
                                     <span class="wb-presence-label">حاضر:</span><span id="wb-presence"></span><span class="wb-presence-count" id="wb-presence-count">۱</span>
                                 </span>

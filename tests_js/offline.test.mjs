@@ -33,6 +33,11 @@ async function check(name, fn) {
 function assert(cond, message) {
     if (!cond) throw new Error(message || 'assertion failed');
 }
+function same(actual, expected, message) {
+    const a = JSON.stringify(actual);
+    const b = JSON.stringify(expected);
+    if (a !== b) throw new Error(`${message || 'not equal'}\n  actual:   ${a}\n  expected: ${b}`);
+}
 
 async function main() {
     /* =============================================================== */
@@ -161,6 +166,18 @@ async function main() {
         await guest.helpers.stroke([[200, 200], [400, 320]]);
         assert(guest.helpers.inkCount() === before, 'a read-only viewer painted on the canvas');
         assert(guest.Whiteboard.objects(guest.Whiteboard.page).length === 0, 'the model accepted the stroke');
+    });
+
+    /* =============================================================== */
+    /* 4. a single-process broadcast layer is called out, not hidden    */
+    /* =============================================================== */
+    // the layer is announced in the first history frame, so this one connects
+    const shared = await boot({ canDraw: true, layer: 'memory' });
+    await check('layer: the in-memory channel layer is reported and warned about', () => {
+        same(shared.Whiteboard.diag().layer, 'memory', 'diag must report the layer');
+        const warning = shared.log().find((line) => line.includes('in-memory channel layer'));
+        assert(warning, `no warning was logged; log=${JSON.stringify(shared.log())}`);
+        assert(/REDIS_URL/.test(warning), 'the warning must say how to fix it');
     });
 
     /* =============================================================== */

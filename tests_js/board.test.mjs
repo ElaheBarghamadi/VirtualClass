@@ -838,6 +838,83 @@ export async function main({ dump = null } = {}) {
         document.getElementById('classroom-root').dataset.wbBuild = Whiteboard.build;
     });
 
+    await check('live: an in-progress stroke is streamed to peers while drawing', async () => {
+        Whiteboard.setTool('pen');
+        Whiteboard.setColor('#0f766e');
+        const socket = Whiteboard.socket.ws;
+        socket.sent.length = 0;
+
+        helpers.pointer('pointerdown', 300, 300);
+        helpers.pointer('pointermove', 316, 306);
+        await tick(120);                       // past the live-stream interval
+        helpers.pointer('pointermove', 348, 322);
+        await tick(120);
+        helpers.pointer('pointermove', 380, 340);
+
+        const live = socket.ops().filter((op) => op.live);
+        assert(live.length >= 2, `only ${live.length} live frames were streamed`);
+        for (const op of live) {
+            same(op.type, 'draw', 'a live frame must be a draw preview');
+            same(op.tool, 'pen', 'live frame tool');
+            assert(Array.isArray(op.points) && op.points.length >= 2,
+                `live frame carries ${op.points && op.points.length} points`);
+            assert(op.points.length <= 320, `live frame is not trimmed (${op.points.length} points)`);
+            same(op.norm, 1, 'live frames are normalised');
+        }
+
+        helpers.pointer('pointerup', 380, 340);
+        await tick(40);
+        const committed = socket.ops().filter((op) => !op.live && op.type === 'draw');
+        assert(committed.length === 1, `expected exactly one committed draw, got ${committed.length}`);
+        assert(committed[0].points.length >= live[0].points.length,
+            'the committed stroke is shorter than the preview');
+    });
+
+    await check('latency: the round trip of our own operation is measured', async () => {
+        const socket = Whiteboard.socket.ws;
+        const sent = socket.ops().filter((op) => !op.live && op.type === 'draw');
+        assert(sent.length >= 1, 'nothing was sent to confirm');
+        const op = sent[sent.length - 1];
+        const before = Whiteboard.diag().latency.count;
+        await tick(30);                        // the op is "in flight" for a while
+        // the echo has to be newer than what the client already knows
+        send({
+            type: 'whiteboard_operation', op, seq: Whiteboard.model.revision + 5, ephemeral: false,
+            actor_identity: 'u:7', server_ms: 17,
+        });
+        await tick(30);
+
+        const info = Whiteboard.diag();
+        assert(info.latency && info.latency.count === before + 1,
+            `expected one new sample (${before} → ${info.latency.count})`);
+        assert(info.latency.p50 >= 30, `p50=${info.latency.p50} ms is too small for a 30 ms round trip`);
+        same(info.latency.serverMs, 17, 'the server-reported time');
+        same(info.latency.last >= 30, true, 'last sample');
+
+        const chip = document.getElementById('wb-lag');
+        assert(chip && !chip.classList.contains('hidden'), 'the lag chip stayed hidden');
+        assert(/ms/.test(chip.textContent), `unexpected chip text: ${chip.textContent}`);
+        assert(['ok', 'slow', 'bad'].includes(chip.dataset.level), `level=${chip.dataset.level}`);
+    });
+
+    await check('latency: a fast round trip keeps the chip quiet but reported', async () => {
+        const socket = Whiteboard.socket.ws;
+        // drain the meter with quick confirmations
+        for (let index = 0; index < 8; index += 1) {
+            const op = { type: 'draw', id: `fast-${index}`, page: 1, norm: 1, tool: 'pen', points: [[0.1, 0.1], [0.2, 0.2]], color: '#111827', width: 3 };
+            Whiteboard.tools.commit([op], { record: false });
+            send({ type: 'whiteboard_operation', op, seq: 50 + index, ephemeral: false, actor_identity: 'u:7', server_ms: 4 });
+        }
+        await tick(40);
+        const summary = Whiteboard.diag().latency;
+        assert(summary.p50 !== null && summary.p50 < 400, `p50=${summary.p50} should be small here`);
+        same(document.getElementById('wb-lag').dataset.level, 'ok', 'level for a fast board');
+    });
+
+    await check('connections: the broadcast layer the server uses is reported', () => {
+        same(Whiteboard.diag().layer, 'redis', 'the history frame carries the channel layer');
+    });
+
     await check('diagnostics: the build stamp lives in the bundle', () => {
         assert(/^wb-\d{4}-\d{2}-\d{2}/.test(Whiteboard.build), `unexpected build stamp: ${Whiteboard.build}`);
     });

@@ -121,6 +121,21 @@ class FakeSocket {
 /* ------------------------------------------------------------------ */
 
 /** jsdom's "not implemented" chatter is noise; page logs are interesting. */
+/**
+ * The client modules are imported by *Node*, so their ``console`` calls go to
+ * the real process console, not to jsdom's virtual one.  Tee the global
+ * console into an array so a suite can assert on what the client logged.
+ */
+const pageLog = [];
+
+for (const level of ['log', 'info', 'warn', 'error']) {
+    const original = console[level].bind(console);
+    console[level] = (...args) => {
+        pageLog.push(args.map((value) => String(value)).join(' '));
+        original(...args);
+    };
+}
+
 export function quietConsole() {
     const virtualConsole = new VirtualConsole();
     const logged = [];
@@ -142,7 +157,9 @@ export function quietConsole() {
    board (that silently made permission/canvas assertions read stale state). */
 let bootCount = 0;
 
-export async function boot({ canDraw = true, dpr = 1, width = 1000, height = 620, online = true } = {}) {
+export async function boot({
+    canDraw = true, dpr = 1, width = 1000, height = 620, online = true, layer = 'redis',
+} = {}) {
     const instance = (bootCount += 1);
     syncSources();
     const dom = new JSDOM(
@@ -329,6 +346,7 @@ export async function boot({ canDraw = true, dpr = 1, width = 1000, height = 620
             events: [],
             seq: 0,
             full: true,
+            limits: { max_op_bytes: 65536, max_points: 4096, batch: 64, layer },
             you: { identity: 'u:7', name: 'سارا', can_draw: canDraw },
         });
     }
@@ -433,7 +451,8 @@ export async function boot({ canDraw = true, dpr = 1, width = 1000, height = 620
     return {
         dom, window, document: window.document, Whiteboard, socket, canvas, wrap, view, helpers,
         instance,
-        log: () => quietConsole.logged || [],
+        /** everything the client logged (plus jsdom's own errors) */
+        log: () => [...(quietConsole.logged || []), ...pageLog],
         /** push a server frame into the socket the client is using right now
          *  (the transport replaces its socket after every disconnect) */
         send: (frame) => (Whiteboard.socket.ws || socket).serverSend(frame),

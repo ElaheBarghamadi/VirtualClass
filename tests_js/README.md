@@ -9,11 +9,13 @@ without a browser or a Django server.
 ```bash
 cd tests_js
 npm install
-npm test                                   # all four suites
+npm test                                   # all six suites
 node whiteboard.test.mjs                   # 47 checks — stubbed canvas, deep DOM coverage
-node board.test.mjs                        # 44 checks — real rasterizer, pixel assertions
-node offline.test.mjs                      # 17 checks — works with no socket at all
+node board.test.mjs                        # 48 checks — real rasterizer, pixel assertions
+node offline.test.mjs                      # 18 checks — works with no socket at all
 node dom_contract.test.mjs                 #  7 checks — markup ↔ client contract
+node policy.test.mjs                       # 17 checks — quality/bitrate/ICE/backoff policy
+node mesh.test.mjs                         # 10 checks — P2P media engine on a fake RTCPeerConnection
 node board.test.mjs --dump .build/ops.json # dump every op the client sent
 ```
 
@@ -84,6 +86,28 @@ the real room template. Anything created at runtime is listed explicitly with a
 reason, and the list is checked for stale entries so it cannot rot. It also
 guards the anti-stale-cache contract: both entry points must be requested
 through a `?v=<build>` URL.
+
+## `policy.test.mjs` — the connection policy
+
+Everything the media layer decides from measured WebRTC stats is a pure function
+in `static/js/net/policy.js`, so it can be pinned down without a browser: the
+quality ladder thresholds (and that a handful of packets at startup decides
+nothing), that worse quality means lower bitrate / lower frame rate / smaller
+picture, that a crowd shrinks every stream (one upload per peer in a mesh), that
+a screen share protects resolution and a camera protects motion, that reconnect
+delays grow, stay capped and are always jittered, and when a link should be
+throttled, ICE-restarted or rebuilt.
+
+## `mesh.test.mjs` — the peer-to-peer media engine
+
+`mesh.js` is what a classroom uses when no LiveKit server is configured, so "the
+camera/voice connection is bad" usually means this file. It is driven here with a
+scripted `RTCPeerConnection`: the suites assert the *actions*, not the internals —
+a starved link gets exactly one `setParameters` (bitrate, frame rate, downscale,
+degradation preference), a healthy link is left alone with the browser defaults,
+bandwidth is restored when the link recovers, a failed link gets one ICE restart
+and is then rebuilt **only by the initiating side** (so the two ends cannot keep
+tearing the link down), and the rebuild is rate-limited.
 
 `--dump` exists because the server side needs proof that it accepts what the
 client sends: `whiteboard/tests.py::ClientContractTests` replays a captured

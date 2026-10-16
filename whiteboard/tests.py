@@ -12,7 +12,9 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from contextlib import ExitStack
 from pathlib import Path
+from unittest.mock import patch
 
 from django.conf import settings
 
@@ -1010,14 +1012,18 @@ class WhiteboardSyncTests(WhiteboardConsumerTestCase):
             first = await ws.receive_json_from()
             await ws.send_json_to({"action": "op", "op": stroke("a")})
             await ws.send_json_to({"action": "op", "op": stroke("b")})
-            await asyncio.sleep(0.3)
+            # our own operations come back to us — that echo is what confirms
+            # an optimistic stroke on the client
+            echoes = [await self.recv(ws, "whiteboard_operation") for _ in range(2)]
             await ws.send_json_to({"action": "resync", "since": 1})
             tail = await ws.receive_json_from()
             await ws.disconnect()
-            return first, tail
+            return first, echoes, tail
 
-        first, tail = async_to_sync(scenario)()
+        first, echoes, tail = async_to_sync(scenario)()
         self.assertTrue(first["full"])
+        self.assertEqual([echo["op"]["id"] for echo in echoes], ["a", "b"])
+        self.assertEqual([echo["seq"] for echo in echoes], [1, 2])
         self.assertFalse(tail["full"])
         self.assertEqual([event["op"]["id"] for event in tail["events"]], ["b"])
         self.assertEqual(tail["seq"], 2)
@@ -1176,3 +1182,127 @@ class ClientMarkupContractTests(SimpleTestCase):
         self.assertIn("export const BUILD", source)
         # the boot line is what a support round asks for first
         self.assertIn("[whiteboard] build", source)
+
+
+class HotPathTests(WhiteboardConsumerTestCase):
+    """The live lane must stay free of database round trips.
+
+    Every cursor update and every streamed stroke used to cost three queries
+    (is the member still active, may they draw, and again for the write before
+    it was relayed), so a room with a couple of people drawing spent its time
+    in the database and everybody else saw the ink arrive late.
+    """
+
+    def setUp(self):
+        super().setUp()
+        set_member_permission(self.classroom, self.owner, self.student_member.id, "can_use_whiteboard", True)
+
+    @staticmethod
+    def _count_queries():
+        """Patch the service functions the consumer calls, counting each call."""
+        from whiteboard import consumers as consumers_module
+
+        counts = {"active_member": 0, "board_permissions": 0}
+        real_active = consumers_module.services.active_member
+        real_perms = consumers_module.services.board_permissions
+
+        def counted_active(member_id, **kwargs):
+            counts["active_member"] += 1
+            return real_active(member_id, **kwargs)
+
+        def counted_perms(member):
+            counts["board_permissions"] += 1
+            return real_perms(member)
+
+        stack = ExitStack()
+        stack.enter_context(patch.object(consumers_module.services, "active_member", counted_active))
+        stack.enter_context(patch.object(consumers_module.services, "board_permissions", counted_perms))
+        return counts, stack
+
+    def test_ephemeral_frames_never_touch_the_database(self):
+        async def scenario(counts):
+            ws = self.ws(self.owner)
+            await ws.connect()
+            await ws.receive_json_from()
+            # the handshake may query; only the steady state has to be free
+            counts["active_member"] = 0
+            counts["board_permissions"] = 0
+            for index in range(12):
+                await ws.send_json_to({
+                    "action": "op",
+                    "op": {
+                        "type": "cursor", "id": f"c{index}", "norm": 1,
+                        "x": 0.1 + index / 100, "y": 0.2,
+                    },
+                })
+            # a streamed (in-progress) stroke goes down the same lane
+            await ws.send_json_to({
+                "action": "op",
+                "op": {
+                    "type": "draw", "tool": "pen", "id": "live1", "norm": 1,
+                    "live": True, "points": [[0.1, 0.1], [0.2, 0.2]],
+                },
+            })
+            await ws.send_json_to({"action": "ping", "t": 1})
+            await self.recv(ws, "pong")
+            await ws.disconnect()
+
+        counts, stack = self._count_queries()
+        with stack:
+            async_to_sync(scenario)(counts)
+        self.assertEqual(counts["active_member"], 0, "the live lane queried the database")
+        self.assertEqual(counts["board_permissions"], 0, "the live lane queried the database")
+
+    def test_a_persistent_operation_still_re_checks_inside_the_write(self):
+        counts, stack = self._count_queries()
+        with stack:
+            async def scenario():
+                ws = self.ws(self.owner)
+                await ws.connect()
+                await ws.receive_json_from()
+                await ws.send_json_to({"action": "op", "op": stroke("perm-check")})
+                await self.recv(ws, "whiteboard_operation")
+                await ws.disconnect()
+
+            async_to_sync(scenario)()
+        self.assertGreaterEqual(counts["active_member"], 1, "the write did not re-check the member")
+        self.assertGreaterEqual(counts["board_permissions"], 1, "the write did not re-check the permission")
+
+    def test_a_viewers_pointers_are_dropped_without_a_round_trip(self):
+        self.classroom.allow_student_whiteboard = False
+        self.classroom.save(update_fields=["allow_student_whiteboard"])
+
+        async def scenario():
+            owner_ws = self.ws(self.owner)
+            await owner_ws.connect()
+            await owner_ws.receive_json_from()
+            student_ws = self.ws(self.student)
+            await student_ws.connect()
+            await student_ws.receive_json_from()
+            await self.recv(owner_ws, "presence")
+
+            for index in range(5):
+                await student_ws.send_json_to({
+                    "action": "op",
+                    "op": {"type": "cursor", "id": f"s{index}", "norm": 1, "x": 0.3, "y": 0.3},
+                })
+            await student_ws.send_json_to({"action": "ping", "t": 7})
+            pong = await self.recv(student_ws, "pong")
+            await student_ws.disconnect()
+            await owner_ws.disconnect()
+            return pong
+
+        # No error frame may be queued in front of the pong: a viewer moving the
+        # mouse used to get one "forbidden" toast per pointer move.
+        self.assertEqual(async_to_sync(scenario)(), {"type": "pong", "t": 7})
+
+    def test_the_history_frame_says_which_broadcast_layer_is_running(self):
+        async def scenario():
+            ws = self.ws(self.owner)
+            await ws.connect()
+            first = await ws.receive_json_from()
+            await ws.disconnect()
+            return first
+
+        first = async_to_sync(scenario)()
+        self.assertIn(first["limits"]["layer"], {"redis", "memory", "none"})

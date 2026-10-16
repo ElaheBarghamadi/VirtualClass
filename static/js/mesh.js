@@ -20,6 +20,9 @@
  * - Fine for small classrooms; large rooms should configure LiveKit.
  */
 import { toast } from './toast.js';
+import {
+    QUALITY, audioPlanFor, planFor, qualityOf, transportAdvice, worstQuality,
+} from './net/policy.js';
 import { analyserLevel, createAnalyser, disposeAnalyser } from './meter.js';
 
 // Deployment-configurable (WEBRTC_ICE_SERVERS → data-ice-servers on the
@@ -34,6 +37,8 @@ let ICE_SERVERS = DEFAULT_ICE_SERVERS;
 // and how patient we are with a transient network drop before restarting ICE.
 const CONNECT_TIMEOUT_MS = 10000;
 const DISCONNECT_GRACE_MS = 3000;
+// How long a rebuilt/recovered link is left alone before we touch it again.
+const REBUILD_COOLDOWN_MS = 10000;
 
 /** Does the deployment provide a TURN relay?  Without one, strict NATs
  *  (corporate / mobile networks) can never be traversed and the failure
@@ -46,6 +51,10 @@ function hasTurnServer() {
 
 class PeerLink {
     constructor(mesh, peer) {
+        this.poorStreak = 0;
+        this.disconnectedAt = null;
+        this.iceRestarted = false;
+        this.lastStats = null;
         this.mesh = mesh;
         this.peer = peer;                      // {identity, member_id, name}
         this.polite = mesh.self.memberId < peer.member_id;
@@ -140,9 +149,16 @@ class PeerLink {
     }
 
     _onConnectState(pc) {
-        if (this._isUp(pc)) { this._settle(); return; }
+        if (this._isUp(pc)) {
+            this.disconnectedAt = null;
+            this.iceRestarted = false;
+            this.poorStreak = 0;
+            this._settle();
+            return;
+        }
         if (pc.connectionState === 'failed') { this._recover(); return; }
         if (pc.connectionState === 'disconnected') {
+            if (!this.disconnectedAt) this.disconnectedAt = Date.now();
             // Often transient (Wi-Fi hiccup, laptop wake) — wait, then act.
             clearTimeout(this._recovery);
             this._recovery = setTimeout(() => {
@@ -235,6 +251,7 @@ class MeshMedia {
         this.onQualityChange = () => {};
 
         this.links = new Map();          // identity → PeerLink
+        this._rebuiltAt = new Map();     // identity → when it was last rebuilt
         this.localStream = null;         // camera+mic
         this.screenStream = null;        // getDisplayMedia
         this.micOn = false;
@@ -1221,30 +1238,150 @@ class MeshMedia {
         for (const link of this.links.values()) {
             try {
                 const stats = await link.pc.getStats();
-                let lost = 0, received = 0, rtt = null;
+                let lost = 0, received = 0, rtt = null, jitter = null;
                 stats.forEach((report) => {
                     if (report.type === 'inbound-rtp' && (report.kind === 'audio' || report.kind === 'video')) {
                         lost += report.packetsLost || 0;
                         received += report.packetsReceived || 0;
+                        if (report.jitter != null && (jitter === null || report.jitter > jitter)) {
+                            jitter = report.jitter;
+                        }
                     }
                     if (report.type === 'candidate-pair' && report.state === 'succeeded' && report.currentRoundTripTime != null) {
                         rtt = report.currentRoundTripTime;
                     }
                 });
-                let q = 'excellent';
-                if (received > 50 && lost / (received + lost) > 0.05) q = 'poor';
-                else if (received > 50 && lost / (received + lost) > 0.015) q = 'good';
-                if (rtt !== null) {
-                    if (rtt > 0.4) q = 'poor';
-                    else if (rtt > 0.15 && q === 'excellent') q = 'good';
-                }
-                if (q === 'poor' || (q === 'good' && worst === 'excellent')) worst = q;
+                const quality = qualityOf({ received, lost, rtt, jitter });
+                link.poorStreak = quality === QUALITY.POOR ? (link.poorStreak || 0) + 1 : 0;
+                if (quality === QUALITY.POOR) link.score = (link.score || 0) + 3;
+                else if (quality === QUALITY.GOOD) link.score = (link.score || 0) + 1;
+                else link.score = 0;
+                link.lastStats = { received, lost, rtt, jitter, quality };
+                worst = worstQuality(worst, quality);
             } catch (e) { /* stats unsupported */ }
         }
+        // Reconnect the links that stopped recovering, and adapt what we send
+        // to what the network can carry.  Nothing is applied before the first
+        // real measurement: a healthy link keeps the browser's own defaults.
+        this._recoverStalledLinks();
+        const measured = this.quality !== 'unknown';
+        if (measured) this._applyQualityPlan(worst);
         if (worst !== this.quality) {
             this.quality = worst;
             this.onQualityChange(worst, null);
         }
+    }
+
+    /**
+     * Starved links: ask for less instead of dropping the call.
+     *
+     * ``setParameters`` is the only lever that changes what a *running* stream
+     * costs; without it a camera keeps pushing its original bitrate into a
+     * congested uplink and everybody's video degrades for everyone.
+     */
+    _applyQualityPlan(quality = this.quality) {
+        const level = quality === 'unknown' ? QUALITY.EXCELLENT : quality;
+        const peerCount = this.links.size;
+        let changed = false;
+        for (const link of this.links.values()) {
+            const camera = planFor({ quality: level, peerCount, isScreen: false });
+            const screen = planFor({ quality: level, peerCount, isScreen: true });
+            const audio = audioPlanFor({ quality: level });
+            changed = this._applySenderPlan(link.pc, { ...camera, audio }) || changed;
+            if (link.screenPc) {
+                changed = this._applySenderPlan(link.screenPc, { ...screen, audio }) || changed;
+            }
+        }
+        if (changed) this._plan = { quality: level, peerCount };
+    }
+
+    /** Push a plan to every video sender of one connection (idempotent). */
+    _applySenderPlan(pc, plan) {
+        if (!pc || !pc.getSenders) return false;
+        // the key is the *applied* values only: informational fields (the
+        // quality label, the room size) must not cause a redundant call
+        const key = [
+            plan.maxBitrate, plan.maxFramerate, plan.scaleResolutionDownBy, plan.degradationPreference,
+        ].join('|');
+        let changed = false;
+        for (const sender of pc.getSenders()) {
+            const track = sender.track;
+            if (!track || track.kind !== 'video') continue;
+            if (sender.__planKey === key) continue;
+            sender.__planKey = key;
+            changed = true;
+            let parameters;
+            try {
+                parameters = sender.getParameters() || {};
+            } catch (err) {
+                continue;
+            }
+            if (!parameters.encodings || !parameters.encodings.length) parameters.encodings = [{}];
+            for (const encoding of parameters.encodings) {
+                encoding.maxBitrate = plan.maxBitrate;
+                encoding.maxFramerate = plan.maxFramerate;
+                encoding.scaleResolutionDownBy = plan.scaleResolutionDownBy;
+            }
+            parameters.degradationPreference = plan.degradationPreference;
+            try {
+                const result = sender.setParameters(parameters);
+                if (result && typeof result.catch === 'function') result.catch(() => {});
+            } catch (err) { /* not supported in this browser */ }
+        }
+        return changed;
+    }
+
+    /**
+     * A link that reported ``failed``/``disconnected`` and did not come back
+     * gets one ICE restart, then is rebuilt from scratch.
+     */
+    _recoverStalledLinks() {
+        for (const link of this.links.values()) {
+            const pc = link.pc;
+            if (!pc || pc.connectionState === 'closed') continue;
+            const iceState = pc.iceConnectionState || pc.connectionState;
+            const disconnectedMs = link.disconnectedAt ? Date.now() - link.disconnectedAt : 0;
+            const advice = transportAdvice({
+                iceState,
+                poorStreak: link.poorStreak || 0,
+                disconnectedMs,
+                alreadyRestarted: Boolean(link.iceRestarted),
+            });
+            if (advice === 'restart-ice') {
+                link.iceRestarted = true;
+                try { pc.restartIce(); } catch (err) { /* older browsers */ }
+                continue;
+            }
+            if (advice === 'recreate') {
+                // Only the initiating side rebuilds; the other side keeps
+                // restarting ICE.  If both ends tore the link down at the same
+                // moment they would keep offering at each other and never settle.
+                const identity = link.peer && link.peer.identity;
+                const mineToRebuild = this.self.memberId > (link.peer.member_id || 0);
+                const lastRebuild = this._rebuiltAt.get(identity) || 0;
+                if (mineToRebuild && Date.now() - lastRebuild > REBUILD_COOLDOWN_MS) {
+                    this._replaceLink(link);
+                } else if (!mineToRebuild) {
+                    // keep trying: a fresh ICE round often recovers a link that
+                    // looks dead from the other side of the class
+                    link.iceRestarted = false;
+                    if (Date.now() - (link.lastRestartAt || 0) > REBUILD_COOLDOWN_MS) {
+                        link.lastRestartAt = Date.now();
+                        try { pc.restartIce(); } catch (err) { /* older browsers */ }
+                    }
+                }
+            }
+        }
+    }
+
+    /** Rebuild one peer link (same participant, fresh connection). */
+    _replaceLink(link) {
+        const identity = link.peer && link.peer.identity;
+        if (!identity) return;
+        this._rebuiltAt.set(identity, Date.now());
+        const peer = link.peer;
+        this._removePeer(identity);
+        if (peer) this.syncPeers([...this.links.values()].map((l) => l.peer).concat([peer]));
     }
 
     _syncLocalUI() {

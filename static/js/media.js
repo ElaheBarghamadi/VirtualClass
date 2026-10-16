@@ -12,6 +12,7 @@
  */
 import { toast } from './toast.js';
 import { MeshMedia } from './mesh.js';
+import { backoffDelay } from './net/policy.js';
 import { analyserLevel, createAnalyser, disposeAnalyser } from './meter.js';
 
 const LivekitClient = window.LivekitClient;
@@ -65,7 +66,8 @@ class LivekitMedia {
         await this.connect();
     }
 
-    async connect() {
+    async connect({ retry = true } = {}) {
+        this._intentionalDisconnect = false;
         try {
             const res = await fetch(`/class/${this.roomCode}/media-token/`, {
                 headers: { 'X-Requested-With': 'fetch' },
@@ -76,20 +78,58 @@ class LivekitMedia {
             this.room = new LivekitClient.Room({
                 adaptiveStream: true,
                 dynacast: true,
-                publishDefaults: { simulcast: true },
+                // Speech must survive a weak link: FEC + DTX are what make the
+                // difference on a bad mobile connection, and the browser-side
+                // processing is the same trio Meet/Zoom ask for.
+                publishDefaults: {
+                    simulcast: true,
+                    dtx: true,
+                    red: true,
+                    stopMicTrackOnMute: false,
+                },
+                audioCaptureDefaults: {
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true,
+                },
+                videoCaptureDefaults: {
+                    resolution: { width: 1280, height: 720, frameRate: 30 },
+                },
             });
             this._wireEvents();
             await this.room.connect(url, token);
             this.localParticipant = this.room.localParticipant;
+            this.connectAttempts = 0;
+            this.onQualityChange('excellent', null);
             document.getElementById('stage-empty-text').textContent =
                 'برای فعال کردن دوربین/میکروفون از دکمه‌های پایین استفاده کنید.';
         } catch (err) {
             console.warn('[media] connect failed:', err);
-            if (this.emptyEl) {
-                document.getElementById('stage-empty-text').textContent =
-                    'اتصال به سرور رسانه ناموفق بود — گفتگو و تخته فعال‌اند.';
-            }
+            this._showOfflineState();
+            // The token request itself can fail because the classroom socket
+            // is down or the server is restarting: retry with a jittered
+            // backoff instead of leaving the class without media for good.
+            if (retry && !this._intentionalDisconnect) this._scheduleReconnect();
         }
+    }
+
+    _showOfflineState() {
+        const text = document.getElementById('stage-empty-text');
+        if (text) {
+            text.textContent = 'اتصال به سرور رسانه ناموفق بود — گفتگو و تخته فعال‌اند؛ تلاش مجدد…';
+        }
+    }
+
+    _scheduleReconnect() {
+        if (this._reconnectTimer) return;
+        this.connectAttempts = (this.connectAttempts || 0) + 1;
+        const wait = backoffDelay(this.connectAttempts - 1, { base: 1500, max: 30000 });
+        this.onQualityChange('reconnecting', null);
+        this._reconnectTimer = setTimeout(() => {
+            this._reconnectTimer = null;
+            if (this._intentionalDisconnect) return;
+            this.connect();
+        }, wait);
     }
 
     _wireEvents() {
@@ -116,8 +156,28 @@ class LivekitMedia {
                 }
             })
             .on(R.SignalReconnecting, () => this.onQualityChange('reconnecting', null))
-            .on(R.SignalConnected, () => this.onQualityChange(this.quality, null))
-            .on(R.Disconnected, () => toast('اتصال رسانه قطع شد؛ در حال تلاش مجدد…', 'warning'))
+            .on(R.SignalConnected, () => {
+                // after a silent reconnect the tiles and track states are what
+                // the server thinks they are, not what a listener missed
+                this.onQualityChange('excellent', null);
+                for (const participant of this.room.remoteParticipants.values()) {
+                    this._refreshTrackState(participant);
+                }
+                this._syncLocalUI();
+            })
+            .on(R.Reconnecting, () => this.onQualityChange('reconnecting', null))
+            .on(R.Reconnected, () => {
+                this.onQualityChange('excellent', null);
+                // our publications survived the reconnect: make sure the local
+                // UI shows the tracks that are actually live
+                if (this.micOn) this._syncLocalUI();
+            })
+            .on(R.Disconnected, () => {
+                if (this._intentionalDisconnect) return;
+                toast('اتصال رسانه قطع شد؛ در حال تلاش مجدد…', 'warning');
+                this._showOfflineState();
+                this._scheduleReconnect();
+            })
             .on(R.MediaDevicesError, (e) => toast(`خطای دستگاه رسانه: ${e.message || ''}`, 'error'));
     }
 
@@ -645,6 +705,10 @@ class LivekitMedia {
     }
 
     disconnect() {
+        // an intentional hang-up must not be resurrected by the retry timer
+        this._intentionalDisconnect = true;
+        clearTimeout(this._reconnectTimer);
+        this._reconnectTimer = null;
         if (this.room) this.room.disconnect();
     }
 }

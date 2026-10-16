@@ -83,6 +83,12 @@ async function api(path, body = {}) {
 
 // ---------------------------------------------------------------------------
 // Presence WebSocket + connection status + real RTT
+// Presence socket tuning.  A dropped frame on this channel is a lost
+// signalling message (camera/mic negotiation) or a lost chat message, so it is
+// queued instead of dropped, and a wedged worker is detected by silence.
+const PRESENCE_OUTBOX_MAX = 200;
+const PRESENCE_STALE_MS = 45000;
+
 // ---------------------------------------------------------------------------
 class PresenceClient {
     constructor() {
@@ -98,30 +104,126 @@ class PresenceClient {
         this.filter = 'ALL';
         this._pingAt = 0;
         this.rtt = null;
+        this.attempt = 0;
+        this.closed = false;
+        this._everConnected = false;
+        this.lastMessageAt = Date.now();
+        this.outbox = [];
+        this._retryTimer = null;
+        this._watchdogTimer = null;
+        this._rttTimer = null;
+        this._resumeBound = false;
+    }
+
+    /**
+     * Reconnect as soon as the network or the tab comes back, instead of
+     * waiting out the backoff: a phone that was in a pocket for a minute must
+     * not take another ten seconds to rejoin the class.
+     */
+    _bindResumeTriggers() {
+        if (this._resumeBound) return;
+        this._resumeBound = true;
+        const resume = (reason) => {
+            if (this.closed) return;
+            if (this.ws?.readyState === WebSocket.OPEN) return;
+            this._reconnectNow(reason);
+        };
+        window.addEventListener('online', () => resume('online'));
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') resume('visible');
+        });
     }
 
     connect() {
-        this.setStatus(this.ws ? 'reconnecting' : 'connecting');
+        if (this.closed) return;
+        // One socket at a time: the reconnect timer can fire while a socket is
+        // still handshaking, and a second one would leave a ghost participant
+        // and reset the roster on its own snapshot.
+        if (this.ws && (this.ws.readyState === WebSocket.OPEN
+            || this.ws.readyState === WebSocket.CONNECTING)) {
+            return;
+        }
+        this._clearTimers();
+        this.setStatus(this._everConnected ? 'reconnecting' : 'connecting');
         const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-        this.ws = new WebSocket(`${proto}://${location.host}/ws/classroom/${ROOM_CODE}/`);
-        this.ws.onopen = () => {
+        const socket = new WebSocket(`${proto}://${location.host}/ws/classroom/${ROOM_CODE}/`);
+        this.ws = socket;
+        socket.onopen = () => {
+            if (socket !== this.ws) return;
             this.retryDelay = 1000;
+            this.attempt = 0;
+            this._everConnected = true;
+            this.lastMessageAt = Date.now();
             this.setStatus('connected');
+            this._flushOutbox();
             // real round-trip measurement, repeated every 10s
             this._measureRtt();
             this._rttTimer = setInterval(() => this._measureRtt(), 10_000);
+            // half-open sockets: a silently dead TCP connection never fires
+            // onclose, so the page would keep pretending to be connected while
+            // nothing arrives (no chat, no camera negotiation, no roster)
+            this._watchdogTimer = setInterval(() => {
+                if (Date.now() - this.lastMessageAt > PRESENCE_STALE_MS) this._reconnectNow('stale');
+            }, 5000);
         };
-        this.ws.onmessage = (evt) => handleEvent(JSON.parse(evt.data));
-        this.ws.onclose = (evt) => {
-            clearInterval(this._rttTimer);
-            if (evt.code === 4401 || evt.code === 4403) {
+        socket.onmessage = (evt) => {
+            if (socket !== this.ws) return;
+            this.lastMessageAt = Date.now();
+            let data;
+            try {
+                data = JSON.parse(evt.data);
+            } catch (err) {
+                console.warn('[presence] ignoring an unreadable frame:', err);
+                return;
+            }
+            // 'pong' is handled by handleEvent, which owns the rtt bookkeeping
+            handleEvent(data);
+        };
+        socket.onclose = (evt) => {
+            this._clearTimers();
+            if (socket !== this.ws) return;
+            this.ws = null;
+            if (evt && (evt.code === 4401 || evt.code === 4403)) {
+                this.closed = true;
                 toast('دسترسی شما به کلاس قطع شده است.', 'error');
                 setTimeout(() => { location.href = `/class/${ROOM_CODE}/lobby/`; }, 1800);
                 return;
             }
             this.setStatus('reconnecting');
-            setTimeout(() => this.connect(), this.retryDelay = Math.min(this.retryDelay * 2, 15000));
+            this._scheduleReconnect();
         };
+    }
+
+    _clearTimers() {
+        clearInterval(this._rttTimer);
+        clearInterval(this._watchdogTimer);
+        clearTimeout(this._retryTimer);
+        this._rttTimer = this._watchdogTimer = this._retryTimer = null;
+    }
+
+    /** Jittered exponential backoff — a class of 30 must not retry in lockstep. */
+    _scheduleReconnect(delay = null) {
+        if (this.closed) return;
+        if (this._retryTimer) return;
+        const wait = delay !== null ? delay
+            : Math.min(this.retryDelay, 15000) * (0.8 + Math.random() * 0.4);
+        this.retryDelay = Math.min(this.retryDelay * 1.8, 15000);
+        this._retryTimer = setTimeout(() => {
+            this._retryTimer = null;
+            this.connect();
+        }, Math.max(250, wait));
+    }
+
+    /** Drop a dead socket now and dial again (network came back, tab refocused…). */
+    _reconnectNow(reason = '') {
+        if (this.closed) return;
+        this._clearTimers();
+        const socket = this.ws;
+        this.ws = null;
+        try { socket?.close(); } catch (err) { /* already gone */ }
+        if (reason) console.info(`[presence] reconnecting (${reason})`);
+        this.retryDelay = 1000;
+        this.connect();
     }
 
     _measureRtt() {
@@ -129,8 +231,36 @@ class PresenceClient {
         this.send({ action: 'ping' });
     }
 
+    /**
+     * Send a frame to the room socket.
+     *
+     * Frames are queued while the socket is down instead of being dropped:
+     * this channel carries RTC signalling, so a lost ``rtc_signal`` is a
+     * camera that never shows up for the other side, and a lost
+     * ``media_state`` leaves the roster showing a microphone that is not there.
+     */
     send(payload) {
-        if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(payload));
+        if (this.closed) return false;
+        if (this.ws?.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify(payload));
+            return true;
+        }
+        // a latency probe is worthless once it is late; everything else is
+        // still useful when the socket comes back
+        if (payload.action !== 'ping') {
+            this.outbox.push(payload);
+            if (this.outbox.length > PRESENCE_OUTBOX_MAX) this.outbox.shift();
+        }
+        return false;
+    }
+
+    _flushOutbox() {
+        if (!this.outbox.length) return;
+        const pending = this.outbox;
+        this.outbox = [];
+        for (const payload of pending) {
+            if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(payload));
+        }
     }
 
     setStatus(state) {
@@ -453,6 +583,7 @@ function initPermsDialog() {
 
 
 const presence = new PresenceClient();
+presence._bindResumeTriggers();
 
 function qualityLabel(q) {
     return { excellent: 'عالی', good: 'خوب', poor: 'ضعیف', lost: 'قطع', unknown: 'نامشخص' }[q] || q;

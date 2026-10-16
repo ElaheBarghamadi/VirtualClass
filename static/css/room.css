@@ -496,6 +496,14 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
 .wb-popover-toggle { position: relative; }
 .wb-popover-toggle[aria-expanded="true"] { background: var(--surface-2); }
 .wb-status-text, .wb-status-rtt { white-space: nowrap; }
+/* per-op round trip: how fast the rest of the class sees a change */
+.wb-lag {
+    font-variant-numeric: tabular-nums; white-space: nowrap; opacity: .8;
+    padding: .05rem .4rem; border-radius: 999px;
+    border: 1px solid var(--room-border); background: var(--surface-2);
+}
+.wb-lag[data-level="slow"] { border-color: #d97706; color: #b45309; }
+.wb-lag[data-level="bad"] { border-color: #dc2626; color: #b91c1c; }
 
 /* --- "someone is drawing elsewhere" nudge --- */
 #view-whiteboard .wb-activity {

@@ -306,10 +306,29 @@ export class BoardChrome {
 
     _renderRtt() {
         const rtt = this.wb.socket?.rtt;
-        const pill = this.$('wb-status');
-        if (!pill) return;
-        const target = pill.querySelector('.wb-status-rtt');
+        const target = this.$('wb-status-rtt') || this.$('wb-status')?.querySelector('.wb-status-rtt');
         if (target) target.textContent = Number.isFinite(rtt) ? `${Math.round(rtt)} ms` : '';
+    }
+
+    /**
+     * Show how long this client's own operations take to come back confirmed.
+     * That round trip is what the rest of the class experiences as delay, so
+     * it belongs on screen (and in ``__wb.diag()``) rather than in a hunch.
+     */
+    setLag(summary) {
+        const chip = this.$('wb-lag');
+        if (!chip) return;
+        if (!summary || !summary.count || summary.p50 === null) {
+            chip.classList.add('hidden');
+            return;
+        }
+        const level = summary.p50 > 900 ? 'bad' : (summary.p50 > 400 ? 'slow' : 'ok');
+        const parts = [`⏱ ${summary.p50} ms`];
+        if (Number.isFinite(summary.serverMs)) parts.push(`سرور ${summary.serverMs}`);
+        chip.textContent = parts.join(' · ');
+        chip.dataset.level = level;
+        chip.classList.remove('hidden');
+        this._renderRtt();
     }
 
     setPage(page, pageCount) {

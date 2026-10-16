@@ -31,6 +31,44 @@ import { BoardChrome } from './wb/ui.js';
 import { PAGE_H, PAGE_W, clamp, opPoints, opX, opY } from './wb/geometry.js';
 
 /**
+ * Rolling op-latency statistics.
+ *
+ * "The board lags for everybody else" is impossible to chase from a
+ * screenshot, so the client keeps the numbers that matter: how long its own
+ * operations take to come back confirmed (round trip through the server,
+ * persistence and broadcast) and how long the server itself spent on the
+ * frame.  Both are surfaced in ``__wb.diag()`` and in the status pill.
+ */
+class LatencyMeter {
+    constructor(size = 40) {
+        this.samples = [];
+        this.size = size;
+        this.serverMs = null;
+        this.slow = 0;
+    }
+
+    push(ms) {
+        if (!Number.isFinite(ms) || ms < 0) return;
+        this.samples.push(ms);
+        if (this.samples.length > this.size) this.samples.shift();
+    }
+
+    summary() {
+        if (!this.samples.length) return { count: 0, p50: null, p95: null, last: null, serverMs: this.serverMs, slow: this.slow };
+        const sorted = [...this.samples].sort((a, b) => a - b);
+        const at = (fraction) => Math.round(sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * fraction))]);
+        return {
+            count: sorted.length,
+            p50: at(0.5),
+            p95: at(0.95),
+            last: Math.round(this.samples[this.samples.length - 1]),
+            serverMs: this.serverMs,
+            slow: this.slow,
+        };
+    }
+}
+
+/**
  * Build stamp of this bundle.  The room template renders the stamp of the
  * *server's* copy and the page compares the two: when a stale script is still
  * cached the board would otherwise just sit there doing nothing.
@@ -141,6 +179,10 @@ class WhiteboardImpl {
             },
         });
         this.ready = true;
+        this.latency = new LatencyMeter();
+        this._sentAt = new Map();   // op id → when it left this client
+        this._layer = '';
+        this._layerWarned = false;
         this.render();
         this.socket.connect();
         if (typeof console !== 'undefined' && console.info) {
@@ -266,6 +308,18 @@ class WhiteboardImpl {
         this._refreshPresence(this.socket?.roster() || []);
         this.render();
         if (payload.needs_snapshot) this._scheduleSnapshot();
+        this._layer = payload.limits?.layer || this._layer || '';
+        // An in-memory broadcast layer only reaches sockets in the same worker
+        // process: with several workers the class sees one another's strokes
+        // late or not at all.  That is a server setup problem, and it looks
+        // exactly like a broken board, so say it once.
+        if (this._layer === 'memory' && !this._layerWarned) {
+            this._layerWarned = true;
+            console.warn('[whiteboard] the server is using the in-memory channel layer '
+                + '(channels.layers.InMemoryChannelLayer): real-time updates only work '
+                + 'inside a single worker process. Set REDIS_URL and restart to fix it.');
+            this.toast('همگام‌سازی تخته فقط در یک پروسهٔ سرور کار می‌کند؛ برای چند نفر هم‌زمان REDIS_URL را تنظیم کنید.', 'warning', 9000);
+        }
     }
 
     _onOperation(message) {
@@ -278,6 +332,16 @@ class WhiteboardImpl {
         const seq = Number(message.seq) || 0;
         if (seq && seq <= this.model.revision) return;
         const mine = message.actor_identity === this.identity;
+
+        // round trip of our own operation: this is the number that says how
+        // far behind the rest of the class is
+        const sentAt = op.id ? this._sentAt.get(op.id) : null;
+        if (sentAt !== null && sentAt !== undefined) {
+            this._sentAt.delete(op.id);
+            this.latency.push(performance.now() - sentAt);
+            if (Number.isFinite(Number(message.server_ms))) this.latency.serverMs = Number(message.server_ms);
+            this.chrome?.setLag?.(this.latency.summary());
+        }
 
         if (mine && op.id) {
             const pending = this.model.pending.get(op.id);
@@ -475,6 +539,7 @@ class WhiteboardImpl {
             }
             this.model.notePending(op);
             this.model.apply(op);
+            if (op.id) this._sentAt.set(op.id, performance.now());
             this.socket?.sendOp(op);
         }
         if (record && undoOps.length) {
@@ -895,6 +960,8 @@ class WhiteboardImpl {
                 view: this.renderer ? (this.renderer.unavailable ? 'no-2d-context' : 'ok') : 'missing',
             } : 'missing',
             wrap: box(wrap),
+            layer: this._layer || null,
+            latency: this.latency ? this.latency.summary() : null,
             socket: this.socket ? {
                 state: this.socket.status,
                 url: this.socket.url(),

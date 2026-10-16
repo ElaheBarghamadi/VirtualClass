@@ -29,9 +29,12 @@ for the very next operation.
 from __future__ import annotations
 
 import logging
+import time
+from collections import deque
 from urllib.parse import parse_qs
 
 from channels.db import database_sync_to_async
+from channels.layers import get_channel_layer
 
 from classrooms.services import member_group, resolve_scope_member
 from classrooms.ws_security import (
@@ -55,6 +58,20 @@ logger = logging.getLogger(__name__)
 
 CLOSED_UNAUTHENTICATED = 4401
 CLOSED_FORBIDDEN = 4403
+
+#: How long a permission/membership answer may be reused.
+#:
+#: Pointers and in-progress strokes arrive many times per second and used to
+#: cost three database round trips each before they were relayed, which is what
+#: made everyone else's board lag behind the person drawing.  The answer is now
+#: cached for a few seconds and thrown away on the spot whenever the member is
+#: actually notified about a change, so a revocation still takes effect
+#: immediately and the live path costs no queries at all.
+PERMISSION_TTL = 3.0
+
+#: A frame that took longer than this is logged: it is the number to look at
+#: when "the board lags for everybody" needs a cause.
+SLOW_FRAME_MS = 250
 
 
 class WhiteboardConsumer(SafeJsonWebsocketConsumer):
@@ -83,6 +100,16 @@ class WhiteboardConsumer(SafeJsonWebsocketConsumer):
             return
 
         self._limiter = RateLimiter(RATE_LIMIT_OPS)
+        # Sequences this connection broadcast itself.  They are the only frames
+        # allowed through the watermark check below: a client has to hear its
+        # own operation come back, because that echo is what turns its
+        # optimistic stroke into a confirmed one (and adopts any normalisation
+        # the server applied).
+        self._own_seqs: deque[int] = deque(maxlen=128)
+        # cached (is_active, can_draw) for the hot path — see PERMISSION_TTL
+        self._perm_checked_at = 0.0
+        self._member_is_active = True
+        self._perm_can_draw = False
         self.classroom, self.member = await self._load_membership()
         if self.member is None or self.classroom is None:
             await self.close(code=CLOSED_UNAUTHENTICATED if not authenticated else CLOSED_FORBIDDEN)
@@ -106,6 +133,11 @@ class WhiteboardConsumer(SafeJsonWebsocketConsumer):
 
         self.last_seq = snapshot["seq"]
         self.can_draw = snapshot["you"]["can_draw"]
+        # the frame we just sent already carries a fresh answer, so the live
+        # lane never needs a query for it
+        self._member_is_active = True
+        self._perm_can_draw = self.can_draw
+        self._perm_checked_at = time.monotonic()
         await self.send_json(snapshot)
         await self._broadcast_presence("join")
 
@@ -190,6 +222,7 @@ class WhiteboardConsumer(SafeJsonWebsocketConsumer):
             await self._error("تعداد عملیات بیش از حد مجاز است؛ کمی صبر کنید.", "rate-limited")
             return
 
+        started = time.monotonic()
         ids = [op.get("id") for op in ops if isinstance(op, dict) and op.get("id")]
         for op in ops:
             live = isinstance(op, dict) and bool(op.get("live"))
@@ -198,10 +231,6 @@ class WhiteboardConsumer(SafeJsonWebsocketConsumer):
                 logger.info("whiteboard_op_rejected room=%s reason=%s", self.room_code, reason)
                 await self._error("عملیات تخته نامعتبر است.", "invalid-op", ids)
                 return
-
-        if not await self._member_active_now():
-            await self.close(code=CLOSED_FORBIDDEN)
-            return
 
         # Classify by position: two identical operations in one batch must
         # never be able to drop each other (``op not in list`` compares values).
@@ -212,17 +241,26 @@ class WhiteboardConsumer(SafeJsonWebsocketConsumer):
         ephemeral = [op for op, flag in zip(ops, is_ephemeral) if flag]
         persistent = [op for op, flag in zip(ops, is_ephemeral) if not flag]
 
-        if not await self._can_draw_now():
-            self.can_draw = False
-            await self._error("شما اجازهٔ استفاده از تخته را ندارید.", "forbidden", ids)
-            return
-
-        for op in ephemeral:
-            await self._relay_ephemeral(op)
+        # ---- live lane: pointers and in-progress strokes --------------------
+        # These are worthless a moment later, so they are relayed straight from
+        # the cached membership and never touch the database.  A viewer's
+        # pointers are dropped silently (no error frame per mouse move, which
+        # used to spam a toast and a round trip for every pixel of movement).
+        if ephemeral:
+            active, can_draw = await self._cached_permissions()
+            if not active:
+                await self.close(code=CLOSED_FORBIDDEN)
+                return
+            if can_draw:
+                for op in ephemeral:
+                    await self._relay_ephemeral(op)
 
         if not persistent:
+            self._log_slow_frame(started, len(ops), "ephemeral")
             return
 
+        # The permission is re-checked *inside* the write transaction (the only
+        # authoritative place), so no second round trip is needed out here.
         try:
             result = await self._persist(persistent)
         except services.OpRejected as exc:
@@ -231,18 +269,24 @@ class WhiteboardConsumer(SafeJsonWebsocketConsumer):
             return
         if result is None:
             self.can_draw = False
+            self._perm_checked_at = 0.0  # the cached answer was wrong
             await self._error("شما اجازهٔ استفاده از تخته را ندارید.", "forbidden", ids)
             return
+        self._perm_can_draw = True
 
         stored, board_state = result
+        server_ms = round((time.monotonic() - started) * 1000)
         for op, seq, event_id in stored:
             self.last_seq = max(self.last_seq, seq)
+            self._own_seqs.append(seq)
             await self._broadcast(
                 op,
                 seq=seq,
                 event_id=event_id,
                 board=self._meta_for(op, board_state),
+                server_ms=server_ms,
             )
+        self._log_slow_frame(started, len(ops), "persistent")
 
     # ------------------------------------------------------------------ #
     # Group handlers
@@ -260,12 +304,23 @@ class WhiteboardConsumer(SafeJsonWebsocketConsumer):
         }
         if event.get("board"):
             payload["board"] = event["board"]
-        # The snapshot/operation race on (re)connect is resolved by sequence:
-        # everything at or below the watermark is already in the client.
-        if not payload["ephemeral"]:
-            if payload["seq"] <= self.last_seq:
+        if event.get("server_ms") is not None:
+            payload["server_ms"] = int(event["server_ms"])
+        if payload["ephemeral"]:
+            # A mirror of our own pointer/stroke is pure waste: the live lane
+            # can be the busiest traffic on the board (a streamed stroke carries
+            # up to MAX_LIVE_POINTS points), and the sender has it on screen
+            # already.
+            if event.get("sender") == self.channel_name:
                 return
-            self.last_seq = payload["seq"]
+        else:
+            # The snapshot/operation race on (re)connect is resolved by
+            # sequence: everything at or below the watermark is already in the
+            # client — except our own operation, whose echo is exactly how the
+            # client confirms it.
+            if payload["seq"] <= self.last_seq and payload["seq"] not in self._own_seqs:
+                return
+            self.last_seq = max(self.last_seq, payload["seq"])
         await self.send_json(payload)
 
     async def board_presence(self, event: dict) -> None:
@@ -282,6 +337,11 @@ class WhiteboardConsumer(SafeJsonWebsocketConsumer):
 
     async def classroom_notification(self, event: dict) -> None:
         payload = event["payload"]
+        # anything that can carry a permission change invalidates the cached
+        # answer used by the live lane, so a lock-out is immediate
+        event_name = str(payload.get("event") or "")
+        if event_name or payload.get("type") == "notification":
+            self._invalidate_permissions()
         await self.send_json(payload)
         if payload.get("event") in {
             "removed",
@@ -294,7 +354,9 @@ class WhiteboardConsumer(SafeJsonWebsocketConsumer):
     # ------------------------------------------------------------------ #
     # Outgoing helpers
     # ------------------------------------------------------------------ #
-    async def _broadcast(self, op: dict, *, seq: int, event_id: int | None = None, board=None) -> None:
+    async def _broadcast(
+        self, op: dict, *, seq: int, event_id: int | None = None, board=None, server_ms: int | None = None
+    ) -> None:
         await self.channel_layer.group_send(
             self.group_name,
             {
@@ -307,6 +369,10 @@ class WhiteboardConsumer(SafeJsonWebsocketConsumer):
                 "actor_identity": self.member.identity,
                 "actor_name": self.member.participant_name,
                 "board": board,
+                # how long the server spent accepting this op — the client
+                # reports it in __wb.diag() so a slow server is not mistaken
+                # for a slow network
+                "server_ms": server_ms,
             },
         )
 
@@ -323,6 +389,8 @@ class WhiteboardConsumer(SafeJsonWebsocketConsumer):
                 "live": live,
                 "actor_identity": self.member.identity,
                 "actor_name": self.member.participant_name,
+                # our own channel skips the mirror (see whiteboard_operation)
+                "sender": self.channel_name,
             },
         )
 
@@ -358,6 +426,37 @@ class WhiteboardConsumer(SafeJsonWebsocketConsumer):
         return {"page_count": board_state["page_count"]}
 
     # ------------------------------------------------------------------ #
+    # Hot-path helpers
+    # ------------------------------------------------------------------ #
+    async def _cached_permissions(self) -> tuple[bool, bool]:
+        """``(is_active, can_draw)`` without hitting the database every frame.
+
+        The answer is reused for :data:`PERMISSION_TTL` seconds and dropped the
+        moment the member is notified about a permission change, so live
+        traffic (cursors, in-progress strokes) costs no queries while a
+        revocation still lands within a frame or two.
+        """
+        now = time.monotonic()
+        if now - self._perm_checked_at > PERMISSION_TTL:
+            result = await self._membership_now()
+            if result is None:
+                return False, False
+            self._member_is_active, self._perm_can_draw = result
+            self._perm_checked_at = now
+        return self._member_is_active, self._perm_can_draw
+
+    def _invalidate_permissions(self) -> None:
+        self._perm_checked_at = 0.0
+
+    def _log_slow_frame(self, started: float, count: int, kind: str) -> None:
+        elapsed = (time.monotonic() - started) * 1000
+        if elapsed >= SLOW_FRAME_MS:
+            logger.warning(
+                "whiteboard_slow_frame room=%s kind=%s ops=%d ms=%.0f",
+                self.room_code, kind, count, elapsed,
+            )
+
+    # ------------------------------------------------------------------ #
     # Database helpers (all synchronous work lives in whiteboard.services)
     # ------------------------------------------------------------------ #
     @database_sync_to_async
@@ -380,12 +479,28 @@ class WhiteboardConsumer(SafeJsonWebsocketConsumer):
             "can_draw": perms["can_draw"],
             "can_present": perms["can_present"],
         }
+        layer = get_channel_layer()
         payload["limits"] = {
             "max_op_bytes": MAX_OP_BYTES,
             "max_points": MAX_POINTS,
             "batch": MAX_BATCH_OPS,
+            # Which broadcast layer the server is running on.  An in-memory
+            # layer only reaches sockets inside this very process, so with more
+            # than one worker the class sees one another's strokes late or not
+            # at all — the client shows a hint instead of pretending.
+            "layer": "redis" if layer and "Redis" in type(layer).__name__ else (
+                "memory" if layer else "none"
+            ),
         }
         return payload
+
+    @database_sync_to_async
+    def _membership_now(self) -> tuple[bool, bool] | None:
+        """One query for both answers the hot path needs."""
+        member = services.active_member(self.member.id)
+        if member is None:
+            return None
+        return True, bool(services.board_permissions(member)["can_draw"])
 
     @database_sync_to_async
     def _member_active_now(self) -> bool:
@@ -398,6 +513,8 @@ class WhiteboardConsumer(SafeJsonWebsocketConsumer):
 
     async def _refresh_permissions(self) -> None:
         self.can_draw = await self._can_draw_now()
+        self._perm_can_draw = self.can_draw
+        self._perm_checked_at = time.monotonic()
 
     @database_sync_to_async
     def _persist(self, ops: list[dict]):
