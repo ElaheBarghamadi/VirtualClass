@@ -203,14 +203,60 @@ def run(base: str, code: str) -> int:
         pg_o.click(mic_cb); pg_o.wait_for_timeout(800)   # grant it back
         pg_o.click("#perms-x"); pg_o.wait_for_timeout(400)
 
-        # ---------- whiteboard permission feedback (student cannot draw) ----------
+        # ---------- live whiteboard permission grant + collaboration ----------
         pg_s.evaluate("() => window.__switchView('whiteboard')")
         pg_s.wait_for_timeout(900)
         check("non-drawer sees whiteboard explanation hint",
               pg_s.evaluate("() => !document.getElementById('wb-nodraw-hint')?.classList.contains('hidden')"))
         check("non-drawer toolbar greyed out",
               pg_s.evaluate("() => document.querySelector('.wb-toolbar')?.classList.contains('no-draw')") is True)
+
+        # Room-wide policy must allow student whiteboard first; the individual
+        # permission below still controls whether this specific student draws.
+        pg_o.click("#btn-settings"); pg_o.wait_for_selector("#settings-dialog[open]")
+        pg_o.check('input[name="allow_student_whiteboard"]')
+        pg_o.click("#settings-save"); pg_o.wait_for_timeout(1200)
+        pg_o.click(f"{sel} .hc-btn >> nth=2")
+        pg_o.wait_for_selector("#perms-dialog[open]")
+        wb_cb = '#perms-list input[data-perm="can_use_whiteboard"]'
+        pg_o.check(wb_cb); pg_o.wait_for_timeout(1200)
+        check("owner grants whiteboard permission live",
+              pg_s.evaluate("() => window.__wb?.canDraw === true"
+                            " && !document.querySelector('.wb-toolbar')?.classList.contains('no-draw')"
+                            " && document.getElementById('wb-nodraw-hint')?.classList.contains('hidden')") is True)
+        pg_o.click("#perms-x"); pg_o.wait_for_timeout(250)
+
+        pg_o.evaluate("() => window.__switchView('whiteboard')")
+        pg_s.evaluate("() => window.__switchView('whiteboard')")
+        pg_o.wait_for_timeout(900); pg_s.wait_for_timeout(900)
+        owner_ops_before = pg_o.evaluate("() => (window.__wb._pageOps.get(window.__wb.page) || []).length")
+        box_s = pg_s.locator("#whiteboard-canvas").bounding_box()
+        pg_s.mouse.move(box_s["x"] + 90, box_s["y"] + 80)
+        pg_s.mouse.down()
+        pg_s.mouse.move(box_s["x"] + 210, box_s["y"] + 150, steps=6)
+        pg_s.mouse.up()
+        pg_o.wait_for_function(
+            "n => (window.__wb._pageOps.get(window.__wb.page) || []).length > n",
+            arg=owner_ops_before, timeout=10000,
+        )
+        check("granted student's whiteboard stroke syncs to owner", True)
+
+        pg_o.click(f"{sel} .hc-btn >> nth=2")
+        pg_o.wait_for_selector("#perms-dialog[open]")
+        pg_o.uncheck(wb_cb); pg_o.wait_for_timeout(1200)
+        check("owner revokes whiteboard permission live",
+              pg_s.evaluate("() => window.__wb?.canDraw === false"
+                            " && document.querySelector('.wb-toolbar')?.classList.contains('no-draw')"
+                            " && !document.getElementById('wb-nodraw-hint')?.classList.contains('hidden')") is True)
+        pg_o.click("#perms-x"); pg_o.wait_for_timeout(250)
         pg_s.evaluate("() => window.__switchView('media')")
+        pg_o.evaluate("() => window.__switchView('media')")
+
+        # Restore the demo class's default room-wide policy for the rest of the
+        # suite; per-member revocation above left the student disabled already.
+        pg_o.click("#btn-settings"); pg_o.wait_for_selector("#settings-dialog[open]")
+        pg_o.uncheck('input[name="allow_student_whiteboard"]')
+        pg_o.click("#settings-save"); pg_o.wait_for_timeout(1200)
         pg_s.wait_for_timeout(400)
 
         # ---------- promotion ----------

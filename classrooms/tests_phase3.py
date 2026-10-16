@@ -553,6 +553,38 @@ class RtcSignalRelayTests(TransactionTestCase):
         self.classroom.refresh_from_db()
         self.assertFalse(self.classroom.whiteboard_open)
 
+    def test_room_setting_change_pushes_fresh_effective_permissions(self):
+        from asgiref.sync import sync_to_async
+        from classrooms.services import set_member_permission, update_settings
+
+        self.classroom.allow_student_whiteboard = True
+        self.classroom.save(update_fields=["allow_student_whiteboard"])
+        set_member_permission(
+            self.classroom, self.owner, self.stu_member.id, "can_use_whiteboard", True,
+        )
+        self.classroom.refresh_from_db()
+
+        async def scenario():
+            owner_ws = await self._connected(self.owner)
+            student_ws = await self._connected(self.student)
+            await sync_to_async(update_settings)(
+                self.classroom, self.owner, {"allow_student_whiteboard": False},
+            )
+            owner_event = await self._receive_typed(owner_ws, "settings_changed")
+            student_event = await self._receive_typed(student_ws, "settings_changed")
+            for event in (owner_event, student_event):
+                updates = {entry["identity"]: entry for entry in event["permission_updates"]}
+                assert updates[f"u:{self.owner.id}"]["permissions"]["can_use_whiteboard"] is True
+                assert updates[f"u:{self.student.id}"]["permissions"]["can_use_whiteboard"] is False
+            await owner_ws.disconnect()
+            await student_ws.disconnect()
+
+        async_to_sync(scenario)()
+        self.stu_member.refresh_from_db()
+        self.classroom.refresh_from_db()
+        self.assertTrue(self.stu_member.can_use_whiteboard)  # stored grant remains
+        self.assertFalse(self.classroom.allow_student_whiteboard)
+
 
 class WaitingRoomPresenceTests(TransactionTestCase):
     """Restricted waiting-room sockets + roster sync on approve/deny."""

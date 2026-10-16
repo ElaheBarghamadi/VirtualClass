@@ -347,8 +347,57 @@ def join_classroom(classroom: Classroom, user: User, raw_password: str = "") -> 
     return member
 
 
+def deactivate_member(classroom: Classroom, member: ClassroomMember, *, event: str = "left") -> None:
+    """Revoke a member's room access and close every live socket for them."""
+    if member.classroom_id != classroom.id or not member.is_active:
+        return
+    member.is_active = False
+    member.in_waiting_room = False
+    member.hand_raised_at = None
+    member.save(update_fields=["is_active", "in_waiting_room", "hand_raised_at"])
+    text = "شما از کلاس خارج شدید." if event == "removed" else "از کلاس خارج شدید."
+    notify_member(classroom.room_code, member, {
+        "type": "notification", "text": text,
+        "level": "error" if event == "removed" else "info", "event": event,
+    })
+    broadcast(classroom.room_code, {
+        "type": "participant_removed", "member_id": member.id,
+        "identity": member.identity, "user_id": member.user_id,
+    })
+
+
 def leave_classroom(classroom: Classroom, user: User) -> None:
-    ClassroomMember.objects.filter(classroom=classroom, user=user).update(is_active=False)
+    member = get_active_member(classroom, user)
+    if member is not None:
+        deactivate_member(classroom, member, event="left")
+
+
+@transaction.atomic
+def deactivate_classroom(classroom: Classroom, owner: User) -> None:
+    """End a classroom and revoke every member's HTTP/WS access immediately."""
+    _require_owner(classroom, owner)
+    if not classroom.is_active:
+        return
+    members = list(
+        ClassroomMember.objects.filter(classroom=classroom, is_active=True)
+        .select_related("user")
+    )
+    classroom.is_active = False
+    classroom.save(update_fields=["is_active", "updated_at"])
+    ClassroomMember.objects.filter(id__in=[member.id for member in members]).update(
+        is_active=False, in_waiting_room=False, hand_raised_at=None,
+    )
+    for member in members:
+        notify_member(classroom.room_code, member, {
+            "type": "notification",
+            "text": "این کلاس توسط مالک غیرفعال شد.",
+            "level": "error",
+            "event": "classroom_deactivated",
+        })
+    broadcast(classroom.room_code, {
+        "type": "classroom_deactivated",
+        "text": "این کلاس توسط مالک غیرفعال شد.",
+    })
 
 
 def active_members(classroom: Classroom) -> list[ClassroomMember]:
@@ -416,6 +465,8 @@ def participant_payload(member: ClassroomMember, classroom: Classroom | None = N
 # Host actions — each validates the operator, mutates, then broadcasts
 # ---------------------------------------------------------------------------
 def _require_privileged(classroom: Classroom, operator: User) -> ClassroomMember:
+    if not classroom.is_active:
+        raise PermissionDenied("این کلاس فعال نیست.")
     member = get_active_member(classroom, operator)
     if not is_privileged(member):
         raise PermissionDenied("شما اجازهٔ این عملیات را ندارید.")
@@ -423,6 +474,8 @@ def _require_privileged(classroom: Classroom, operator: User) -> ClassroomMember
 
 
 def _require_owner(classroom: Classroom, operator: User) -> ClassroomMember:
+    if not classroom.is_active:
+        raise PermissionDenied("این کلاس فعال نیست.")
     member = get_active_member(classroom, operator)
     if member is None or member.role != Role.OWNER:
         raise PermissionDenied("این عملیات فقط برای مالک کلاس مجاز است.")
@@ -449,10 +502,12 @@ def set_member_permission(classroom: Classroom, operator: User, member_id: int, 
     actor = _require_privileged(classroom, operator)
     if permission not in permission_fields():
         raise ValueError(f"Unknown permission: {permission!r}")
+    if type(value) is not bool:
+        raise ValueError("Permission value must be a boolean.")
     target = _target_member(classroom, member_id)
     if not _can_manage(actor, target):
         raise PermissionDenied("اجازهٔ مدیریت این عضو را ندارید.")
-    setattr(target, permission, bool(value))
+    setattr(target, permission, value)
     if permission == "can_use_microphone" and value:
         target.muted = False  # granting mic rights lifts a moderator mute
     if permission == "can_use_camera" and value:
@@ -470,7 +525,9 @@ def set_member_permission(classroom: Classroom, operator: User, member_id: int, 
         "identity": target.identity,
         "user_id": target.user_id,
         "permission": permission,
-        "value": bool(value),
+        "value": value,
+        "muted": target.muted,
+        "camera_disabled": target.camera_disabled,
         "permissions": perms,
     })
     logger.info("permission_changed", extra={"room_code": classroom.room_code, "target": target.user_id, "permission": permission})
@@ -507,10 +564,12 @@ def set_member_role(classroom: Classroom, owner: User, member_id: int, role: str
 
 def set_member_muted(classroom: Classroom, operator: User, member_id: int, muted: bool) -> None:
     actor = _require_privileged(classroom, operator)
+    if type(muted) is not bool:
+        raise ValueError("Mute state must be a boolean.")
     target = _target_member(classroom, member_id)
     if not _can_manage(actor, target):
         raise PermissionDenied("اجازهٔ مدیریت این عضو را ندارید.")
-    target.muted = bool(muted)
+    target.muted = muted
     target.save(update_fields=["muted"])
     if muted:
         notify_member(classroom.room_code, target, {
@@ -519,7 +578,8 @@ def set_member_muted(classroom: Classroom, operator: User, member_id: int, muted
         })
     broadcast(classroom.room_code, {
         "type": "participant_muted", "member_id": target.id, "identity": target.identity,
-        "user_id": target.user_id, "muted": bool(muted),
+        "user_id": target.user_id, "muted": muted,
+        "camera_disabled": target.camera_disabled,
         "permissions": effective_permissions(target, classroom),
     })
 
@@ -560,6 +620,8 @@ def mute_all(classroom: Classroom, operator: User) -> int:
 def remove_member(classroom: Classroom, operator: User, member_id: int, ban_minutes: int = 0) -> None:
     """Remove a participant; optionally ban re-entry for N minutes."""
     actor = _require_privileged(classroom, operator)
+    if isinstance(ban_minutes, bool) or not isinstance(ban_minutes, int) or not 0 <= ban_minutes <= 10080:
+        raise ValueError("مدت محرومیت باید عددی بین صفر تا ۱۰۰۸۰ دقیقه باشد.")
     target = _target_member(classroom, member_id)
     if not _can_manage(actor, target):
         raise PermissionDenied("اجازهٔ مدیریت این عضو را ندارید.")
@@ -620,7 +682,9 @@ def deny_waiting_room(classroom: Classroom, operator: User, member_id: int) -> N
 
 def set_classroom_locked(classroom: Classroom, owner: User, locked: bool) -> None:
     _require_owner(classroom, owner)
-    classroom.is_locked = bool(locked)
+    if type(locked) is not bool:
+        raise ValueError("Lock state must be a boolean.")
+    classroom.is_locked = locked
     classroom.save(update_fields=["is_locked", "updated_at"])
     broadcast(classroom.room_code, {
         "type": "classroom_locked" if locked else "classroom_unlocked",
@@ -641,13 +705,42 @@ SETTING_FIELDS = (
 )
 
 
+def _permission_updates(classroom: Classroom) -> list[dict]:
+    """Current effective permissions for admitted members after a room change."""
+    members = ClassroomMember.objects.filter(
+        classroom=classroom, is_active=True, in_waiting_room=False,
+    ).select_related("user").order_by("id")
+    return [
+        {
+            "member_id": member.id,
+            "identity": member.identity,
+            "permissions": effective_permissions(member, classroom),
+            "muted": member.muted,
+            "camera_disabled": member.camera_disabled,
+        }
+        for member in members
+    ]
+
+
 def update_settings(classroom: Classroom, owner: User, values: dict) -> None:
     _require_owner(classroom, owner)
-    applied = {k: bool(v) for k, v in values.items() if k in SETTING_FIELDS}
+    if not isinstance(values, dict):
+        raise ValueError("Settings must be an object.")
+    unknown = set(values) - set(SETTING_FIELDS)
+    if unknown:
+        raise ValueError(f"Unknown settings: {', '.join(sorted(map(str, unknown)))}")
+    if any(type(value) is not bool for value in values.values()):
+        raise ValueError("Setting values must be booleans.")
+    applied = dict(values)
     for field, value in applied.items():
         setattr(classroom, field, value)
-    classroom.save(update_fields=[*applied.keys(), "updated_at"])
-    broadcast(classroom.room_code, {"type": "settings_changed", "settings": applied})
+    if applied:
+        classroom.save(update_fields=[*applied.keys(), "updated_at"])
+    broadcast(classroom.room_code, {
+        "type": "settings_changed",
+        "settings": applied,
+        "permission_updates": _permission_updates(classroom),
+    })
 
 
 def set_presentation(classroom: Classroom, operator: User, file_id: int | None, page: int) -> None:

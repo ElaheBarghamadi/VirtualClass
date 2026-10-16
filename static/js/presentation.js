@@ -82,7 +82,10 @@ class PresentationImpl {
         const proto = location.protocol === 'https:' ? 'wss' : 'ws';
         this.ws = new WebSocket(`${proto}://${location.host}/ws/classroom/${this.roomCode}/whiteboard/`);
         this.ws.onopen = () => { this._retryDelay = 1000; };
-        this.ws.onclose = () => setTimeout(() => this._connect(), this._retryDelay = Math.min(this._retryDelay * 2, 15000));
+        this.ws.onclose = (evt) => {
+            if (evt.code === 4401 || evt.code === 4403) return;
+            setTimeout(() => this._connect(), this._retryDelay = Math.min(this._retryDelay * 2, 15000));
+        };
         this.ws.onmessage = (evt) => {
             const data = JSON.parse(evt.data);
             if (data.type === 'whiteboard_history') {

@@ -100,7 +100,10 @@ class WhiteboardImpl {
         const proto = location.protocol === 'https:' ? 'wss' : 'ws';
         this.ws = new WebSocket(`${proto}://${location.host}/ws/classroom/${roomCode}/whiteboard/`);
         this.ws.onopen = () => { this.retryDelay = 1000; };
-        this.ws.onclose = () => setTimeout(() => this._connect(roomCode), this.retryDelay = Math.min(this.retryDelay * 2, 15000));
+        this.ws.onclose = (evt) => {
+            if (evt.code === 4401 || evt.code === 4403) return;
+            setTimeout(() => this._connect(roomCode), this.retryDelay = Math.min(this.retryDelay * 2, 15000));
+        };
         this.ws.onmessage = (evt) => {
             const data = JSON.parse(evt.data);
             if (data.type === 'whiteboard_history') {

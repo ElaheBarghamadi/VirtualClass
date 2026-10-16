@@ -42,7 +42,9 @@ from .services import (
     approve_waiting_room,
     attendance_summary,
     create_classroom,
+    deactivate_classroom,
     delete_shared_file,
+    deactivate_member,
     deny_waiting_room,
     end_session,
     get_active_member,
@@ -153,7 +155,7 @@ def classroom_list_view(request):
 def classroom_detail_view(request, room_code: str):
     """Owner-facing management page (settings, scheduling, sessions)."""
     classroom = get_object_or_404(
-        Classroom.objects.select_related("owner"), room_code=room_code, owner=request.user
+        Classroom.objects.select_related("owner"), room_code=room_code, owner=request.user, is_active=True
     )
     schedule_form = SessionScheduleForm(request.POST or None, prefix="sched")
     settings_form = ClassroomSettingsForm(instance=classroom)
@@ -185,13 +187,12 @@ def classroom_detail_view(request, room_code: str):
         settings_form = ClassroomSettingsForm(request.POST, instance=classroom)
         if settings_form.is_valid():
             changed = list(settings_form.changed_data)
-            settings_form.save()
-            from .services import broadcast
-
             if changed:
-                broadcast(classroom.room_code, {"type": "settings_changed", "settings": {
-                    f: bool(getattr(classroom, f)) for f in changed
-                }})
+                update_settings(
+                    classroom,
+                    request.user,
+                    {field: settings_form.cleaned_data[field] for field in changed},
+                )
             messages.success(request, "تنظیمات کلاس ذخیره شد.")
             return redirect("classrooms:detail", room_code=room_code)
 
@@ -214,9 +215,11 @@ def classroom_detail_view(request, room_code: str):
 @login_required
 @require_POST
 def classroom_delete_view(request, room_code: str):
-    classroom = get_object_or_404(Classroom, room_code=room_code, owner=request.user)
-    classroom.is_active = False
-    classroom.save(update_fields=["is_active", "updated_at"])
+    classroom = get_object_or_404(Classroom, room_code=room_code, owner=request.user, is_active=True)
+    try:
+        deactivate_classroom(classroom, request.user)
+    except PermissionDenied as exc:
+        return _json_error(exc)
     messages.success(request, "کلاس غیرفعال شد.")
     return redirect("classrooms:list")
 
@@ -372,8 +375,7 @@ def leave_view(request, room_code: str):
     member = resolve_member(request, classroom)
     if member is not None:
         if member.is_guest:
-            member.is_active = False
-            member.save(update_fields=["is_active"])
+            deactivate_member(classroom, member, event="left")
             request.session.pop(guest_session_key(classroom), None)
         else:
             leave_classroom(classroom, request.user)
@@ -427,9 +429,12 @@ def _json_body(request) -> dict:
     Malformed JSON must be a clean 400 — never an unhandled 500 that an
     attacker can use to probe internals or spam error logs.
     """
+    def reject_non_finite(value):
+        raise ValueError(f"Non-finite JSON number: {value}")
+
     try:
-        body = json.loads(request.body or "{}")
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        body = json.loads(request.body or "{}", parse_constant=reject_non_finite)
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
         raise ValueError("بدنهٔ درخواست JSON معتبر نیست.") from exc
     if not isinstance(body, dict):
         raise ValueError("بدنهٔ درخواست باید یک شیء JSON باشد.")
@@ -444,7 +449,7 @@ def member_permission_view(request, room_code: str, member_id: int):
     try:
         body = _json_body(request)
         set_member_permission(
-            classroom, request.user, member_id, body.get("permission", ""), bool(body.get("value"))
+            classroom, request.user, member_id, body.get("permission", ""), body.get("value")
         )
     except PermissionDenied as exc:
         return _json_error(exc)
@@ -474,10 +479,16 @@ def member_mute_view(request, room_code: str, member_id: int):
     classroom = get_object_or_404(Classroom, room_code=room_code)
     try:
         body = _json_body(request)
-        if body.get("request_unmute"):
+        request_unmute_value = body.get("request_unmute", False)
+        if type(request_unmute_value) is not bool:
+            return JsonResponse({"detail": "request_unmute باید بولی باشد."}, status=400)
+        if request_unmute_value:
             request_unmute(classroom, request.user, member_id)
         else:
-            set_member_muted(classroom, request.user, member_id, bool(body.get("muted", True)))
+            muted = body.get("muted", True)
+            if type(muted) is not bool:
+                return JsonResponse({"detail": "muted باید بولی باشد."}, status=400)
+            set_member_muted(classroom, request.user, member_id, muted)
     except PermissionDenied as exc:
         return _json_error(exc)
     except ValueError as exc:
@@ -502,13 +513,17 @@ def member_remove_view(request, room_code: str, member_id: int):
     classroom = get_object_or_404(Classroom, room_code=room_code)
     try:
         body = _json_body(request)
-        ban_minutes = int(body.get("ban_minutes") or 0)
+        ban_minutes = body.get("ban_minutes", 0)
+        if isinstance(ban_minutes, bool) or not isinstance(ban_minutes, int):
+            raise ValueError("ban_minutes نامعتبر است.")
     except (TypeError, ValueError):
         return JsonResponse({"detail": "ban_minutes نامعتبر است."}, status=400)
     try:
         remove_member(classroom, request.user, member_id, ban_minutes=ban_minutes)
     except PermissionDenied as exc:
         return _json_error(exc)
+    except ValueError as exc:
+        return _json_error(exc, status=400)
     return JsonResponse({"ok": True})
 
 
@@ -518,7 +533,10 @@ def waiting_room_action_view(request, room_code: str, member_id: int):
     classroom = get_object_or_404(Classroom, room_code=room_code)
     try:
         body = _json_body(request)
-        if body.get("approve"):
+        approve = body.get("approve")
+        if type(approve) is not bool:
+            return JsonResponse({"detail": "approve باید بولی باشد."}, status=400)
+        if approve:
             approve_waiting_room(classroom, request.user, member_id)
         else:
             deny_waiting_room(classroom, request.user, member_id)
@@ -535,7 +553,7 @@ def lock_view(request, room_code: str):
     classroom = get_object_or_404(Classroom, room_code=room_code)
     try:
         body = _json_body(request)
-        set_classroom_locked(classroom, request.user, bool(body.get("locked", True)))
+        set_classroom_locked(classroom, request.user, body.get("locked", True))
     except PermissionDenied as exc:
         return _json_error(exc)
     except ValueError as exc:
@@ -564,7 +582,9 @@ def presentation_view(request, room_code: str):
     classroom = get_object_or_404(Classroom, room_code=room_code)
     try:
         body = _json_body(request)
-        page = int(body.get("page") or 1)
+        page = body.get("page", 1)
+        if isinstance(page, bool) or not isinstance(page, int):
+            raise ValueError("page must be an integer")
     except (TypeError, ValueError):
         return JsonResponse({"detail": "page نامعتبر است."}, status=400)
     try:
@@ -587,7 +607,9 @@ def session_start_view(request, room_code: str):
     classroom = get_object_or_404(Classroom, room_code=room_code)
     try:
         body = _json_body(request)
-        session_id = int(body.get("session_id") or 0)
+        session_id = body.get("session_id", 0)
+        if isinstance(session_id, bool) or not isinstance(session_id, int):
+            raise ValueError("session_id must be an integer")
     except (TypeError, ValueError):
         return JsonResponse({"detail": "session_id نامعتبر است."}, status=400)
     session = None

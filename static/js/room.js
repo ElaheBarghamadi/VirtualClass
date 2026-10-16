@@ -210,7 +210,13 @@ class PresenceClient {
 
         // Keep the P2P mesh engine's peer set in sync (LiveKit ignores this).
         Media.syncPeers(inRoom.map((p) => ({
-            identity: p.identity, member_id: p.member_id, name: p.name,
+            identity: p.identity,
+            member_id: p.member_id,
+            name: p.name,
+            permissions: p.permissions || {},
+            muted: Boolean(p.muted),
+            camera_disabled: Boolean(p.camera_disabled),
+            screen_sharing: p.screen_sharing,
         })));
     }
 
@@ -440,18 +446,47 @@ function checkMeshCapacity() {
     }
 }
 
+function applyOwnPermissionUpdate(permissions, moderation = {}) {
+    if (permissions && typeof permissions === 'object') Object.assign(PERMISSIONS, permissions);
+    Whiteboard.setPermission(Boolean(PERMISSIONS.can_use_whiteboard));
+    Presentation.setPermission(Boolean(PERMISSIONS.can_use_whiteboard));
+
+    // Use both capability flags and the moderator's explicit state. This
+    // applies grants/revocations immediately and restores controls on reconnect.
+    Media.applyModerationState({
+        muted: Boolean(moderation.muted) || !PERMISSIONS.can_use_microphone,
+        camera_disabled: Boolean(moderation.camera_disabled) || !PERMISSIONS.can_use_camera,
+    });
+    if (!PERMISSIONS.can_share_screen) Media.stopScreenShare();
+    ChatClient.setSendEnabled(
+        Boolean(PERMISSIONS.can_send_messages) || PRIVILEGED,
+        'شما اجازهٔ ارسال پیام ندارید.',
+    );
+    applyFilePresentability();
+    applyUploadVisibility();
+    refreshControlStates();
+}
+
 // ---------------------------------------------------------------------------
 // Event router — one consistent server protocol
 // ---------------------------------------------------------------------------
 function handleEvent(data) {
     switch (data.type) {
-        case 'participant_list':
+        case 'participant_list': {
             presence.participants.clear();
             data.participants.forEach((p) => { if (p.identity) presence.participants.set(p.identity, p); });
+            const ownParticipant = presence.participants.get(IDENTITY);
+            if (ownParticipant?.permissions) {
+                applyOwnPermissionUpdate(ownParticipant.permissions, {
+                    muted: ownParticipant.muted,
+                    camera_disabled: ownParticipant.camera_disabled,
+                });
+            }
             presence.render();
             applyClassroomState(data.classroom || {});
             checkMeshCapacity();
             break;
+        }
         case 'user_joined':
             presence.upsert(data.participant);
             checkMeshCapacity();
@@ -479,37 +514,22 @@ function handleEvent(data) {
             break;
         case 'permission_changed': {
             const cached = presence.participants.get(data.identity);
-            if (data.permissions) {
-                if (cached) cached.permissions = data.permissions;
-            } else if (cached?.permissions) {
-                cached.permissions[data.permission] = data.value;
+            const permissions = data.permissions || (cached?.permissions
+                ? { ...cached.permissions, [data.permission]: data.value }
+                : null);
+            if (cached) {
+                presence.upsert({
+                    ...cached,
+                    permissions: permissions || cached.permissions,
+                    muted: data.muted ?? cached.muted,
+                    camera_disabled: data.camera_disabled ?? cached.camera_disabled,
+                });
             }
             if (data.identity === IDENTITY) {
-                if (data.permissions) Object.assign(PERMISSIONS, data.permissions);
-                else PERMISSIONS[data.permission] = data.value;
-                Whiteboard.setPermission(PERMISSIONS.can_use_whiteboard);
-                Presentation.setPermission(PERMISSIONS.can_use_whiteboard);
-                applyFilePresentability();
-                // A revoked right must switch the device off right now, not at
-                // the next toggle; the moderation state also locks the button.
-                if (data.permission === 'can_use_microphone' && !data.value) {
-                    Media.applyModerationState({ muted: true, camera_disabled: PERMISSIONS.can_use_camera === false });
-                } else if (data.permission === 'can_use_camera' && !data.value) {
-                    Media.applyModerationState({ muted: PERMISSIONS.can_use_microphone === false, camera_disabled: true });
-                } else {
-                    if (!PERMISSIONS.can_use_microphone) Media.forceMute();
-                    if (!PERMISSIONS.can_use_camera) Media.forceCameraOff();
-                }
-                if (!PERMISSIONS.can_share_screen) Media.stopScreenShare();
-                if (data.permission === 'can_send_messages' || data.permissions) {
-                    ChatClient.setSendEnabled(
-                        PERMISSIONS.can_send_messages || PRIVILEGED,
-                        'شما اجازهٔ ارسال پیام ندارید.');
-                }
-                applyUploadVisibility();
-                refreshControlStates();
-            } else if (cached) {
-                presence.scheduleRender();
+                applyOwnPermissionUpdate(permissions, {
+                    muted: data.muted ?? cached?.muted,
+                    camera_disabled: data.camera_disabled ?? cached?.camera_disabled,
+                });
             }
             refreshPermsDialog(data.identity);
             break;
@@ -529,27 +549,28 @@ function handleEvent(data) {
                 refreshPermsDialog(data.identity);
             }
             break;
-        case 'participant_muted':
-            if (data.permissions) {
-                const cached = presence.participants.get(data.identity);
-                if (cached) cached.permissions = data.permissions;
-            }
+        case 'participant_muted': {
+            const cached = presence.participants.get(data.identity);
+            const permissions = data.permissions || cached?.permissions;
             presence.upsert({
-                identity: data.identity, muted: data.muted, member_id: data.member_id,
-                permissions: data.permissions,
+                ...(cached || {}),
+                identity: data.identity,
+                muted: data.muted,
+                camera_disabled: data.camera_disabled ?? cached?.camera_disabled,
+                member_id: data.member_id,
+                permissions,
             });
             if (data.identity === IDENTITY) {
-                if (data.permissions) Object.assign(PERMISSIONS, data.permissions);
-                else if (data.muted) PERMISSIONS.can_use_microphone = false;
-                // Cut the device *and* revoke the local right to re-enable it,
-                // otherwise the button silently turns the mic back on.
-                Media.applyModerationState({ muted: data.muted, camera_disabled: false });
-                refreshControlStates();
+                applyOwnPermissionUpdate(permissions, {
+                    muted: data.muted,
+                    camera_disabled: data.camera_disabled,
+                });
                 if (data.muted) toast('میکروفون شما توسط مدیر بی‌صدا شد.', 'warning');
                 else toast('میزبان اجازهٔ میکروفون را به شما برگرداند.', 'success');
             }
             refreshPermsDialog(data.identity);
             break;
+        }
         case 'mute_all': {
             const ids = Array.isArray(data.muted_member_ids) ? data.muted_member_ids : null;
             // Without an explicit list fall back to the legacy "everyone
@@ -589,15 +610,38 @@ function handleEvent(data) {
         case 'notification':
             handleNotification(data);
             break;
-        case 'settings_changed':
+        case 'settings_changed': {
             toast('تنظیمات کلاس به‌روزرسانی شد.', 'info', 2200);
-            if (data.settings?.chat_disabled !== undefined) {
+            const updates = Array.isArray(data.permission_updates) ? data.permission_updates : [];
+            for (const update of updates) {
+                if (!update?.identity || !update.permissions) continue;
+                const cached = presence.participants.get(update.identity);
+                presence.upsert({
+                    ...(cached || {}),
+                    identity: update.identity,
+                    member_id: update.member_id,
+                    permissions: update.permissions,
+                    muted: update.muted,
+                    camera_disabled: update.camera_disabled,
+                });
+                if (update.identity === IDENTITY) {
+                    applyOwnPermissionUpdate(update.permissions, {
+                        muted: update.muted,
+                        camera_disabled: update.camera_disabled,
+                    });
+                }
+            }
+            if (updates.length) {
+                presence.scheduleRender();
+            } else if (data.settings?.chat_disabled !== undefined) {
+                // Backward compatibility with older servers.
                 ChatClient.setSendEnabled(
                     !data.settings.chat_disabled || PRIVILEGED,
                     'گفتگو توسط میزبان قطع شده است.'
                 );
             }
             break;
+        }
         case 'classroom_locked':
             showLockBadge(true);
             toast(data.text, 'warning');
@@ -617,6 +661,9 @@ function handleEvent(data) {
         case 'classroom_updated':
             if (data.title) document.querySelector('.room-title h1').textContent = data.title;
             toast('اطلاعات کلاس به‌روزرسانی شد.', 'info', 2200);
+            break;
+        case 'classroom_deactivated':
+            toast(data.text || 'این کلاس غیرفعال شد.', 'error', 6000);
             break;
         case 'file_uploaded':
             addFileItem(data.file);
@@ -696,8 +743,11 @@ function handleNotification(data) {
 
 function applyClassroomState(state) {
     if (state.is_locked !== undefined) showLockBadge(state.is_locked);
-    ChatClient.setSendEnabled(!state.chat_disabled || PRIVILEGED, 'گفتگو توسط میزبان قطع شده است.');
-    if (state.whiteboard_open) applyWhiteboardState(true);
+    ChatClient.setSendEnabled(
+        Boolean(PERMISSIONS.can_send_messages) || PRIVILEGED,
+        state.chat_disabled ? 'گفتگو توسط میزبان قطع شده است.' : 'شما اجازهٔ ارسال پیام ندارید.',
+    );
+    if (typeof state.whiteboard_open === 'boolean') applyWhiteboardState(state.whiteboard_open);
     if (state.current_file_id) {
         applyPresentation({
             file_id: state.current_file_id,
@@ -1717,7 +1767,11 @@ try {
     // re-sync the mesh once media is up (the first snapshot may predate it)
     Media.syncPeers(Array.from(presence.participants.values())
         .filter((p) => !p.in_waiting_room)
-        .map((p) => ({ identity: p.identity, member_id: p.member_id, name: p.name })));
+        .map((p) => ({
+            identity: p.identity, member_id: p.member_id, name: p.name,
+            permissions: p.permissions || {}, muted: Boolean(p.muted),
+            camera_disabled: Boolean(p.camera_disabled), screen_sharing: p.screen_sharing,
+        })));
 } catch (err) {
     console.warn('[media] init failed:', err);
 }

@@ -49,6 +49,9 @@ class LivekitMedia {
         this._pipTrack = null;
         this._localAnalyser = null;
         this._localLevelRaf = null;
+        this.peerInfo = new Map();
+        this._remotePermissionState = new WeakMap();
+        this._screenShareOwner = null;
     }
 
     async init(opts) {
@@ -138,6 +141,55 @@ class LivekitMedia {
         return null;
     }
 
+    /** Apply live roster permissions to already subscribed remote tracks. */
+    syncPeers(peers) {
+        this.peerInfo = new Map((peers || []).filter((p) => p?.identity).map((p) => [p.identity, p]));
+        if (!this.room) return;
+        this.room.remoteParticipants.forEach((participant) => this._syncRemotePermissions(participant));
+    }
+
+    _remoteTrackAllowed(participant, track) {
+        if (!participant || participant.identity === this.currentIdentity) return true;
+        const peer = this.peerInfo.get(participant.identity);
+        if (!peer) return true;
+        const permissions = peer.permissions || {};
+        const source = track?.source;
+        const S = LivekitClient.Track.Source;
+        if (source === S.Microphone) {
+            return permissions.can_use_microphone !== false && peer.muted !== true;
+        }
+        if (source === S.Camera) {
+            return permissions.can_use_camera !== false && peer.camera_disabled !== true;
+        }
+        if (source === S.ScreenShare) {
+            return permissions.can_share_screen !== false && peer.screen_sharing !== false;
+        }
+        return true;
+    }
+
+    _syncRemotePermissions(participant) {
+        participant.getTrackPublications().forEach((publication) => {
+            const track = publication.track;
+            if (!track) return;
+            const allowed = this._remoteTrackAllowed(participant, track);
+            const previous = this._remotePermissionState.get(track);
+            if (previous === allowed) return;
+            if (track.mediaStreamTrack) track.mediaStreamTrack.enabled = allowed;
+            this._remotePermissionState.set(track, allowed);
+            if (!allowed) {
+                track.detach();
+                if (track.source === LivekitClient.Track.Source.ScreenShare) {
+                    this._hideScreenShare(participant.identity);
+                }
+                this._refreshTrackState(participant);
+            } else if (previous === false) {
+                // The track stayed subscribed while hidden; reattach it when
+                // the owner grants the capability again.
+                this._attachTrack(participant, track);
+            }
+        });
+    }
+
     // -------------------------------------------------------------- tiles
     _tileFor(participant) {
         const identity = participant.identity;
@@ -199,6 +251,7 @@ class LivekitMedia {
     }
 
     _removeTile(identity) {
+        if (this._screenShareOwner === identity) this._hideScreenShare(identity);
         const tile = this.tiles.get(identity);
         if (tile) tile.remove();
         this.tiles.delete(identity);
@@ -207,6 +260,18 @@ class LivekitMedia {
     }
 
     _attachTrack(participant, track) {
+        const allowed = this._remoteTrackAllowed(participant, track);
+        this._remotePermissionState.set(track, allowed);
+        if (!allowed) {
+            if (track.mediaStreamTrack) track.mediaStreamTrack.enabled = false;
+            track.detach();
+            if (track.source === LivekitClient.Track.Source.ScreenShare) {
+                this._hideScreenShare(participant.identity);
+            }
+            this._refreshTrackState(participant);
+            return;
+        }
+        if (track.mediaStreamTrack) track.mediaStreamTrack.enabled = true;
         const tile = this._tileFor(participant);
         const video = tile.querySelector('video');
         if (track.kind === 'video') {
@@ -227,7 +292,7 @@ class LivekitMedia {
         track.detach();
         this._refreshTrackState(participant);
         if (track.source === LivekitClient.Track.Source.ScreenShare) {
-            this._hideScreenShare();
+            this._hideScreenShare(participant.identity);
         }
     }
 
@@ -237,8 +302,14 @@ class LivekitMedia {
         if (!tile) return;
         const micPub = participant.getTrackPublication(LivekitClient.Track.Source.Microphone);
         const camPub = participant.getTrackPublication(LivekitClient.Track.Source.Camera);
-        const micOn = Boolean(micPub && micPub.track && !micPub.isMuted);
-        const camOn = Boolean(camPub && camPub.track && !camPub.isMuted);
+        const micOn = Boolean(
+            micPub && micPub.track && !micPub.isMuted
+            && this._remoteTrackAllowed(participant, micPub.track)
+        );
+        const camOn = Boolean(
+            camPub && camPub.track && !camPub.isMuted
+            && this._remoteTrackAllowed(participant, camPub.track)
+        );
         tile.querySelector('.t-mic').classList.toggle('off', !micOn);
         tile.querySelector('video').style.display = camOn ? '' : 'none';
         tile.querySelector('.tile-placeholder').classList.toggle('hidden', camOn);
@@ -381,6 +452,7 @@ class LivekitMedia {
     _showScreenShare(participant, video) {
         const holder = document.getElementById('screen-holder');
         const owner = document.getElementById('screen-owner');
+        this._screenShareOwner = participant.identity;
         holder.innerHTML = '';
         video.classList.add('screen-video');
         holder.appendChild(video);
@@ -389,7 +461,8 @@ class LivekitMedia {
         this._switchView('screen');
     }
 
-    _hideScreenShare() {
+    _hideScreenShare(identity = null) {
+        if (identity && this._screenShareOwner !== identity) return;
         const holder = document.getElementById('screen-holder');
         if (holder.firstChild) {
             // Move the video back to its tile.
@@ -399,6 +472,7 @@ class LivekitMedia {
             if (tile) tile.querySelector('video').replaceWith(video);
         }
         document.querySelector('.room-controls')?.classList.remove('screen-active');
+        this._screenShareOwner = null;
         if (document.getElementById('view-screen').classList.contains('hidden') === false) {
             this._switchView('media');
         }
@@ -582,7 +656,7 @@ class MediaFacade {
         }
     }
 
-    /** Mesh needs the presence roster + signalling transport; LiveKit ignores. */
+    /** Keep roster-driven permission gates current in either media engine. */
     syncPeers(peers) { if (this.impl && this.impl.syncPeers) this.impl.syncPeers(peers); }
     handleSignal(msg) { if (this.impl && this.impl.handleSignal) this.impl.handleSignal(msg); }
 

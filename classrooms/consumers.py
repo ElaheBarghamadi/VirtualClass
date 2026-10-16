@@ -32,10 +32,8 @@ import json
 import logging
 
 from channels.db import database_sync_to_async
-from channels.generic.websocket import AsyncJsonWebsocketConsumer
-
 from .models import Classroom, ClassroomMember
-from .ws_security import RateLimiter, ws_origin_allowed
+from .ws_security import RateLimiter, SafeJsonWebsocketConsumer, ws_origin_allowed
 
 RTC_SIGNAL_MAX_BYTES = 16 * 1024  # hard cap on relayed SDP/ICE envelopes
 RECEIVE_RATE_LIMIT = 20  # client messages per second per connection
@@ -51,8 +49,10 @@ from .services import (
 logger = logging.getLogger(__name__)
 
 
-class ClassroomConsumer(AsyncJsonWebsocketConsumer):
+class ClassroomConsumer(SafeJsonWebsocketConsumer):
     """Presence + event consumer for a single classroom."""
+
+    max_message_bytes = 32 * 1024
 
     async def connect(self) -> None:
         self.room_code: str = self.scope["url_route"]["kwargs"]["room_code"]
@@ -144,24 +144,32 @@ class ClassroomConsumer(AsyncJsonWebsocketConsumer):
                 await self.send_json({"type": "pong"})
             return
 
+        if action in ("raise_hand", "media_state", "rtc_signal", "whiteboard_state"):
+            if not await self._member_active_now():
+                await self.close(code=4403)
+                return
+
         if action == "raise_hand":
             perms = await self._effective_permissions()
             if not perms.get("can_raise_hand"):
                 await self.send_json({"type": "error", "message": "اجازهٔ بالا بردن دست ندارید."})
                 return
-            raised = bool(content.get("raised"))
+            raised = content.get("raised")
+            if type(raised) is not bool:
+                await self.send_json({"type": "error", "message": "مقدار دست باید بولی باشد."})
+                return
             await self._set_hand_raised(raised)
             return
 
         if action == "media_state":
             # Cosmetic roster state for THIS user only (never trusted for
             # authorisation — real media rights come from the SFU token).
+            state = {key: content.get(key) for key in ("mic_on", "camera_on", "screen_sharing")}
+            if any(type(value) is not bool for value in state.values()):
+                await self.send_json({"type": "error", "message": "وضعیت رسانه باید بولی باشد."})
+                return
             payload = await self._self_payload()
-            payload.update({
-                "mic_on": bool(content.get("mic_on")),
-                "camera_on": bool(content.get("camera_on")),
-                "screen_sharing": bool(content.get("screen_sharing")),
-            })
+            payload.update(state)
             await self.channel_layer.group_send(
                 self.group_name, {"type": "presence.media_state", "participant": payload}
             )
@@ -174,9 +182,17 @@ class ClassroomConsumer(AsyncJsonWebsocketConsumer):
             # payloads and clients can only reach real classmates.
             data = content.get("data")
             to_member_id = content.get("to_member_id")
-            if not isinstance(data, dict) or not isinstance(to_member_id, int):
+            if (
+                not isinstance(data, dict)
+                or isinstance(to_member_id, bool)
+                or not isinstance(to_member_id, int)
+            ):
                 return
-            if len(json.dumps(data)) > RTC_SIGNAL_MAX_BYTES:
+            try:
+                encoded = json.dumps(data, allow_nan=False, separators=(",", ":")).encode("utf-8")
+            except (TypeError, ValueError, RecursionError):
+                return
+            if len(encoded) > RTC_SIGNAL_MAX_BYTES:
                 return
             await self._relay_rtc_signal(to_member_id, data)
             return
@@ -186,7 +202,10 @@ class ClassroomConsumer(AsyncJsonWebsocketConsumer):
             if not perms.get("can_use_whiteboard"):
                 await self.send_json({"type": "error", "message": "اجازهٔ استفاده از تخته را ندارید."})
                 return
-            opened = bool(content.get("open"))
+            opened = content.get("open")
+            if type(opened) is not bool:
+                await self.send_json({"type": "error", "message": "وضعیت تخته باید بولی باشد."})
+                return
             await self._set_whiteboard_open(opened)
             return
 
@@ -209,16 +228,33 @@ class ClassroomConsumer(AsyncJsonWebsocketConsumer):
         await self.send_json({"type": "media_state", "participant": event["participant"]})
 
     async def classroom_event(self, event: dict) -> None:
-        """Relay a services-layer broadcast verbatim to the client."""
-        await self.send_json(event["payload"])
+        """Relay services events and close the room when it is deactivated."""
+        payload = event["payload"]
+        await self.send_json(payload)
+        if payload.get("type") == "classroom_deactivated":
+            await self.close(code=4403)
 
     async def classroom_notification(self, event: dict) -> None:
-        """Relay a targeted notification to one participant."""
-        await self.send_json(event["payload"])
+        """Relay targeted notifications and immediately revoke removed sockets."""
+        payload = event["payload"]
+        await self.send_json(payload)
+        if payload.get("event") in {
+            "removed", "left", "membership_revoked", "classroom_deactivated", "waiting_room_denied",
+        }:
+            await self.close(code=4403)
 
     # ------------------------------------------------------------------
     # DB helpers (all ORM access wrapped in sync contexts)
     # ------------------------------------------------------------------
+    @database_sync_to_async
+    def _member_active_now(self) -> bool:
+        return ClassroomMember.objects.filter(
+            id=self.member.id,
+            is_active=True,
+            in_waiting_room=False,
+            classroom__is_active=True,
+        ).exists()
+
     @database_sync_to_async
     def _load_membership(self):
         return resolve_scope_member(self.scope, self.room_code)
@@ -290,34 +326,55 @@ class ClassroomConsumer(AsyncJsonWebsocketConsumer):
 
     @database_sync_to_async
     def _set_hand_raised(self, raised: bool) -> None:
-        set_hand_raised(self.classroom, self.member, raised)
+        from .permissions import effective_permissions
+
+        member = ClassroomMember.objects.filter(
+            id=self.member.id, is_active=True, in_waiting_room=False,
+            classroom__is_active=True,
+        ).select_related("classroom", "user").first()
+        if member and effective_permissions(member, member.classroom).get("can_raise_hand"):
+            set_hand_raised(member.classroom, member, raised)
 
     @database_sync_to_async
     def _relay_rtc_signal(self, to_member_id: int, data: dict) -> None:
         """Deliver a signalling envelope to one active classmate."""
         from .services import notify_member
 
+        sender = ClassroomMember.objects.filter(
+            id=self.member.id, classroom=self.classroom,
+            is_active=True, in_waiting_room=False, classroom__is_active=True,
+        ).select_related("user").first()
+        if sender is None:
+            return
         target = ClassroomMember.objects.filter(
-            classroom=self.classroom, id=to_member_id, is_active=True, in_waiting_room=False
+            classroom=self.classroom, id=to_member_id, is_active=True,
+            in_waiting_room=False, classroom__is_active=True,
         ).first()
-        if target is None or target.id == self.member.id:
+        if target is None or target.id == sender.id:
             return
         notify_member(self.room_code, target, {
             "type": "rtc_signal",
-            "from_identity": self.member.identity,
-            "from_member_id": self.member.id,
+            "from_identity": sender.identity,
+            "from_member_id": sender.id,
             "data": data,
         })
 
     @database_sync_to_async
     def _set_whiteboard_open(self, opened: bool) -> None:
+        from .permissions import effective_permissions
         from .services import broadcast
 
-        Classroom.objects.filter(room_code=self.room_code).update(whiteboard_open=opened)
-        broadcast(self.room_code, {
+        member = ClassroomMember.objects.filter(
+            id=self.member.id, is_active=True, in_waiting_room=False,
+            classroom__is_active=True,
+        ).select_related("classroom", "user").first()
+        if member is None or not effective_permissions(member, member.classroom).get("can_use_whiteboard"):
+            return
+        Classroom.objects.filter(id=member.classroom_id).update(whiteboard_open=opened)
+        broadcast(member.classroom.room_code, {
             "type": "whiteboard_state",
             "open": opened,
-            "by": self.member.participant_name,
+            "by": member.participant_name,
         })
 
     @database_sync_to_async

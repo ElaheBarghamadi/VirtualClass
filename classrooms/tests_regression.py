@@ -157,6 +157,27 @@ class HostActionInputTests(TestCase):
         resp = self._post(url, "{not json")
         self.assertEqual(resp.status_code, 400)
 
+    def test_string_false_does_not_grant_a_permission(self):
+        url = reverse("room:member_permission", args=[self.classroom.room_code, self.student_member.id])
+        resp = self._post(url, '{"permission":"can_use_whiteboard","value":"false"}')
+        self.assertEqual(resp.status_code, 400)
+        self.student_member.refresh_from_db()
+        self.assertFalse(self.student_member.can_use_whiteboard)
+
+    def test_string_false_does_not_lock_the_room(self):
+        url = reverse("room:lock", args=[self.classroom.room_code])
+        resp = self._post(url, '{"locked":"false"}')
+        self.assertEqual(resp.status_code, 400)
+        self.classroom.refresh_from_db()
+        self.assertFalse(self.classroom.is_locked)
+
+    def test_non_boolean_settings_are_rejected_without_mutation(self):
+        url = reverse("room:settings", args=[self.classroom.room_code])
+        resp = self._post(url, '{"settings":{"allow_student_mic":"false"}}')
+        self.assertEqual(resp.status_code, 400)
+        self.classroom.refresh_from_db()
+        self.assertTrue(self.classroom.allow_student_mic)
+
 
 class ParticipantNamingTests(TestCase):
     """Names come from ClassroomMember.participant_name, not get_full_name()."""

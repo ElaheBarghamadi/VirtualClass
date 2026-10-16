@@ -1,92 +1,136 @@
 """WebSocket hardening shared by every consumer.
 
-Two protections live here:
-
-1. **Cross-Site WebSocket Hijacking (CSWSH) defence.**  Browsers attach
-   session cookies to *any* WebSocket handshake, and — unlike HTTP —
-   browsers do not apply same-origin policy to WebSockets.  Without an
-   ``Origin`` check, a malicious website could open a socket to our
-   server riding on the victim's cookies and chat / draw / signal as
-   them.  We therefore accept a browser handshake only when its
-   ``Origin`` matches the ``Host`` it is talking to (or an explicitly
-   trusted origin).  Clients that send no ``Origin`` header at all
-   (native apps, server-side scripts, our own tests) are unaffected —
-   they still have to carry a valid session cookie.
-
-2. **A tiny token-bucket rate limiter** so a hostile script cannot
-   flood the channel layer / database with operations.
+The helpers here defend against cross-site WebSocket hijacking, oversized or
+malformed JSON frames, and message floods. Keeping the framing checks in one
+base consumer prevents individual handlers from accidentally bypassing them.
 """
 from __future__ import annotations
 
+import json
 import time
 from collections import deque
-from urllib.parse import urlparse
+from urllib.parse import urlsplit
 
+from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from django.conf import settings
 
-_DEFAULT_PORTS = {"http": "80", "https": "443", "ws": "80", "wss": "443"}
+_DEFAULT_PORTS = {"http": 80, "https": 443}
 
 
-def _normalise_netloc(scheme: str, netloc: str) -> str:
-    """Lower-case the host and drop default ports for stable comparison."""
-    netloc = netloc.lower()
-    host, _, port = netloc.rpartition(":")
-    if not host:  # no colon at all
-        host, port = netloc, ""
-    if port and port == _DEFAULT_PORTS.get(scheme, ""):
-        port = ""
-    return f"{host}:{port}" if port else host
+def _scheme(value: str) -> str | None:
+    value = (value or "").lower()
+    if value in {"http", "ws"}:
+        return "http"
+    if value in {"https", "wss"}:
+        return "https"
+    return None
+
+
+def _endpoint(scheme: str, netloc: str) -> tuple[str, str, int] | None:
+    """Parse an authority safely, including IPv6 and explicit ports."""
+    normal_scheme = _scheme(scheme)
+    if not normal_scheme or not netloc or any(ch.isspace() for ch in netloc):
+        return None
+    try:
+        parsed = urlsplit(f"//{netloc}")
+        if parsed.username is not None or parsed.password is not None:
+            return None
+        if parsed.path or parsed.query or parsed.fragment or not parsed.hostname:
+            return None
+        host = parsed.hostname.rstrip(".").lower()
+        port = parsed.port or _DEFAULT_PORTS[normal_scheme]
+    except (ValueError, UnicodeError):
+        return None
+    if not host or not (1 <= port <= 65535):
+        return None
+    return normal_scheme, host, port
+
+
+def _origin_endpoint(value: str) -> tuple[str, str, int] | None:
+    try:
+        parsed = urlsplit(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed.path or parsed.query or parsed.fragment or not parsed.netloc:
+        return None
+    return _endpoint(parsed.scheme, parsed.netloc)
 
 
 def ws_origin_allowed(scope: dict) -> bool:
     """True when this WebSocket handshake may proceed.
 
-    * no ``Origin`` header (non-browser client) → allowed;
-    * ``Origin`` host[:port] equals the request ``Host`` → allowed;
-    * ``Origin`` is listed in ``CSRF_TRUSTED_ORIGINS`` (scheme + host) →
-      allowed (reverse-proxy deployments put the public origin there);
-    * anything else → rejected.
+    Browser handshakes must have an Origin matching the request Host, or an
+    explicitly trusted origin. Native/server clients without an Origin remain
+    supported; they still need a valid authenticated session.
     """
     headers = dict(scope.get("headers") or [])
     origin_raw = headers.get(b"origin")
     if not origin_raw:
         return True
     try:
-        origin = urlparse(origin_raw.decode("latin-1"))
-    except (UnicodeDecodeError, ValueError):
+        origin_text = origin_raw.decode("latin-1")
+        host_text = headers.get(b"host", b"").decode("latin-1")
+    except UnicodeDecodeError:
         return False
-    if not origin.scheme or not origin.netloc:
-        return False
-    ws_scheme = "https" if origin.scheme in {"https", "wss"} else "http"
-    origin_netloc = _normalise_netloc(ws_scheme, origin.netloc)
 
-    host_raw = headers.get(b"host", b"")
-    try:
-        host_netloc = _normalise_netloc(
-            "https" if scope.get("scheme") == "https" else "http",
-            host_raw.decode("latin-1"),
-        )
-    except (UnicodeDecodeError, ValueError):
-        host_netloc = ""
-    if origin_netloc and origin_netloc == host_netloc:
+    origin = _origin_endpoint(origin_text)
+    request_scheme = "https" if scope.get("scheme") in {"https", "wss"} else "http"
+    request = _endpoint(request_scheme, host_text)
+    if origin is None:
+        return False
+    if request is not None and origin == request:
         return True
 
     for trusted in getattr(settings, "CSRF_TRUSTED_ORIGINS", []):
-        parsed = urlparse(trusted if "//" in trusted else f"https://{trusted}")
-        if parsed.netloc and _normalise_netloc(
-            "https" if parsed.scheme in {"https", "wss"} else "http", parsed.netloc
-        ) == origin_netloc:
+        trusted = str(trusted).strip()
+        if not trusted:
+            continue
+        # Django's trusted-origin entries normally include a scheme. For
+        # older host-only entries, retain the historical HTTPS interpretation.
+        if "://" not in trusted:
+            trusted = f"https://{trusted}"
+        if _origin_endpoint(trusted) == origin:
             return True
     return False
 
 
-class RateLimiter:
-    """Sliding-window limiter (per consumer instance = per connection).
+class SafeJsonWebsocketConsumer(AsyncJsonWebsocketConsumer):
+    """JSON consumer that rejects hostile frames before application parsing."""
 
-    ``allow()`` returns False once more than ``limit`` calls happened
-    inside the last ``window`` seconds.  Cheap enough for per-message
-    checks; drops are silent because the client can simply slow down.
-    """
+    max_message_bytes = 128 * 1024
+
+    @classmethod
+    async def decode_json(cls, text_data: str):
+        def reject_non_finite(value: str):
+            raise ValueError(f"Non-finite JSON number: {value}")
+
+        return json.loads(text_data, parse_constant=reject_non_finite)
+
+    async def receive(self, text_data=None, bytes_data=None, **kwargs):
+        if text_data is None or bytes_data is not None:
+            await self.close(code=4400)
+            return
+        try:
+            size = len(text_data.encode("utf-8", errors="strict"))
+        except (AttributeError, UnicodeError):
+            await self.close(code=4400)
+            return
+        if size > self.max_message_bytes:
+            await self.close(code=4409)
+            return
+        try:
+            content = await self.decode_json(text_data)
+        except (TypeError, ValueError, UnicodeError, RecursionError):
+            await self.send_json({"type": "error", "message": "فرمت پیام معتبر نیست."})
+            return
+        if not isinstance(content, dict):
+            await self.send_json({"type": "error", "message": "ساختار پیام معتبر نیست."})
+            return
+        await self.receive_json(content, **kwargs)
+
+
+class RateLimiter:
+    """Sliding-window limiter (per consumer instance = per connection)."""
 
     def __init__(self, limit: int, window: float = 1.0) -> None:
         self.limit = limit

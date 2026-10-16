@@ -135,6 +135,25 @@ class WhiteboardConsumerTests(TransactionTestCase):
         async_to_sync(scenario)()
         self.assertEqual(WhiteboardEvent.objects.count(), 0)
 
+    def test_non_object_json_frame_is_rejected_without_crashing_socket(self):
+        async def scenario():
+            ws = self._ws(self.owner)
+            connected, _ = await ws.connect()
+            assert connected
+            await ws.receive_json_from()  # history
+            await ws.send_to(text_data="[]")
+            error = await ws.receive_json_from(timeout=3)
+            assert error["type"] == "error", error
+            await ws.send_json_to({"action": "op", "op": {
+                "type": "draw", "tool": "pen", "points": [[1, 2], [3, 4]],
+                "color": "#000", "width": 2, "id": "after-bad-frame",
+            }})
+            await asyncio.sleep(0.2)
+            await ws.disconnect()
+
+        async_to_sync(scenario)()
+        self.assertTrue(WhiteboardEvent.objects.filter(operation__id="after-bad-frame").exists())
+
     def test_clear_compacts_history(self):
         async def scenario():
             ws = self._ws(self.owner)
@@ -575,3 +594,78 @@ class OpValidationTests(TransactionTestCase):
 
     def test_unknown_tool_rejected(self):
         self.assertFalse(self.valid({"type": "draw", "tool": "spray", "points": [], "id": "x", "page": 1}))
+
+    def test_non_finite_coordinates_rejected(self):
+        import math
+        base = {"type": "draw", "tool": "pen", "points": [[0, 0], [1, 1]], "id": "x"}
+        self.assertFalse(self.valid({**base, "points": [[0, 0], [math.inf, 1]]}))
+        self.assertFalse(self.valid({**base, "points": [[0, 0], [math.nan, 1]]}))
+
+    def test_out_of_range_normalized_coordinates_rejected(self):
+        self.assertFalse(self.valid({
+            "type": "draw", "tool": "pen", "norm": 1,
+            "points": [[0, 0], [5000, 1]], "id": "x",
+        }))
+
+    def test_malformed_or_excessive_points_rejected(self):
+        self.assertFalse(self.valid({
+            "type": "draw", "tool": "pen", "points": [[1, 2]], "id": "x",
+        }))
+        self.assertFalse(self.valid({
+            "type": "draw", "tool": "pen", "points": [[1, 2], [3]], "id": "x",
+        }))
+        self.assertFalse(self.valid({
+            "type": "draw", "tool": "pen", "points": [[0, 0], [1, 1]] * 4097, "id": "x",
+        }))
+
+    def test_non_boolean_normalization_and_invalid_page_rejected(self):
+        self.assertFalse(self.valid({
+            "type": "draw", "tool": "pen", "norm": "false",
+            "points": [[0, 0], [1, 1]], "id": "x",
+        }))
+        self.assertFalse(self.valid({"type": "page_go", "page": True}))
+        self.assertFalse(self.valid({"type": "page_go", "page": 1000}))
+
+
+class WhiteboardHistoryTailTests(TransactionTestCase):
+    """Reconnections receive the most recent events in chronological order."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="hist_owner", password="x")
+        self.classroom = create_classroom(self.owner, title="History tail")
+
+    def test_load_history_keeps_newest_two_thousand_events(self):
+        board = Whiteboard.objects.create(classroom=self.classroom)
+        WhiteboardEvent.objects.bulk_create([
+            WhiteboardEvent(
+                whiteboard=board,
+                actor=self.owner,
+                actor_identity=f"u:{self.owner.id}",
+                operation={"type": "clear", "page": 1, "id": f"event-{i}"},
+                page=1,
+            )
+            for i in range(2001)
+        ])
+        expected = list(WhiteboardEvent.objects.filter(whiteboard=board).order_by("id"))
+
+        async def scenario():
+            ws = WebsocketCommunicator(
+                app_with_user(self.owner, wb_routes),
+                f"/ws/classroom/{self.classroom.room_code}/whiteboard/",
+            )
+            connected, code = await ws.connect()
+            assert connected, code
+            history = await ws.receive_json_from(timeout=5)
+            await ws.disconnect()
+            return history
+
+        history = async_to_sync(scenario)()
+        self.assertEqual(history["type"], "whiteboard_history")
+        self.assertEqual(len(history["events"]), 2000)
+        self.assertEqual(history["events"][0]["id"], expected[1].id)
+        self.assertEqual(history["events"][-1]["id"], expected[-1].id)
+        self.assertEqual(history["seq"], expected[-1].id)
+        self.assertEqual(
+            [event["id"] for event in history["events"]],
+            sorted(event["id"] for event in history["events"]),
+        )

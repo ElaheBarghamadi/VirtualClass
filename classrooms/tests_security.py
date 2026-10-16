@@ -115,7 +115,56 @@ class WsOriginTests(SecurityTestBase):
 
 
 # ---------------------------------------------------------------------------
-# 2. Login brute force
+# 2. Shared JSON WebSocket framing hardening
+# ---------------------------------------------------------------------------
+class WsSafeFrameTests(SecurityTestBase):
+    """Malformed frames fail closed; large frames are rejected before parsing."""
+
+    def _cases(self):
+        return (
+            (presence_routes, f"/ws/classroom/{self.classroom.room_code}/", 32 * 1024, 2),
+            (chat_routes, f"/ws/classroom/{self.classroom.room_code}/chat/", 16 * 1024, 1),
+            (wb_routes, f"/ws/classroom/{self.classroom.room_code}/whiteboard/", 128 * 1024, 1),
+        )
+
+    def test_malformed_json_gets_error_on_every_socket(self):
+        from asgiref.sync import async_to_sync
+
+        async def scenario():
+            for routes, path, _limit, initial_messages in self._cases():
+                ws = WebsocketCommunicator(app_with_user(self.owner, routes), path)
+                connected, code = await ws.connect()
+                assert connected, f"{path} rejected with {code}"
+                for _ in range(initial_messages):
+                    await ws.receive_json_from(timeout=3)
+                await ws.send_to(text_data="{not valid JSON")
+                error = await ws.receive_json_from(timeout=3)
+                assert error.get("type") == "error", (path, error)
+                await ws.disconnect()
+
+        async_to_sync(scenario)()
+
+    def test_oversized_text_frame_closes_every_socket(self):
+        from asgiref.sync import async_to_sync
+
+        async def scenario():
+            for routes, path, limit, initial_messages in self._cases():
+                ws = WebsocketCommunicator(app_with_user(self.owner, routes), path)
+                connected, code = await ws.connect()
+                assert connected, f"{path} rejected with {code}"
+                for _ in range(initial_messages):
+                    await ws.receive_json_from(timeout=3)
+                await ws.send_to(text_data="x" * (limit + 1))
+                closed = await ws.receive_output(timeout=3)
+                assert closed.get("type") == "websocket.close", (path, closed)
+                assert closed.get("code") == 4409, (path, closed)
+                await ws.disconnect()
+
+        async_to_sync(scenario)()
+
+
+# ---------------------------------------------------------------------------
+# 3. Login brute force
 # ---------------------------------------------------------------------------
 class LoginRateLimitTests(TestCase):
     def setUp(self):
@@ -249,6 +298,29 @@ class WaitingRoomFileAccessTests(TestCase):
         resp = client.get(f"/api/classrooms/{self.classroom.room_code}/files/")
         self.assertEqual(resp.status_code, 403)
 
+    def test_regular_participant_cannot_see_waiting_room_entries(self):
+        admitted = User.objects.create_user(username="wr_admitted", password="x")
+        admitted_member = join_classroom(self.classroom, admitted)
+        from classrooms.models import ClassroomMember
+        ClassroomMember.objects.filter(id=admitted_member.id).update(in_waiting_room=False)
+
+        client = APIClient()
+        client.force_authenticate(admitted)
+        response = client.get(f"/api/classrooms/{self.classroom.room_code}/participants/")
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn(self.student_member_id(), {row["id"] for row in response.data})
+
+        # Owners retain the waiting list so they can approve/deny entries.
+        owner_client = APIClient()
+        owner_client.force_authenticate(self.owner)
+        owner_response = owner_client.get(f"/api/classrooms/{self.classroom.room_code}/participants/")
+        self.assertEqual(owner_response.status_code, 200)
+        self.assertIn(self.student_member_id(), {row["id"] for row in owner_response.data})
+
+    def student_member_id(self):
+        from classrooms.models import ClassroomMember
+        return ClassroomMember.objects.get(classroom=self.classroom, user=self.student).id
+
 
 # ---------------------------------------------------------------------------
 # 6. Malformed JSON bodies → 400, never 500
@@ -351,7 +423,7 @@ class WhiteboardTypeConfusionTests(SecurityTestBase):
             assert connected
             await ws.receive_json_from()  # history
 
-            await ws.send_json_to({"action": "op", "op": {"type": "draw", "tool": "pen", "points": [[1, 2]], "file_id": True}})
+            await ws.send_json_to({"action": "op", "op": {"type": "draw", "tool": "pen", "points": [[1, 2], [2, 3]], "file_id": True}})
             msg = await ws.receive_json_from()
             assert msg["type"] == "error", msg
 
@@ -360,7 +432,7 @@ class WhiteboardTypeConfusionTests(SecurityTestBase):
             assert msg["type"] == "error", msg
 
             # legit int file_id still accepted
-            await ws.send_json_to({"action": "op", "op": {"type": "draw", "tool": "pen", "points": [[1, 2]], "file_id": 7, "page": 1}})
+            await ws.send_json_to({"action": "op", "op": {"type": "draw", "tool": "pen", "points": [[1, 2], [2, 3]], "file_id": 7, "page": 1}})
             await asyncio.sleep(0.2)  # let the consumer persist
             await ws.disconnect()
 
@@ -370,7 +442,80 @@ class WhiteboardTypeConfusionTests(SecurityTestBase):
 
 
 # ---------------------------------------------------------------------------
-# 9. API detail view — owner who is also an active member
+# 9. Live socket revocation
+# ---------------------------------------------------------------------------
+class MembershipRevocationSocketTests(SecurityTestBase):
+    """Removed members must be disconnected from every classroom channel."""
+
+    def _ws(self, user, routes, suffix=""):
+        return WebsocketCommunicator(
+            app_with_user(user, routes),
+            f"/ws/classroom/{self.classroom.room_code}/{suffix}",
+        )
+
+    async def _open_all_sockets(self):
+        presence = self._ws(self.student, presence_routes)
+        chat = self._ws(self.student, chat_routes, "chat/")
+        whiteboard = self._ws(self.student, wb_routes, "whiteboard/")
+        sockets = [(presence, "participant_list"), (chat, "chat_history"), (whiteboard, "whiteboard_history")]
+        for ws, first_type in sockets:
+            connected, code = await ws.connect()
+            assert connected, f"socket should connect, got {code}"
+            first = await ws.receive_json_from(timeout=3)
+            assert first.get("type") == first_type, first
+            if first_type == "participant_list":
+                # The presence consumer also broadcasts the join to this room.
+                await ws.receive_json_from(timeout=3)
+        return [row[0] for row in sockets]
+
+    async def _assert_revoked(self, sockets, event_name):
+        for ws in sockets:
+            payload = await ws.receive_json_from(timeout=3)
+            assert payload.get("type") == "notification", payload
+            assert payload.get("event") == event_name, payload
+            close = await ws.receive_output(timeout=3)
+            assert close.get("type") == "websocket.close", close
+            assert close.get("code") == 4403, close
+            await ws.disconnect()
+
+    def test_removal_closes_presence_chat_and_whiteboard_sockets(self):
+        import asyncio
+        from asgiref.sync import async_to_sync, sync_to_async
+        from classrooms.models import ClassroomMember
+        from classrooms.services import remove_member
+
+        member = ClassroomMember.objects.get(classroom=self.classroom, user=self.student)
+
+        async def scenario():
+            sockets = await self._open_all_sockets()
+            await sync_to_async(remove_member)(self.classroom, self.owner, member.id)
+            await self._assert_revoked(sockets, "removed")
+
+        async_to_sync(scenario)()
+        member.refresh_from_db()
+        self.assertFalse(member.is_active)
+
+    def test_deactivating_class_revokes_existing_sockets(self):
+        from asgiref.sync import async_to_sync, sync_to_async
+        from classrooms.models import ClassroomMember
+        from classrooms.services import deactivate_classroom
+
+        member = ClassroomMember.objects.get(classroom=self.classroom, user=self.student)
+
+        async def scenario():
+            sockets = await self._open_all_sockets()
+            await sync_to_async(deactivate_classroom)(self.classroom, self.owner)
+            await self._assert_revoked(sockets, "classroom_deactivated")
+
+        async_to_sync(scenario)()
+        self.classroom.refresh_from_db()
+        member.refresh_from_db()
+        self.assertFalse(self.classroom.is_active)
+        self.assertFalse(member.is_active)
+
+
+# ---------------------------------------------------------------------------
+# 10. API detail view — owner who is also an active member
 # ---------------------------------------------------------------------------
 class ApiDistinctTests(TestCase):
     def setUp(self):

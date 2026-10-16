@@ -21,6 +21,7 @@ class ChatClientImpl {
         this.roomCode = null;
         this.unread = 0;
         this.onStatusChange = () => {};
+        this._formBound = false;
     }
 
     connect(roomCode, identity, privileged = false) {
@@ -35,17 +36,26 @@ class ChatClientImpl {
             this.statusEl?.classList.add('connected');
             this.onStatusChange('connected');
         };
-        this.ws.onclose = () => {
+        this.ws.onclose = (evt) => {
             this.statusEl?.classList.remove('connected');
+            if (evt.code === 4401 || evt.code === 4403) {
+                // The room/presence socket handles the user-facing redirect.
+                // Never retry an authorization failure in a tight reconnect loop.
+                this.onStatusChange('disconnected');
+                return;
+            }
             this.onStatusChange('reconnecting');
             setTimeout(() => this.connect(roomCode, identity, privileged), this.retryDelay = Math.min(this.retryDelay * 2, 15000));
         };
         this.ws.onmessage = (evt) => this.handle(JSON.parse(evt.data));
 
-        this.formEl?.addEventListener('submit', (e) => {
-            e.preventDefault();
-            this.send(this.inputEl.value);
-        });
+        if (!this._formBound) {
+            this.formEl?.addEventListener('submit', (e) => {
+                e.preventDefault();
+                this.send(this.inputEl.value);
+            });
+            this._formBound = true;
+        }
     }
 
     send(text) {

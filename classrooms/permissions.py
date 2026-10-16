@@ -157,7 +157,7 @@ def effective_permissions(member: "ClassroomMember" | None, classroom: "Classroo
       * moderator actions (``muted`` / ``camera_disabled``) always win
       * ``chat_disabled`` silences everyone except OWNER/MODERATOR
     """
-    if member is None or not member.is_active:
+    if member is None or not member.is_active or not classroom.is_active:
         return {name: False for name in permission_fields()}
 
     # OWNER is authoritative in their own classroom: always the full

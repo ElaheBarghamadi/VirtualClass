@@ -134,6 +134,8 @@ class ClassroomParticipantsAPIView(_ClassroomScopedMixin, generics.ListAPIView):
             .select_related("user")
             .order_by("role", "joined_at")
         )
+        if not is_privileged(self.get_member()):
+            qs = qs.filter(in_waiting_room=False)
         role = self.request.query_params.get("role")
         if role in Role.values:
             qs = qs.filter(role=role)

@@ -61,6 +61,11 @@ class PeerLink {
         this.pc = this._makePc(false);
     }
 
+    updatePeer(peer) {
+        this.peer = { ...this.peer, ...peer };
+        this.mesh._applyPeerPermissions(this);
+    }
+
     _makePc(isScreen) {
         const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
         pc.onicecandidate = (e) => {
@@ -72,7 +77,7 @@ class PeerLink {
             const stream = e.streams[0] || new MediaStream([e.track]);
             if (isScreen) {
                 this.remoteScreenStream = stream;
-                this.mesh._onRemoteScreen(this.peer, stream);
+                this.mesh._applyPeerPermissions(this);
             } else {
                 this.remoteStream = stream;
                 this.mesh._onRemoteMedia(this.peer, stream);
@@ -305,6 +310,8 @@ class MeshMedia {
                     }
                 }
                 this._replayPending(p.identity);
+            } else {
+                this.links.get(p.identity).updatePeer(p);
             }
         }
         for (const identity of Array.from(this.links.keys())) {
@@ -341,6 +348,8 @@ class MeshMedia {
      */
     onPeerMediaState(p) {
         if (!p || !p.identity || p.identity === this.self?.identity) return;
+        const link = this.links.get(p.identity);
+        if (link) link.updatePeer(p);
         if (p.screen_sharing === false && this._screenOwner === p.identity) {
             this._hideScreenView();
         }
@@ -868,7 +877,32 @@ class MeshMedia {
         this._pendingSignals = keep;
     }
 
+    _applyPeerPermissions(link) {
+        if (!link?.peer) return;
+        const permissions = link.peer.permissions || {};
+        const audioAllowed = permissions.can_use_microphone !== false && link.peer.muted !== true;
+        const cameraAllowed = permissions.can_use_camera !== false && link.peer.camera_disabled !== true;
+        link.remoteStream?.getAudioTracks().forEach((track) => { track.enabled = audioAllowed; });
+        link.remoteStream?.getVideoTracks().forEach((track) => { track.enabled = cameraAllowed; });
+
+        const screenTrack = link.remoteScreenStream?.getVideoTracks()[0];
+        const screenAllowed = permissions.can_share_screen !== false
+            && link.peer.screen_sharing !== false
+            && screenTrack?.readyState === 'live';
+        if (screenTrack) screenTrack.enabled = screenAllowed;
+        if (!screenAllowed) {
+            if (link._screenAttached && this._screenOwner === link.peer.identity) this._hideScreenView();
+            link._screenAttached = false;
+        } else if (!link._screenAttached) {
+            this._onRemoteScreen(link.peer, link.remoteScreenStream);
+            link._screenAttached = true;
+        }
+        if (link.remoteStream) this._refreshRemoteTile(link.peer.identity);
+    }
+
     _onRemoteMedia(peer, stream) {
+        const link = this.links.get(peer.identity);
+        if (link) this._applyPeerPermissions(link);
         let audio = this._audioEls.get(peer.identity);
         if (!audio) {
             audio = document.createElement('audio');
@@ -899,6 +933,8 @@ class MeshMedia {
     }
 
     _onRemoteScreen(peer, stream) {
+        const screenTrack = stream?.getVideoTracks()[0];
+        if (!screenTrack || screenTrack.readyState !== 'live') return;
         const holder = document.getElementById('screen-holder');
         const owner = document.getElementById('screen-owner');
         holder.innerHTML = '';
@@ -913,7 +949,11 @@ class MeshMedia {
         this._screenVideo = video;
         this._screenOwner = peer.identity;
         owner.textContent = `${peer.name || peer.identity} صفحهٔ خود را به اشتراک گذاشته است`;
-        stream.getVideoTracks()[0].addEventListener('ended', () => this._hideScreenView());
+        screenTrack.addEventListener('ended', () => {
+            const link = this.links.get(peer.identity);
+            if (link) link._screenAttached = false;
+            if (this._screenOwner === peer.identity) this._hideScreenView();
+        }, { once: true });
         document.querySelector('.room-controls')?.classList.add('screen-active');
         window.__switchView('screen');
     }
@@ -1022,15 +1062,24 @@ class MeshMedia {
         // the device off — the receiver only learns via `muted` (the track
         // goes silent/stale).  Using `enabled` here left frozen frames on
         // screen and mic icons stuck "on"; `muted` is the real signal.
+        const permissions = link.peer.permissions || {};
         const videoTrack = stream && stream.getVideoTracks()[0];
-        const camLive = Boolean(videoTrack && !videoTrack.muted && videoTrack.readyState === 'live');
+        const camLive = Boolean(
+            permissions.can_use_camera !== false
+            && link.peer.camera_disabled !== true
+            && videoTrack && !videoTrack.muted && videoTrack.readyState === 'live'
+        );
         const video = tile.querySelector('video');
         if (camLive && video.srcObject !== stream) video.srcObject = stream;
         video.style.display = camLive ? '' : 'none';
         tile.querySelector('.tile-placeholder').classList.toggle('hidden', camLive);
         if (camLive) video.play().catch(() => {});
         const audioTrack = stream && stream.getAudioTracks()[0];
-        const micLive = Boolean(audioTrack && !audioTrack.muted && audioTrack.readyState === 'live');
+        const micLive = Boolean(
+            permissions.can_use_microphone !== false
+            && link.peer.muted !== true
+            && audioTrack && !audioTrack.muted && audioTrack.readyState === 'live'
+        );
         tile.querySelector('.t-mic').classList.toggle('off', !micLive);
     }
 
@@ -1067,7 +1116,7 @@ class MeshMedia {
             const stream = link.remoteStream;
             const tile = this.tiles.get(identity);
             const audioTrack = stream && stream.getAudioTracks()[0];
-            if (!audioTrack || audioTrack.muted || audioTrack.readyState !== 'live') {
+            if (!audioTrack || !audioTrack.enabled || audioTrack.muted || audioTrack.readyState !== 'live') {
                 if (tile) tile.style.setProperty('--lvl', '0');
                 continue;
             }
