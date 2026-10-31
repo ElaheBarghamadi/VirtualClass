@@ -1,5 +1,7 @@
 # تثبیت امنیت VirtualClass — Phase 2
 
+> **به‌روزرسانی Phase 2.1:** وضعیت‌ها و نتایج تاریخی زیر مربوط به Phase 2 هستند و با [گزارش remediation](NEXTCLASS_CRITICAL_SECURITY_REMEDIATION.md) تکمیل می‌شوند. وابستگی‌های snapshot به نسخه‌های رفع‌شده ارتقا یافتند و ابزار dry-run/copy فایل اضافه شد، اما انتقال واقعی و وب‌سرور تأیید نشده‌اند. mesh در production به‌صورت پیش‌فرض غیرفعال است؛ revocation رسانهٔ فعال و reconnect در LiveKit هنوز پیاده یا تأیید نشده است. تصمیم فعلی: **NOT READY FOR PHASE 3**.
+
 **وضعیت: کار جزئی است؛ برای داده‌های حساس production-ready نیست.** این سند جایگزین `docs/NEXTCLASS_TECHNICAL_AUDIT.md` نیست. برچسب «تأیید» زیر به آزمون‌های مشخص‌شده محدود است و به معنی تأیید زیرساخت production یا LiveKit واقعی نیست.
 
 ## خلاصهٔ وضعیت امنیت

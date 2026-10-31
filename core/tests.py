@@ -63,8 +63,10 @@ class DatabaseUrlTests(TestCase):
         self.assertEqual(cfg["HOST"], "elahe.mysql.pythonanywhere-services.com")
         self.assertEqual(cfg["PORT"], "3306")  # mysql default port
 
-    def test_empty_and_unknown_scheme_fall_back_to_sqlite(self):
+    def test_empty_uses_sqlite_and_unknown_scheme_is_rejected(self):
         from config.settings import _database_from_url
-        for url in ("", "mongodb://x/y", "nonsense"):
-            cfg = _database_from_url(url)
-            self.assertEqual(cfg["ENGINE"], "django.db.backends.sqlite3", url)
+        from django.core.exceptions import ImproperlyConfigured
+        self.assertEqual(_database_from_url("")["ENGINE"], "django.db.backends.sqlite3")
+        for url in ("mongodb://x/y", "nonsense"):
+            with self.assertRaises(ImproperlyConfigured):
+                _database_from_url(url)

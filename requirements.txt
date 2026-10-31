@@ -1,6 +1,6 @@
 # Core framework
-Django>=5.0,<5.1
-djangorestframework>=3.15,<4.0
+Django>=5.2.17,<5.3
+djangorestframework>=3.18.2,<3.19
 
 # WebSockets / real-time
 channels>=4.1,<5
@@ -15,7 +15,7 @@ livekit-api>=1.0,<2
 python-dotenv>=1.0,<2
 
 # Required by Django ImageField for classroom logos
-Pillow>=10,<13
+Pillow>=13.0.0,<14
 
 # Production database driver (uncomment for PostgreSQL deployments)
 # psycopg[binary]>=3.1,<4

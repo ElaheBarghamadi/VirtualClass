@@ -120,8 +120,8 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "")
 def _database_from_url(url: str) -> dict:
     """Translate a DATABASE_URL DSN into a Django DATABASES entry.
 
-    Supported schemes: ``postgres(ql)://`` and ``mysql://``.  An empty or
-    unknown-scheme URL falls back to the local SQLite file (development).
+    Supported schemes: ``postgres(ql)://`` and ``mysql://``. An empty URL
+    selects SQLite for development; an unsupported URL is rejected.
     """
     if url:
         parsed = urlparse(url)
@@ -131,7 +131,7 @@ def _database_from_url(url: str) -> dict:
         elif scheme in {"mysql", "mysql2"}:
             engine, default_port = "django.db.backends.mysql", 3306
         else:
-            engine = ""
+            raise ImproperlyConfigured("Unsupported DATABASE_URL scheme; refusing SQLite fallback.")
         if engine:
             return {
                 "ENGINE": engine,
@@ -195,6 +195,10 @@ LIVEKIT_URL = os.environ.get("MEDIA_SERVER_URL", "")
 LIVEKIT_API_KEY = os.environ.get("MEDIA_SERVER_API_KEY", "")
 LIVEKIT_API_SECRET = os.environ.get("MEDIA_SERVER_API_SECRET", "")
 LIVEKIT_TOKEN_TTL_MINUTES = int(os.environ.get("MEDIA_TOKEN_TTL_MINUTES", "360"))
+
+# Mesh cannot enforce revocation of an existing peer connection. Production
+# defaults off; an explicit opt-in is for trusted/test deployments only.
+MESH_ENABLED = os.environ.get("MESH_ENABLED", "1" if DEBUG else "0") == "1"
 
 # ICE servers for the fallback P2P mesh.  STUN alone fails behind strict
 # NATs, so deployments should run coturn and list it here, e.g.:

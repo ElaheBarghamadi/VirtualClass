@@ -94,4 +94,5 @@ def media_config_payload() -> dict:
         "url": settings.LIVEKIT_URL if media_enabled() else "",
         "ice_servers_json": json.dumps(settings.WEBRTC_ICE_SERVERS),
         "mesh_max_participants": settings.MESH_MAX_PARTICIPANTS,
+        "mesh_enabled": settings.MESH_ENABLED,
     }

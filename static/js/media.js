@@ -4,7 +4,7 @@
  * Two interchangeable engines behind one API:
  *  1. LiveKit SFU  — used when the server is configured (recommended for
  *     larger rooms; Django issues short-lived scoped tokens).
- *  2. P2P mesh     — automatic fallback so mic/camera/screen keep working
+ *  2. P2P mesh     — optional fallback, unsuitable for enforced revocation
  *     with zero external infrastructure (see mesh.js; Django only relays
  *     signalling envelopes, never media).
  *
@@ -667,9 +667,14 @@ class MediaFacade {
         if (opts.mediaEnabled && opts.mediaUrl && LivekitClient) {
             this.engine = 'livekit';
             this.impl = livekitMedia;
-        } else {
+        } else if (opts.meshEnabled) {
             this.engine = 'mesh';
             this.impl = new MeshMedia();
+        } else {
+            this.engine = 'none';
+            this.impl = null;
+            console.warn('[media] unavailable: LiveKit client/config missing and mesh disabled');
+            return;
         }
         try {
             await this.impl.init(opts);

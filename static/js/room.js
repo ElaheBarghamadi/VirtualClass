@@ -28,6 +28,7 @@ const SELF_ROLE = root.dataset.role || '';
 const PRIVILEGED = root.dataset.privileged === '1';
 const MEDIA_ENABLED = root.dataset.mediaEnabled === '1';
 const MEDIA_URL = root.dataset.mediaUrl;
+const MESH_ENABLED = root.dataset.meshEnabled === '1';
 const MESH_MAX = Number(root.dataset.meshMax || 0) || 12;
 let ICE_SERVERS = [];
 try { ICE_SERVERS = JSON.parse(root.dataset.iceServers || '[]'); } catch { ICE_SERVERS = []; }
@@ -1783,6 +1784,7 @@ try {
         permissions: PERMISSIONS,
         mediaUrl: MEDIA_URL,
         mediaEnabled: MEDIA_ENABLED,
+        meshEnabled: MESH_ENABLED,
         iceServers: ICE_SERVERS,
         self: { identity: IDENTITY, memberId: MEMBER_ID, name: root.dataset.participantName },
         signal: (payload) => presence.send(payload),

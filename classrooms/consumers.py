@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import logging
 
+from django.conf import settings
 from channels.db import database_sync_to_async
 from .models import Classroom, ClassroomMember
 from .ws_security import RateLimiter, SafeJsonWebsocketConsumer, ws_origin_allowed
@@ -176,6 +177,9 @@ class ClassroomConsumer(SafeJsonWebsocketConsumer):
             return
 
         if action == "rtc_signal":
+            if not settings.MESH_ENABLED:
+                await self.send_json({"type": "error", "message": "رسانهٔ همتا به همتا غیرفعال است."})
+                return
             # WebRTC signalling relay (mesh fallback): SDP/ICE envelopes are
             # forwarded to ONE active member of THIS classroom, untouched
             # except a hard size cap.  The server never parses the media
