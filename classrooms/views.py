@@ -13,10 +13,12 @@ import logging
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
+from django.core.exceptions import ValidationError
 from django.db.models import Count, Q
-from django.http import FileResponse, Http404, JsonResponse
+from django.http import Http404, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_http_methods, require_POST
+from django.views.decorators.cache import never_cache
 
 from .file_validation import ALLOWED_EXTENSIONS, validate_upload
 from .forms import (
@@ -28,6 +30,7 @@ from .forms import (
     SessionScheduleForm,
 )
 from .media import generate_media_token, media_config_payload, media_enabled
+from .storage import private_file_response
 from .models import Classroom, ClassroomSession, SharedFile
 from .permissions import Role, effective_permissions, is_privileged
 from .services import (
@@ -386,6 +389,7 @@ def leave_view(request, room_code: str):
 # ---------------------------------------------------------------------------
 # Media token (LiveKit) — short-lived, scoped to effective permissions
 # ---------------------------------------------------------------------------
+@never_cache
 @require_http_methods(["GET"])
 def media_token_view(request, room_code: str):
     """Short-lived LiveKit JWT for the current participant (user or guest).
@@ -544,6 +548,8 @@ def waiting_room_action_view(request, room_code: str, member_id: int):
         return _json_error(exc)
     except ValueError as exc:
         return _json_error(exc, status=400)
+    except ClassroomAccessError as exc:
+        return _json_error(exc, status=404)
     return JsonResponse({"ok": True})
 
 
@@ -682,7 +688,7 @@ def file_upload_view(request, room_code: str):
         )
     try:
         safe_name = validate_upload(upload, settings.MAX_UPLOAD_MB * 1024 * 1024)
-    except Exception as exc:  # ValidationError from the validator
+    except ValidationError as exc:
         return JsonResponse({"detail": _validation_message(exc)}, status=400)
 
     shared = SharedFile.objects.create(
@@ -721,7 +727,7 @@ def file_upload_view(request, room_code: str):
 def file_download_view(request, room_code: str, file_id: int):
     """Download — membership-gated (users + guests); filename comes from
     our safe copy."""
-    classroom = get_object_or_404(Classroom, room_code=room_code)
+    classroom = get_object_or_404(Classroom, room_code=room_code, is_active=True)
     member = resolve_member(request, classroom)
     if member is None or member.in_waiting_room:
         # not admitted yet — shared material must stay hidden
@@ -732,9 +738,8 @@ def file_download_view(request, room_code: str, file_id: int):
         if not shared.pdf_version:
             raise Http404
         pdf_name = shared.original_name.rsplit(".", 1)[0] + ".pdf"
-        return FileResponse(shared.pdf_version.open("rb"), as_attachment=True, filename=pdf_name)
-    response = FileResponse(shared.file.open("rb"), as_attachment=True, filename=shared.original_name)
-    return response
+        return private_file_response(shared.pdf_version, pdf_name)
+    return private_file_response(shared.file, shared.original_name)
 
 
 @require_http_methods(["POST"])

@@ -5,6 +5,8 @@ from django.conf import settings
 from django.db import models
 from django.utils import timezone
 
+from classrooms.storage import private_storage
+
 
 def assignment_upload_path(instance: "Submission", filename: str) -> str:
     return f"classrooms/{instance.assignment.classroom_id}/assignments/{filename}"
@@ -46,7 +48,7 @@ class Submission(models.Model):
         related_name="assignment_submissions", verbose_name="عضو",
     )
     content = models.TextField(blank=True, verbose_name="متن پاسخ")
-    file = models.FileField(upload_to=assignment_upload_path,
+    file = models.FileField(upload_to=assignment_upload_path, storage=private_storage,
                             null=True, blank=True, verbose_name="فایل پاسخ")
     submitted_at = models.DateTimeField(auto_now_add=True, verbose_name="زمان ارسال")
     updated_at = models.DateTimeField(auto_now=True, verbose_name="آخرین ویرایش")

@@ -298,7 +298,13 @@ STATICFILES_DIRS = [BASE_DIR / "static"]
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
 MEDIA_URL = "media/"
-MEDIA_ROOT = BASE_DIR / "media"
+MEDIA_ROOT = BASE_DIR / "media"  # public assets only (e.g. classroom logos)
+# Must be outside MEDIA_ROOT and any web-server static mapping.
+PRIVATE_MEDIA_ROOT = Path(os.environ.get("PRIVATE_MEDIA_ROOT") or BASE_DIR / "private_media").resolve()
+if (PRIVATE_MEDIA_ROOT == MEDIA_ROOT.resolve()
+        or MEDIA_ROOT.resolve() in PRIVATE_MEDIA_ROOT.parents
+        or PRIVATE_MEDIA_ROOT in MEDIA_ROOT.resolve().parents):
+    raise ImproperlyConfigured("PRIVATE_MEDIA_ROOT and MEDIA_ROOT must be disjoint.")
 
 # ---------------------------------------------------------------------------
 # Security (tightened automatically when DEBUG is off)

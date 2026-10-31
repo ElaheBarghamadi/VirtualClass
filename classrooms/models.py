@@ -26,6 +26,7 @@ from django.dispatch import receiver
 from django.utils import timezone
 
 from .permissions import Role, apply_role_defaults, permission_fields
+from .storage import private_storage
 
 ROOM_CODE_ALPHABET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 ROOM_CODE_LENGTH = 11
@@ -304,10 +305,10 @@ class SharedFile(models.Model):
     uploader = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="uploaded_files", verbose_name="بارگذار"
     )
-    file = models.FileField(upload_to=classroom_upload_path, verbose_name="فایل")
+    file = models.FileField(upload_to=classroom_upload_path, storage=private_storage, verbose_name="فایل")
     # Server-side PDF conversion (LibreOffice) so Office documents can be
     # presented in the browser; empty when conversion is unavailable.
-    pdf_version = models.FileField(upload_to=classroom_upload_path, null=True, blank=True,
+    pdf_version = models.FileField(upload_to=classroom_upload_path, storage=private_storage, null=True, blank=True,
                                    verbose_name="نسخهٔ PDF")
     original_name = models.CharField(max_length=255, verbose_name="نام اصلی")
     size = models.PositiveBigIntegerField(verbose_name="اندازه (بایت)")

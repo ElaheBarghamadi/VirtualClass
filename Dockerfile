@@ -21,7 +21,7 @@ RUN python manage.py collectstatic --noinput || true
 
 # Run as a non-root user.
 RUN useradd --create-home appuser \
-    && mkdir -p /app/media /app/staticfiles \
+    && mkdir -p /app/media /app/private_media /app/staticfiles \
     && chown -R appuser:appuser /app
 USER appuser
 

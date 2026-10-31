@@ -137,9 +137,15 @@ def member_can(member: "ClassroomMember" | None, capability: str) -> bool:
     return bool(getattr(member, capability, False))
 
 
+def is_admitted(member: "ClassroomMember" | None, classroom: "Classroom") -> bool:
+    """An active member may access classroom resources only after admission."""
+    return bool(member and member.classroom_id == classroom.id and classroom.is_active
+                and member.is_active and not member.in_waiting_room)
+
+
 def is_privileged(member: "ClassroomMember" | None) -> bool:
     """True for OWNER/MODERATOR — participants who may manage the session."""
-    return member is not None and member.is_active and member.role in PRIVILEGED_ROLES
+    return member is not None and member.is_active and not member.in_waiting_room and member.role in PRIVILEGED_ROLES
 
 
 def effective_permissions(member: "ClassroomMember" | None, classroom: "Classroom") -> dict[str, bool]:
@@ -157,7 +163,7 @@ def effective_permissions(member: "ClassroomMember" | None, classroom: "Classroo
       * moderator actions (``muted`` / ``camera_disabled``) always win
       * ``chat_disabled`` silences everyone except OWNER/MODERATOR
     """
-    if member is None or not member.is_active or not classroom.is_active:
+    if not is_admitted(member, classroom):
         return {name: False for name in permission_fields()}
 
     # OWNER is authoritative in their own classroom: always the full

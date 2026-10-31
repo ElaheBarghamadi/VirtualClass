@@ -146,7 +146,7 @@ def get_member(classroom: Classroom, user: User) -> ClassroomMember | None:
 def get_active_member(classroom: Classroom, user: User) -> ClassroomMember | None:
     # select_related keeps participant_name usable from async consumers
     return (
-        ClassroomMember.objects.filter(classroom=classroom, user=user, is_active=True)
+        ClassroomMember.objects.filter(classroom=classroom, user=user, user__is_active=True, is_active=True)
         .select_related("user")
         .first()
     )
@@ -477,7 +477,7 @@ def _require_owner(classroom: Classroom, operator: User) -> ClassroomMember:
     if not classroom.is_active:
         raise PermissionDenied("این کلاس فعال نیست.")
     member = get_active_member(classroom, operator)
-    if member is None or member.role != Role.OWNER:
+    if not is_privileged(member) or member.role != Role.OWNER:
         raise PermissionDenied("این عملیات فقط برای مالک کلاس مجاز است.")
     return member
 
@@ -642,11 +642,29 @@ def remove_member(classroom: Classroom, operator: User, member_id: int, ban_minu
     logger.info("participant_removed", extra={"room_code": classroom.room_code, "target": target.user_id})
 
 
+def _waiting_action_members(classroom: Classroom, operator: User, member_id: int):
+    # Lock the classroom to serialize admission/removal decisions on PostgreSQL.
+    classroom = Classroom.objects.select_for_update().get(pk=classroom.pk)
+    actor = ClassroomMember.objects.select_for_update().filter(
+        classroom=classroom, user=operator, user__is_active=True, is_active=True, in_waiting_room=False,
+    ).first()
+    if not classroom.is_active or not is_privileged(actor):
+        raise PermissionDenied("شما اجازهٔ این عملیات را ندارید.")
+    target = ClassroomMember.objects.select_for_update().filter(
+        classroom=classroom, id=member_id,
+    ).first()
+    if target is None:
+        raise ClassroomAccessError("عضو مورد نظر یافت نشد.")
+    if not _can_manage(actor, target):
+        raise PermissionDenied("اجازهٔ مدیریت این عضو را ندارید.")
+    if not target.is_active or not target.in_waiting_room:
+        raise ValueError("درخواست ورود دیگر در انتظار نیست.")
+    return actor, target
+
+
+@transaction.atomic
 def approve_waiting_room(classroom: Classroom, operator: User, member_id: int) -> None:
-    actor = _require_privileged(classroom, operator)
-    target = _target_member(classroom, member_id)
-    if not _can_manage(actor, target) and actor.role != Role.OWNER:
-        raise PermissionDenied()
+    _, target = _waiting_action_members(classroom, operator, member_id)
     target.in_waiting_room = False
     target.save(update_fields=["in_waiting_room"])
     notify_member(classroom.room_code, target, {
@@ -662,11 +680,9 @@ def approve_waiting_room(classroom: Classroom, operator: User, member_id: int) -
     })
 
 
+@transaction.atomic
 def deny_waiting_room(classroom: Classroom, operator: User, member_id: int) -> None:
-    actor = _require_privileged(classroom, operator)
-    target = _target_member(classroom, member_id)
-    if not _can_manage(actor, target) and actor.role != Role.OWNER:
-        raise PermissionDenied()
+    _, target = _waiting_action_members(classroom, operator, member_id)
     target.is_active = False
     target.in_waiting_room = False
     target.save(update_fields=["is_active", "in_waiting_room"])
@@ -832,9 +848,16 @@ def get_live_session(classroom: Classroom) -> ClassroomSession | None:
 @transaction.atomic
 def start_session(classroom: Classroom, host: User, session: ClassroomSession | None = None) -> ClassroomSession:
     """Start a scheduled session, or create an ad-hoc live one."""
+    classroom = Classroom.objects.select_for_update().get(pk=classroom.pk)
     _require_privileged(classroom, host)
+    if session is not None:
+        session = ClassroomSession.objects.select_for_update().filter(pk=session.pk, classroom=classroom).first()
+        if session is None or session.status != ClassroomSession.Status.SCHEDULED:
+            raise ClassroomAccessError("جلسه معتبر یا قابل شروع نیست.")
     live = get_live_session(classroom)
     if live is not None:
+        if session is not None and session.id != live.id:
+            raise ClassroomAccessError("جلسهٔ دیگری در حال برگزاری است.")
         return live
     if session is None:
         session = ClassroomSession(classroom=classroom, host=host, title="جلسهٔ جاری")

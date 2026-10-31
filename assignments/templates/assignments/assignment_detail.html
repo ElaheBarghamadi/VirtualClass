@@ -32,7 +32,7 @@
                     </div>
                     {% if s.content %}<p>{{ s.content|linebreaksbr }}</p>{% endif %}
                     {% if s.file %}
-                        <p><a class="btn btn-sm btn-ghost" href="{{ s.file.url }}" download>⬇ دانلود فایل پاسخ</a></p>
+                        <p><a class="btn btn-sm btn-ghost" href="{% url 'assignments_manage:submission_download' classroom.room_code assignment.id s.id %}" download>⬇ دانلود فایل پاسخ</a></p>
                     {% endif %}
                     <form method="post" class="grade-form">
                         {% csrf_token %}
@@ -62,7 +62,7 @@
                     {% if submission.feedback %}<p>{{ submission.feedback|linebreaksbr }}</p>{% endif %}
                     <hr>
                     {% if submission.content %}<p>{{ submission.content|linebreaksbr }}</p>{% endif %}
-                    {% if submission.file %}<p><a class="btn btn-sm btn-ghost" href="{{ submission.file.url }}" download>⬇ فایل ارسالی من</a></p>{% endif %}
+                    {% if submission.file %}<p><a class="btn btn-sm btn-ghost" href="{% url 'assignments_manage:submission_download' classroom.room_code assignment.id submission.id %}" download>⬇ فایل ارسالی من</a></p>{% endif %}
                 </div>
             {% else %}
                 <div class="card form-card">

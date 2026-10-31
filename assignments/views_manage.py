@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
+from django.core.exceptions import ValidationError
 from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
@@ -10,7 +11,9 @@ from django.views.decorators.http import require_http_methods
 
 from classrooms.file_validation import validate_upload
 from classrooms.models import Classroom
+from classrooms.permissions import is_admitted
 from classrooms.services import get_active_member
+from classrooms.storage import private_file_response
 
 from .models import Assignment, Submission
 
@@ -19,10 +22,11 @@ MAX_SUBMISSION_BYTES = 25 * 1024 * 1024  # same cap as classroom files
 
 def _classroom_for(request, room_code: str) -> tuple[Classroom, bool]:
     """(classroom, is_owner) — 404 for everyone who is neither owner nor member."""
-    classroom = get_object_or_404(Classroom, room_code=room_code)
-    is_owner = classroom.owner_id == request.user.id
-    if not is_owner and get_active_member(classroom, request.user) is None:
+    classroom = get_object_or_404(Classroom, room_code=room_code, is_active=True)
+    member = get_active_member(classroom, request.user)
+    if not is_admitted(member, classroom):
         raise Http404("کلاس یافت نشد.")
+    is_owner = classroom.owner_id == request.user.id
     return classroom, is_owner
 
 
@@ -124,7 +128,7 @@ def _submit(request, assignment: Assignment, member, submission: Submission | No
     if uploaded is not None:
         try:
             stored_name = validate_upload(uploaded, MAX_SUBMISSION_BYTES)
-        except Exception as exc:  # ValidationError & friends → user-facing
+        except ValidationError as exc:
             details = getattr(exc, "messages", None)
             messages.error(request, details[0] if details else str(exc))
             return
@@ -159,3 +163,17 @@ def _grade(request, assignment: Assignment) -> None:
     submission.graded_at = timezone.now()
     submission.save(update_fields=["score", "feedback", "graded_at"])
     messages.success(request, "نمره ثبت شد.")
+
+
+@login_required
+@require_http_methods(["GET"])
+def submission_download_view(request, room_code: str, assignment_id: int, submission_id: int):
+    classroom, is_owner = _classroom_for(request, room_code)
+    submission = get_object_or_404(Submission.objects.select_related("assignment", "member"),
+        id=submission_id, assignment_id=assignment_id, assignment__classroom=classroom)
+    member = get_active_member(classroom, request.user)
+    if not is_owner and (member is None or submission.member_id != member.id):
+        raise Http404
+    if not submission.file:
+        raise Http404
+    return private_file_response(submission.file, submission.file.name.rsplit("/", 1)[-1])

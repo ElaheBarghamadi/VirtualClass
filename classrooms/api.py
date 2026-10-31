@@ -16,7 +16,7 @@ from rest_framework.views import APIView
 from chat.models import ChatMessage
 
 from .models import Classroom, ClassroomMember, ClassroomSession, SharedFile
-from .permissions import Role, is_privileged
+from .permissions import Role, is_admitted, is_privileged
 from .serializers import (
     ChatMessageSerializer,
     ClassroomCreateSerializer,
@@ -30,6 +30,7 @@ from .serializers import (
 )
 from .services import (
     PermissionDenied,
+    ClassroomAccessError,
     attendance_summary,
     create_classroom,
     end_session,
@@ -63,7 +64,7 @@ class _ClassroomScopedMixin:
     require_privileged = False
 
     def get_classroom(self) -> Classroom:
-        return get_object_or_404(Classroom, room_code=self.kwargs["room_code"])
+        return get_object_or_404(Classroom, room_code=self.kwargs["room_code"], is_active=True)
 
     def get_member(self) -> ClassroomMember | None:
         if not hasattr(self, "_member"):
@@ -74,8 +75,7 @@ class _ClassroomScopedMixin:
         super().initial(request, *args, **kwargs)
         member = self.get_member()
         if (
-            member is None
-            or member.in_waiting_room  # not admitted yet
+            not is_admitted(member, self.get_classroom())
             or (self.require_privileged and not is_privileged(member))
         ):
             from rest_framework.exceptions import PermissionDenied as DRFPermissionDenied
@@ -117,8 +117,8 @@ class ClassroomDetailAPIView(generics.RetrieveAPIView):
     def get_queryset(self):
         user = self.request.user
         return (
-            Classroom.objects.filter(owner=user)
-            | Classroom.objects.filter(members__user=user, members__is_active=True)
+            Classroom.objects.filter(members__user=user, members__is_active=True,
+                                     members__in_waiting_room=False, is_active=True)
         ).distinct()
 
 
@@ -202,10 +202,15 @@ class SessionActionAPIView(_ClassroomScopedMixin, APIView):
     def post(self, request, room_code, session_id, action):
         classroom = self.get_classroom()
         session = get_object_or_404(ClassroomSession, id=session_id, classroom=classroom)
-        if action == "start":
-            start_session(classroom, request.user, session)
-        else:
-            end_session(session, request.user)
+        if action not in {"start", "end"}:
+            return Response({"detail": "Invalid action."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            if action == "start":
+                session = start_session(classroom, request.user, session)
+            else:
+                session = end_session(session, request.user)
+        except (PermissionDenied, ClassroomAccessError) as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         session.refresh_from_db()
         return Response(SessionSerializer(session).data)
 

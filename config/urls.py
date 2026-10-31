@@ -25,4 +25,5 @@ admin.site.index_title = "مدیریت سامانه"
 
 # Development-only media serving (production: web server / object storage).
 if settings.DEBUG:
-    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+    urlpatterns += static(f"{settings.MEDIA_URL.rstrip('/')}/classroom_logos/",
+                          document_root=settings.MEDIA_ROOT / "classroom_logos")

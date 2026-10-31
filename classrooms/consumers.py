@@ -230,6 +230,9 @@ class ClassroomConsumer(SafeJsonWebsocketConsumer):
     async def classroom_event(self, event: dict) -> None:
         """Relay services events and close the room when it is deactivated."""
         payload = event["payload"]
+        if payload.get("type") in {"waiting_room_entry", "waiting_room_denied"}:
+            if not await self._privileged_now():
+                return
         await self.send_json(payload)
         if payload.get("type") == "classroom_deactivated":
             await self.close(code=4403)
@@ -246,6 +249,14 @@ class ClassroomConsumer(SafeJsonWebsocketConsumer):
     # ------------------------------------------------------------------
     # DB helpers (all ORM access wrapped in sync contexts)
     # ------------------------------------------------------------------
+    @database_sync_to_async
+    def _privileged_now(self) -> bool:
+        from .permissions import is_privileged
+        member = ClassroomMember.objects.filter(
+            id=self.member.id, classroom__is_active=True,
+        ).first()
+        return is_privileged(member)
+
     @database_sync_to_async
     def _member_active_now(self) -> bool:
         return ClassroomMember.objects.filter(
