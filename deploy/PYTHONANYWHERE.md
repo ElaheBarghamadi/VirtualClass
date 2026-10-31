@@ -101,14 +101,14 @@ python manage.py collectstatic --no-input
 | Working directory | `/home/USERNAME/VirtualClass` |
 | Virtualenv | `/home/USERNAME/VirtualClass/.venv` |
 
-**Static files** (دو ردیف اضافه کنید):
+**Static files** (فقط دارایی‌های عمومی را نگاشت کنید):
 
 | URL | Directory |
 |---|---|
 | `/static/` | `/home/USERNAME/VirtualClass/staticfiles` |
-| `/media/` | `/home/USERNAME/VirtualClass/media` |
+| `/media/classroom_logos/` | `/home/USERNAME/VirtualClass/media/classroom_logos` |
 
-> ردیف `/media/` برای دانلود فایل‌های اشتراکی کلاس‌ها ضروری است.
+> فایل‌های خصوصی باید پیش از فعال‌سازی به `PRIVATE_MEDIA_ROOT` خارج از هر public mapping منتقل شوند. تا اتمام انتقال، دسترسی عمومی به `/media/classrooms/` را مسدود کنید؛ دستورالعمل کامل در `docs/NEXTCLASS_SECURITY_AND_STABILIZATION.md` است. دانلود خصوصی از Django انجام می‌شود، نه از نگاشت `/media/`.
 
 **WSGI configuration file:** کل محتوای فایل را با
 `deploy/pythonanywhere_wsgi.py` از همین ریپو جایگزین کنید و در دو خط
@@ -140,7 +140,7 @@ python manage.py collectstatic --no-input
 |---|---|
 | صفحهٔ خطای 500 و `ImproperlyConfigured: SECRET_KEY` | در `.env` کلید واقعی نگذاشته‌اید |
 | استایل/JS بارگذاری نمی‌شود | نگاشت `/static/` در تب Web یا `collectstatic` انجام نشده |
-| دانلود فایل 404 می‌دهد | نگاشت `/media/` را در تب Web اضافه نکرده‌اید |
+| دانلود فایل 404 می‌دهد | نگاشت لوگوی عمومی یا مجوز endpoint خصوصی را بررسی کنید |
 | `ModuleNotFoundError` در error log | مسیر Virtualenv در تب Web اشتباه است یا `pip install` در venv درست انجام نشده |
 | چت/تخته/صدا کار نمی‌کند | محدودیت WebSocket خود PythonAnywhere است (بالای همین صفحه توضیح داده شد) |
 | خطای `DisallowedHost` | دامنه را به `ALLOWED_HOSTS` در `.env` اضافه کنید و Reload بزنید |
