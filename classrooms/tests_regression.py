@@ -42,7 +42,7 @@ def make_user(username: str, **extra) -> User:
     )
 
 
-@override_settings(MEDIA_ROOT=MEDIA_ROOT)
+@override_settings(PRIVATE_MEDIA_ROOT=MEDIA_ROOT)
 class SharedFileCleanupTests(TestCase):
     """Storage hygiene: no file may outlive its database row."""
 
