@@ -92,6 +92,12 @@ code {
     -webkit-backdrop-filter: blur(20px) saturate(180%);
     backdrop-filter: blur(20px) saturate(180%);
     border-bottom: 1px solid var(--glass-line);
+    transition: box-shadow .35s var(--ease), background .35s var(--ease);
+}
+/* the header only lifts off the page once the content starts moving */
+.site-header.is-scrolled {
+    box-shadow: 0 18px 40px -30px color-mix(in srgb, var(--text) 55%, transparent);
+    background: var(--glass-strong);
 }
 .header-inner {
     display: flex; align-items: center; justify-content: space-between;
@@ -390,7 +396,12 @@ code {
     text-overflow: ellipsis;
 }
 .copy-btn { flex: none; }
-.copy-btn.copied { color: var(--success); border-color: var(--success); }
+.copy-btn.copied,
+.btn.copy-btn.copied:hover:not(:disabled) {
+    color: var(--success); border-color: var(--success); background: var(--success-soft);
+}
+.copy-btn { display: inline-flex; align-items: center; gap: .35rem; }
+.copy-btn .copy-check { flex: none; animation: pop-in .22s var(--ease-spring) both; }
 
 /* ==========================================================================
    Badges / alerts / stats
@@ -665,6 +676,11 @@ code {
         padding-bottom: .1rem;
     }
     .main-nav::-webkit-scrollbar { display: none; }
+    /* fade the cut edge so a scrollable menu never looks clipped by accident */
+    .main-nav.can-scroll {
+        -webkit-mask-image: linear-gradient(to right, transparent 0, #000 26px);
+        mask-image: linear-gradient(to right, transparent 0, #000 26px);
+    }
     /* 44px tap targets: bare inline links were only ~26px tall. */
     .main-nav a,
     .main-nav .link-button,
@@ -737,4 +753,159 @@ code {
     .action-bar > .btn,
     .action-bar > form,
     .card-actions .btn { flex: 1 1 100%; }
+}
+
+/* ==========================================================================
+   Landing hero preview — a stylised snapshot of a live classroom.
+   Structure only; every movement (floats, board strokes, cursor) lives in
+   motion.css so the two concerns stay separate.
+   ========================================================================== */
+.hero-preview {
+    position: relative;
+    width: min(760px, 100%);
+    margin: 3rem auto 0;
+    perspective: 1200px;
+}
+.hp-glow {
+    position: absolute; inset: 8% 6% -6%;
+    background: var(--gradient-brand);
+    filter: blur(46px);
+    opacity: .28;
+    border-radius: 50%;
+    z-index: 0;
+}
+.hp-card {
+    position: relative;
+    z-index: 1;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-lg);
+    padding: .75rem;
+    transform: rotateX(6deg);
+    transform-origin: 50% 100%;
+}
+.hp-head {
+    display: flex; align-items: center; gap: .6rem;
+    padding: .1rem .35rem .6rem;
+    font-size: .78rem;
+}
+.hp-live {
+    display: inline-flex; align-items: center; gap: .3rem;
+    background: var(--danger-soft); color: var(--danger);
+    font-weight: 700; font-size: .68rem;
+    padding: .15rem .5rem; border-radius: var(--radius-pill);
+}
+.hp-live i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.hp-title { font-weight: 700; color: var(--text); }
+.hp-count { margin-inline-start: auto; color: var(--muted); font-weight: 600; }
+
+.hp-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1.5fr;
+    gap: .5rem;
+    height: 220px;
+}
+.hp-tile {
+    position: relative;
+    border-radius: var(--radius);
+    background:
+        radial-gradient(120% 120% at 50% 0%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 70%),
+        var(--surface-2);
+    border: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    overflow: hidden;
+}
+.hp-avatar {
+    width: 46px; height: 46px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--gradient-brand); color: #fff;
+    font-weight: 800; font-size: 1.05rem;
+    box-shadow: 0 10px 24px -12px color-mix(in srgb, var(--accent) 90%, transparent);
+}
+.hp-t2 .hp-avatar { background: linear-gradient(135deg, #0ea5e9, #22d3ee); }
+.hp-name {
+    position: absolute; inset-inline-start: .4rem; bottom: .35rem;
+    font-size: .62rem; font-weight: 600; color: var(--text-secondary);
+    background: color-mix(in srgb, var(--surface) 78%, transparent);
+    padding: .05rem .4rem; border-radius: var(--radius-pill);
+}
+.hp-board {
+    background: #fff;
+    align-items: flex-start;
+    padding: .9rem;
+    gap: .5rem;
+    flex-direction: column;
+}
+[data-theme="dark"] .hp-board { background: #f8fafc; }
+.hp-board-line {
+    display: block; height: 3px; border-radius: 3px;
+    background: linear-gradient(90deg, #6366f1, #a855f7);
+    width: 62%;
+    opacity: .85;
+}
+.hp-board-line.l2 { width: 40%; background: linear-gradient(90deg, #0ea5e9, #6366f1); }
+.hp-board-line.l3 { width: 78%; background: linear-gradient(90deg, #f59e0b, #ef4444); }
+.hp-board-cursor {
+    position: absolute;
+    width: 10px; height: 10px; border-radius: 50%;
+    background: #ef4444;
+    box-shadow: 0 0 0 4px color-mix(in srgb, #ef4444 22%, transparent);
+    inset-inline-start: 24%; top: 38%;
+}
+.hp-board-tag {
+    position: absolute; inset-inline-end: .5rem; bottom: .45rem;
+    font-size: .58rem; font-weight: 700; color: #4f46e5;
+    background: color-mix(in srgb, #6366f1 12%, #fff);
+    padding: .1rem .45rem; border-radius: var(--radius-pill);
+}
+.hp-bar {
+    display: flex; align-items: center; gap: .4rem;
+    margin-top: .6rem; padding: .1rem .25rem;
+}
+.hp-pill {
+    display: inline-flex; align-items: center; gap: .3rem;
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: var(--radius-pill);
+    font-size: .68rem; font-weight: 600; color: var(--text-secondary);
+    padding: .25rem .6rem;
+}
+.hp-pill svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.hp-pill-primary { background: var(--gradient-brand); color: #fff; border-color: transparent; }
+
+.hp-float {
+    position: absolute; z-index: 2;
+    display: inline-flex; align-items: center; gap: .4rem;
+    background: var(--glass-strong);
+    -webkit-backdrop-filter: blur(16px) saturate(180%);
+    backdrop-filter: blur(16px) saturate(180%);
+    border: 1px solid var(--glass-line);
+    border-radius: var(--radius-pill);
+    box-shadow: var(--shadow);
+    font-size: .74rem; font-weight: 650; color: var(--text);
+    padding: .45rem .8rem;
+    white-space: nowrap;
+}
+.hp-float svg { width: 15px; height: 15px; fill: none; stroke: var(--accent); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.hp-float-a { left: -1.4rem; top: 27%; }
+.hp-float-b { right: -1.4rem; bottom: 36%; }
+.hp-float-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 3px var(--success-soft); }
+
+@media (max-width: 720px) {
+    .hero-preview { margin-top: 2rem; }
+    .hp-card { transform: none; padding: .55rem; }
+    .hp-grid { grid-template-columns: 1fr 1fr; height: auto; }
+    .hp-tile { min-height: 150px; }
+    /* the whiteboard is the signature of the product — on phones it keeps
+       the full width as a slim strip instead of disappearing */
+    .hp-board {
+        grid-column: 1 / -1; min-height: 96px;
+        padding: .85rem 1rem; justify-content: center; gap: .4rem;
+    }
+    .hp-board .hp-board-line.l1 { width: 44%; }
+    .hp-board .hp-board-line.l2 { width: 28%; }
+    .hp-board .hp-board-line.l3 { width: 56%; }
+    .hp-board-cursor { display: none; }
+    .hp-float-a { left: .25rem; top: -1.1rem; }
+    .hp-float-b { display: none; }
 }

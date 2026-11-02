@@ -1,0 +1,394 @@
+/* ==========================================================================
+   motion.css — the animation layer
+   --------------------------------------------------------------------------
+   Everything that moves lives here, so the layout/colour sheets stay calm
+   and reviewable.  Rules:
+
+   • Transform + opacity only (compositor-friendly); never animate layout
+     properties such as width/height/top.
+   • Durations/easings come from tokens.css — no magic numbers per component.
+   • Entrance animations are attached to classes the JS adds, so a page
+     without JS (or a failed bundle) is always fully visible and readable.
+   • `[data-motion="reduced"]` and `prefers-reduced-motion` neutralise the
+     whole file (see the tail of tokens.css) — nothing here fights that.
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   Keyframes
+   -------------------------------------------------------------------------- */
+@keyframes fade-up {
+    from { opacity: 0; transform: translate3d(0, 18px, 0); }
+    to   { opacity: 1; transform: none; }
+}
+@keyframes fade-in {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+@keyframes pop-in {
+    0%   { opacity: 0; transform: scale(.86); }
+    62%  { opacity: 1; transform: scale(1.035); }
+    100% { opacity: 1; transform: none; }
+}
+@keyframes slide-in-up {
+    from { opacity: 0; transform: translate3d(0, 26px, 0); }
+    to   { opacity: 1; transform: none; }
+}
+@keyframes slide-in-side {
+    from { opacity: 0; transform: translate3d(22px, 0, 0); }
+    to   { opacity: 1; transform: none; }
+}
+@keyframes bar-rise {
+    from { opacity: 0; transform: translate3d(0, calc(100% + 24px), 0) scale(.96); }
+    to   { opacity: 1; transform: none; }
+}
+@keyframes dock-drop {
+    from { opacity: 0; transform: translate3d(0, -14px, 0); }
+    to   { opacity: 1; transform: none; }
+}
+@keyframes drawer-in {
+    from { opacity: 0; transform: translate3d(0, 40%, 0) scale(.97); }
+    to   { opacity: 1; transform: none; }
+}
+@keyframes aurora-drift {
+    0%   { transform: translate3d(0, 0, 0) scale(1); }
+    33%  { transform: translate3d(2%, -3%, 0) scale(1.05); }
+    66%  { transform: translate3d(-2%, 2%, 0) scale(.98); }
+    100% { transform: translate3d(0, 0, 0) scale(1); }
+}
+@keyframes float-y {
+    0%, 100% { transform: translateY(0); }
+    50%      { transform: translateY(-7px); }
+}
+@keyframes gradient-pan {
+    0%   { background-position: 0% 50%; }
+    100% { background-position: 100% 50%; }
+}
+@keyframes ring-pulse {
+    0%   { box-shadow: 0 0 0 0 color-mix(in srgb, var(--success) 55%, transparent); }
+    70%  { box-shadow: 0 0 0 12px transparent; }
+    100% { box-shadow: 0 0 0 0 transparent; }
+}
+@keyframes glow-pulse {
+    0%, 100% { box-shadow: 0 8px 24px -8px color-mix(in srgb, var(--accent) 55%, transparent); }
+    50%      { box-shadow: 0 10px 34px -6px color-mix(in srgb, var(--accent) 78%, transparent); }
+}
+@keyframes shine-sweep {
+    from { transform: translateX(-140%) skewX(-18deg); opacity: 0; }
+    35%  { opacity: .55; }
+    to   { transform: translateX(240%) skewX(-18deg); opacity: 0; }
+}
+@keyframes tool-pop {
+    0%   { transform: scale(.86); }
+    58%  { transform: scale(1.07); }
+    100% { transform: scale(1); }
+}
+@keyframes dot-bounce {
+    0%, 80%, 100% { transform: translateY(0); opacity: .45; }
+    40%           { transform: translateY(-4px); opacity: 1; }
+}
+@keyframes spin-slow { to { transform: rotate(360deg); } }
+@keyframes caret-blink { 50% { opacity: 0; } }
+
+/* --------------------------------------------------------------------------
+   Page shell
+   -------------------------------------------------------------------------- */
+/* living background: two slow aurora fields instead of a flat sheet */
+body::before {
+    animation: aurora-drift 34s var(--ease) infinite;
+    will-change: transform;
+}
+body::after {
+    content: "";
+    position: fixed;
+    inset: -20%;
+    z-index: -1;
+    pointer-events: none;
+    background:
+        radial-gradient(32rem 22rem at 15% 85%, color-mix(in srgb, #22d3ee 10%, transparent), transparent 70%),
+        radial-gradient(28rem 20rem at 85% 25%, color-mix(in srgb, #a855f7 12%, transparent), transparent 70%);
+    animation: aurora-drift 46s var(--ease) infinite reverse;
+    will-change: transform;
+}
+
+/* the app bar settles in once per page */
+.site-header { animation: fade-in var(--speed-slow) var(--ease) both; }
+
+/* content: a gentle rise.  `.js-anim` is added by motion.js, so no-JS pages
+   render immediately instead of waiting for an animation that never starts. */
+.js-anim main { animation: fade-up .5s var(--ease) both; }
+
+/* --------------------------------------------------------------------------
+   Reveal-on-scroll (motion.js adds .is-revealed)
+   -------------------------------------------------------------------------- */
+.js-anim [data-reveal] {
+    opacity: 0;
+    transform: translate3d(0, 20px, 0);
+    transition: opacity .55s var(--ease), transform .55s var(--ease);
+    transition-delay: calc(var(--reveal-delay, 0) * 1ms);
+}
+.js-anim [data-reveal].is-revealed {
+    opacity: 1;
+    transform: none;
+}
+
+/* --------------------------------------------------------------------------
+   Buttons / interactive chrome
+   -------------------------------------------------------------------------- */
+.btn {
+    transition: background var(--speed) var(--ease), color var(--speed) var(--ease),
+                border-color var(--speed) var(--ease), box-shadow var(--speed) var(--ease),
+                transform .18s var(--ease-spring);
+}
+.btn:hover:not(:disabled) { transform: translateY(-1.5px); }
+.btn:active:not(:disabled) { transform: translateY(0) scale(.985); }
+
+/* primary: panning gradient + a light sweep that only exists on hover */
+.btn-primary {
+    position: relative;
+    overflow: hidden;
+    background-size: 180% 180%;
+    background-image: var(--gradient-brand);
+    animation: gradient-pan 9s ease-in-out infinite alternate;
+}
+.btn-primary::after {
+    content: "";
+    position: absolute; inset: 0;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .5), transparent);
+    transform: translateX(-140%) skewX(-18deg);
+    pointer-events: none;
+}
+.btn-primary:hover:not(:disabled)::after { animation: shine-sweep .85s var(--ease); }
+
+/* lift on the interactive cards */
+.card, .feature, .stat-card, .classroom-card, .profile-section {
+    transition: transform .28s var(--ease-spring), box-shadow .28s var(--ease),
+                border-color .28s var(--ease);
+}
+.card:hover, .feature:hover, .stat-card:hover, .classroom-card:hover {
+    transform: translateY(-4px);
+    box-shadow: var(--shadow);
+    border-color: color-mix(in srgb, var(--primary) 28%, var(--border));
+}
+
+.stat-value {
+    background-size: 220% 220%;
+    animation: gradient-pan 12s ease-in-out infinite alternate;
+}
+
+.hero-badge { animation: float-y 6s ease-in-out infinite; }
+.hero h1 .grad { background-size: 200% 200%; animation: gradient-pan 8s ease-in-out infinite alternate; }
+
+/* nav pills: a soft scale on hover, and a shared "current" lift */
+.main-nav a, .main-nav .link-button, .main-nav button.nav-link {
+    transition: background var(--speed) var(--ease), color var(--speed) var(--ease),
+                transform .2s var(--ease-spring), border-color var(--speed) var(--ease);
+}
+.main-nav a:hover, .main-nav .link-button:hover, .main-nav button.nav-link:hover { transform: translateY(-1px); }
+.brand-mark { transition: transform .45s var(--ease-spring), box-shadow var(--speed) var(--ease); }
+.brand:hover .brand-mark { transform: rotate(-8deg) scale(1.06); }
+
+.icon-btn { transition: transform .22s var(--ease-spring), color var(--speed) var(--ease), border-color var(--speed) var(--ease); }
+.icon-btn:hover { transform: translateY(-1px) rotate(-6deg); }
+
+.badge { animation: pop-in .34s var(--ease-spring) both; }
+.alert { animation: slide-in-side .4s var(--ease) both; }
+
+/* `data-reveal` staggering is driven by --reveal-delay (set in motion.js) */
+
+/* press feedback: a soft ripple that follows the pointer */
+.press-ripple {
+    position: absolute;
+    border-radius: 50%;
+    pointer-events: none;
+    background: radial-gradient(circle, color-mix(in srgb, currentColor 32%, transparent), transparent 68%);
+    transform: scale(0);
+    animation: ripple-out .6s var(--ease) forwards;
+    z-index: 2;
+}
+@keyframes ripple-out { to { transform: scale(1); opacity: 0; } }
+
+/* --------------------------------------------------------------------------
+   Forms & dialogs
+   -------------------------------------------------------------------------- */
+:where(input, textarea, select):focus-visible { transition: box-shadow .2s var(--ease), border-color .2s var(--ease); }
+.switch-slider::before { transition: transform .32s var(--ease-spring); }
+
+dialog.app-dialog[open] { animation: drawer-in .32s var(--ease-spring) both; }
+dialog.app-dialog[open]::backdrop { animation: fade-in .28s var(--ease) both; }
+
+.toast { animation: slide-in-side .38s var(--ease-spring) both; }
+.more-menu.show button { animation: fade-in .22s var(--ease) both; }
+.more-menu.show button:nth-child(2) { animation-delay: .03s; }
+.more-menu.show button:nth-child(3) { animation-delay: .06s; }
+.more-menu.show button:nth-child(4) { animation-delay: .09s; }
+.more-menu.show button:nth-child(5) { animation-delay: .12s; }
+.more-menu.show button:nth-child(6) { animation-delay: .15s; }
+
+/* waiting-room spinner keeps its own rotation */
+.waiting-spinner { animation: spin 1s linear infinite; }
+
+/* --------------------------------------------------------------------------
+   Classroom room
+   -------------------------------------------------------------------------- */
+.room-header { animation: dock-drop .45s var(--ease-spring) both; }
+
+/* the floating control bar rises once, then only reacts to interaction */
+.room-controls { animation: bar-rise .55s var(--ease-spring) both; animation-delay: .08s; }
+.ctrl-btn { transition: background .16s var(--ease), color .16s var(--ease),
+                        transform .24s var(--ease-spring), opacity .16s var(--ease); }
+.ctrl-btn:hover { transform: translateY(-2px) scale(1.05); }
+.ctrl-btn:active { transform: scale(.9); }
+.ctrl-btn.active { animation: glow-pulse 3.4s ease-in-out infinite; }
+
+/* tiles: staggered entrance, a breathing ring for the active speaker */
+.tile { animation: pop-in .42s var(--ease-spring) both; }
+.tiles .tile:nth-child(1) { animation-delay: .02s; }
+.tiles .tile:nth-child(2) { animation-delay: .06s; }
+.tiles .tile:nth-child(3) { animation-delay: .10s; }
+.tiles .tile:nth-child(4) { animation-delay: .14s; }
+.tiles .tile:nth-child(5) { animation-delay: .18s; }
+.tiles .tile:nth-child(6) { animation-delay: .22s; }
+.tiles .tile:nth-child(n + 7) { animation-delay: .26s; }
+.tile.speaking { animation: ring-pulse 1.9s var(--ease) infinite; }
+.tile:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--room-border)); }
+.tile-conn { animation: fade-in .3s var(--ease) both; }
+
+/* stage views cross-fade instead of hard-cutting */
+.stage-view:not(.hidden) { animation: fade-in .3s var(--ease) both; }
+
+/* the whiteboard dock drops in; the selected tool pops */
+.wb-toolbar { animation: dock-drop .4s var(--ease-spring) both; }
+.wb-tool.active, .wb-action.active { animation: tool-pop .3s var(--ease-spring); }
+.wb-tool:hover, .wb-action:hover { transform: translateY(-1.5px); }
+.wb-swatch:hover .wb-swatch-dot { transform: scale(1.12) rotate(-8deg); }
+.wb-swatch-dot { transition: transform .25s var(--ease-spring), box-shadow var(--speed) var(--ease); }
+.pres-tools { animation: dock-drop .4s var(--ease-spring) both; }
+
+/* side panel: tabs pop, panels fade up, messages arrive */
+.side-tab { transition: background var(--speed) var(--ease), color var(--speed) var(--ease),
+                        transform .2s var(--ease-spring), border-color var(--speed) var(--ease); }
+.side-tab:hover { transform: translateY(-1px); }
+.side-tab.active { animation: pop-in .26s var(--ease-spring); }
+.side-panel.active { animation: fade-up .32s var(--ease) both; }
+.chat-msg { animation: slide-in-side .3s var(--ease-spring) both; }
+.participant { animation: fade-in .3s var(--ease) both; }
+.file-item { animation: slide-in-side .32s var(--ease-spring) both; }
+.hc-btn { transition: background var(--speed) var(--ease), color var(--speed) var(--ease),
+                      border-color var(--speed) var(--ease), transform .2s var(--ease-spring); }
+.hc-btn:hover { transform: translateY(-1px); }
+.layout-btn { transition: background var(--speed) var(--ease), color var(--speed) var(--ease),
+                          transform .2s var(--ease-spring), border-color var(--speed) var(--ease); }
+.layout-btn:hover { transform: translateY(-1px); }
+.cam-pip { animation: pop-in .34s var(--ease-spring) both; }
+
+/* unread / hand counters give a tiny nudge when they appear */
+.unread-pill:not(.hidden), .live-pill:not(.hidden) { animation: pop-in .3s var(--ease-spring) both; }
+
+/* --------------------------------------------------------------------------
+   Loading states
+   -------------------------------------------------------------------------- */
+.skeleton-row {
+    background: linear-gradient(90deg, var(--surface-2) 25%, var(--surface-3) 45%, var(--surface-2) 65%);
+    background-size: 300% 100%;
+    animation: shimmer 1.4s linear infinite;
+}
+@keyframes shimmer { to { background-position: -300% 0; } }
+
+/* a quiet "typing" indicator used by chat placeholders */
+.typing-dots span {
+    display: inline-block; width: 5px; height: 5px; border-radius: 50%;
+    background: currentColor; margin-inline-end: 3px;
+    animation: dot-bounce 1.2s ease-in-out infinite;
+}
+.typing-dots span:nth-child(2) { animation-delay: .15s; }
+.typing-dots span:nth-child(3) { animation-delay: .3s; }
+
+/* --------------------------------------------------------------------------
+   Theme switch: cross-fade the whole document when the browser supports
+   the View Transitions API (Chromium/Safari 18+).  Elsewhere it just snaps.
+   -------------------------------------------------------------------------- */
+::view-transition-old(root),
+::view-transition-new(root) { animation-duration: .34s; animation-timing-function: var(--ease); }
+::view-transition-old(root) { animation-name: fade-in; animation-direction: reverse; }
+::view-transition-new(root) { animation-name: fade-in; }
+
+/* --------------------------------------------------------------------------
+   Hard stop for users who asked for calmer motion
+   -------------------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+    body::before, body::after,
+    .btn-primary, .stat-value, .hero-badge, .hero h1 .grad,
+    .tile.speaking, .ctrl-btn.active, .room-controls, .room-header,
+    .wb-toolbar, .pres-tools, .toast, dialog.app-dialog[open] { animation: none !important; }
+    .js-anim [data-reveal] { opacity: 1 !important; transform: none !important; }
+}
+[data-motion="reduced"] body::before,
+[data-motion="reduced"] body::after,
+[data-motion="reduced"] .btn-primary,
+[data-motion="reduced"] .stat-value,
+[data-motion="reduced"] .hero-badge,
+[data-motion="reduced"] .hero h1 .grad,
+[data-motion="reduced"] .tile.speaking,
+[data-motion="reduced"] .ctrl-btn.active { animation: none !important; }
+[data-motion="reduced"] .js-anim [data-reveal] { opacity: 1 !important; transform: none !important; }
+
+/* --------------------------------------------------------------------------
+   Landing hero preview — the "it is alive" moment
+   -------------------------------------------------------------------------- */
+.hp-card {
+    /* `backwards` (not `both`) so the entrance keyframes stop owning the
+       transform once they finish — otherwise the hover lift and the pointer
+       parallax below would never be able to move the card. */
+    animation: hp-tilt-in .9s var(--ease-spring) backwards;
+    transform:
+        rotateX(calc(6deg + var(--hp-rx, 0deg)))
+        rotateY(var(--hp-ry, 0deg))
+        translateY(var(--hp-lift, 0px));
+    transition: transform .5s var(--ease-spring), box-shadow .5s var(--ease);
+    will-change: transform;
+}
+.hero-preview:hover .hp-card { --hp-lift: -6px; }
+@media (max-width: 720px) {
+    .hp-card { animation: none; transform: none; will-change: auto; }
+}
+@keyframes hp-tilt-in {
+    from { opacity: 0; transform: rotateX(16deg) translateY(28px) scale(.96); }
+    to   { opacity: 1; transform: rotateX(6deg) translateY(0) scale(1); }
+}
+.hp-glow { animation: hp-breathe 7s ease-in-out infinite; }
+@keyframes hp-breathe {
+    0%, 100% { opacity: .22; transform: scale(1); }
+    50%      { opacity: .34; transform: scale(1.04); }
+}
+.hp-float-a { animation: float-y 5.5s ease-in-out infinite; }
+.hp-float-b { animation: float-y 6.5s ease-in-out infinite 0.8s; }
+.hp-avatar { animation: float-y 5s ease-in-out infinite; }
+.hp-t2 .hp-avatar { animation-delay: .9s; }
+.hp-live i { animation: pulse 1.6s infinite; }
+
+/* the whiteboard sketch "draws itself", then the laser dot wanders */
+.hp-board-line {
+    transform-origin: right center;
+    animation: hp-draw 4.4s var(--ease) infinite;
+}
+.hp-board-line.l2 { animation-delay: .5s; }
+.hp-board-line.l3 { animation-delay: 1s; }
+@keyframes hp-draw {
+    0%   { transform: scaleX(0); opacity: 0; }
+    18%  { transform: scaleX(1); opacity: .9; }
+    82%  { transform: scaleX(1); opacity: .9; }
+    100% { transform: scaleX(1); opacity: .25; }
+}
+.hp-board-cursor { animation: hp-cursor 9s var(--ease) infinite; }
+@keyframes hp-cursor {
+    0%   { inset-inline-start: 22%; top: 34%; }
+    25%  { inset-inline-start: 62%; top: 46%; }
+    50%  { inset-inline-start: 44%; top: 66%; }
+    75%  { inset-inline-start: 72%; top: 30%; }
+    100% { inset-inline-start: 22%; top: 34%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .hp-card, .hp-glow, .hp-float-a, .hp-float-b, .hp-avatar,
+    .hp-board-line, .hp-board-cursor, .hp-live i { animation: none !important; }
+}

@@ -27,11 +27,32 @@
     return systemPrefersDark() ? "dark" : "light";
   }
 
-  function apply(pref) {
+  function write(pref) {
     const root = document.documentElement;
     root.setAttribute("data-theme", resolvedTheme(pref));
     root.setAttribute("data-theme-pref", pref || "system");
     setCookie(STORE_KEY, pref || "system", 365);
+  }
+
+  /**
+   * First paint must not wait for anything: write synchronously.
+   * User-triggered switches instead cross-fade through the View Transitions
+   * API when the browser has it (Chromium/Safari 18+), so the whole UI
+   * dissolves into the new palette rather than snapping.
+   */
+  function apply(pref) {
+    if (document.startViewTransition && !prefersReducedMotion()) {
+      document.startViewTransition(() => write(pref));
+    } else {
+      write(pref);
+    }
+  }
+
+  function prefersReducedMotion() {
+    return (
+      document.documentElement.getAttribute("data-motion") === "reduced" ||
+      (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches)
+    );
   }
 
   // initial preference: server-rendered attribute wins (account setting),
@@ -40,7 +61,7 @@
     document.documentElement.getAttribute("data-theme-pref") ||
     readCookie(STORE_KEY) ||
     "system";
-  apply(initial);
+  write(initial);
 
   if (window.matchMedia) {
     window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
@@ -67,15 +88,13 @@
     btn.setAttribute("title", `پوسته: ${THEME_LABEL[pref] || pref} — برای تغییر کلیک کنید`);
   }
 
-  document.addEventListener("click", (e) => {
-    const btn = e.target.closest("#theme-toggle");
-    if (!btn) return;
-    const current = document.documentElement.getAttribute("data-theme-pref") || "system";
-    const next = CYCLE[(CYCLE.indexOf(current) + 1) % CYCLE.length];
-    apply(next);
-    syncToggle();
-    // Persist to the account when signed in, so the choice follows the user
-    // to other devices (guests keep the cookie written by apply()).
+  /**
+   * Persist to the account when signed in, so the choice follows the user to
+   * other devices (guests keep the cookie written by apply()).  The server
+   * attribute wins on the next render, so every path that changes the theme
+   * has to go through here — not just the header toggle.
+   */
+  function persist(pref) {
     const form = document.querySelector('meta[name="csrftoken"]');
     fetch("/accounts/theme/", {
       method: "POST",
@@ -83,9 +102,19 @@
         "Content-Type": "application/json",
         "X-CSRFToken": (form?.content) || readCookie("csrftoken"),
       },
-      body: JSON.stringify({ theme: next }),
+      body: JSON.stringify({ theme: pref }),
       credentials: "same-origin",
     }).catch(() => { /* offline / endpoint absent — cookie still applies */ });
+  }
+
+  document.addEventListener("click", (e) => {
+    const btn = e.target.closest("#theme-toggle");
+    if (!btn) return;
+    const current = document.documentElement.getAttribute("data-theme-pref") || "system";
+    const next = CYCLE[(CYCLE.indexOf(current) + 1) % CYCLE.length];
+    apply(next);
+    syncToggle();
+    persist(next);
   });
 
   document.addEventListener("DOMContentLoaded", syncToggle);
@@ -98,6 +127,8 @@
     },
     set(pref) {
       apply(pref);
+      syncToggle();
+      persist(pref);
     },
     setMotion(mode) {
       document.documentElement.setAttribute("data-motion", mode);
