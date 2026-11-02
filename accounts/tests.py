@@ -55,3 +55,54 @@ class PasswordResetFlowTests(TestCase):
         # reuse the same link → invalid
         r2 = self.client.get(url)
         self.assertContains(r2, "نامعتبر")
+
+
+class ThemePreferenceEndpointTests(TestCase):
+    """The header theme toggle persists light/dark/system per account."""
+
+    def setUp(self):
+        from django.contrib.auth import get_user_model
+
+        self.user = get_user_model().objects.create_user(
+            username="themer", password="Theme-Pass-123", display_name="تم‌کار")
+        self.client.force_login(self.user)
+        self.url = reverse("accounts:theme_preference")
+
+    def _post(self, payload):
+        import json
+
+        return self.client.post(
+            self.url, data=json.dumps(payload), content_type="application/json")
+
+    def test_signed_out_is_redirected(self):
+        self.client.logout()
+        resp = self._post({"theme": "dark"})
+        self.assertEqual(resp.status_code, 302)
+
+    def test_valid_value_is_stored(self):
+        resp = self._post({"theme": "dark"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json(), {"theme": "dark"})
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.theme, "dark")
+
+    def test_every_allowed_value(self):
+        for value in ("light", "dark", "system"):
+            self.assertEqual(self._post({"theme": value}).status_code, 200)
+            self.user.refresh_from_db()
+            self.assertEqual(self.user.theme, value)
+
+    def test_invalid_value_rejected_and_not_stored(self):
+        self.user.theme = "system"
+        self.user.save(update_fields=["theme"])
+        resp = self._post({"theme": "neon"})
+        self.assertEqual(resp.status_code, 400)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.theme, "system")
+
+    def test_malformed_body_rejected(self):
+        resp = self.client.post(self.url, data="not json", content_type="application/json")
+        self.assertEqual(resp.status_code, 400)
+
+    def test_get_not_allowed(self):
+        self.assertEqual(self.client.get(self.url).status_code, 405)

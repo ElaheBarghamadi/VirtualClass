@@ -1011,8 +1011,8 @@ class MeshMedia {
         video.muted = true;
         const overlay = document.createElement('div');
         overlay.className = 'tile-overlay';
-        overlay.innerHTML = '<span class="tile-name"></span><span class="tile-icons"><i class="t-mic" title="میکروفون">🎤</i></span>'
-            + '<button type="button" class="tile-fs" title="نمایش تمام‌صفحه" aria-label="نمایش تمام‌صفحه">⛶</button>';
+        overlay.innerHTML = '<span class="tile-name"></span><span class="tile-icons"><i class="t-mic" title="میکروفون"><svg class="ic"><use href="#i-mic"/></svg></i></span>'
+            + '<button type="button" class="tile-fs" title="نمایش تمام‌صفحه" aria-label="نمایش تمام‌صفحه"><svg class="ic"><use href="#i-maximize"/></svg></button>';
         overlay.querySelector('.tile-fs')?.addEventListener('click', (e) => {
             e.stopPropagation();
             const v = tile.querySelector('video');
@@ -1022,7 +1022,10 @@ class MeshMedia {
         });
         const placeholder = document.createElement('div');
         placeholder.className = 'tile-placeholder';
-        placeholder.textContent = (peer.name || '?').charAt(0);
+        // The initial lives in its own span so CSS can draw the avatar disc
+        // behind it (an absolutely-positioned ::before would paint on top).
+        placeholder.innerHTML = '<span class="tile-initial"></span>';
+        placeholder.querySelector('.tile-initial').textContent = (peer.name || '?').charAt(0);
         const speaking = document.createElement('span');
         speaking.className = 'tile-speaking';
         speaking.textContent = 'در حال صحبت';

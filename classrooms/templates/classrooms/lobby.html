@@ -28,13 +28,13 @@
         <dl class="lobby-meta">
             <div><dt>معلم</dt><dd>{{ classroom.owner.name }}</dd></div>
             <div><dt>شرکت‌کنندگان</dt><dd>{{ classroom.active_member_count }} نفر</dd></div>
-            {% if classroom.is_password_protected %}<div><dt>دسترسی</dt><dd>🔒 محافظت‌شده با رمز</dd></div>{% endif %}
+            {% if classroom.is_password_protected %}<div><dt>دسترسی</dt><dd>محافظت‌شده با رمز</dd></div>{% endif %}
             {% if classroom.enable_waiting_room %}<div><dt>اتاق انتظار</dt><dd>فعال — ورود با تأیید میزبان</dd></div>{% endif %}
         </dl>
 
         {% if classroom.is_locked %}
             <div class="lobby-locked" role="alert">
-                🔒 این کلاس توسط میزبان قفل شده است. امکان ورود شرکت‌کنندهٔ جدید وجود ندارد؛
+                این کلاس توسط میزبان قفل شده است. امکان ورود شرکت‌کنندهٔ جدید وجود ندارد؛
                 اگر فکر می‌کنید اشتباهی رخ داده، با میزبان تماس بگیرید.
             </div>
         {% endif %}

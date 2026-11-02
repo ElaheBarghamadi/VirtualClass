@@ -40,5 +40,6 @@ urlpatterns = [
          name="password_reset_complete"),
     path("register/", views.register_view, name="register"),
     path("profile/", views.profile_view, name="profile"),
+    path("theme/", views.theme_preference_view, name="theme_preference"),
     path("after-login/", views.post_login_redirect, name="post_login"),
 ]

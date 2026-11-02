@@ -105,3 +105,30 @@ def post_login_redirect(request):
     """Honour the per-user landing-page preference after login."""
     target = request.user.landing_page
     return redirect("home" if target == "home" else "dashboard")
+
+
+@login_required
+@require_http_methods(["POST"])
+def theme_preference_view(request):
+    """Persist the header theme toggle for signed-in users.
+
+    The client cycles light → dark → system and posts the result here.  Only
+    the three known values are accepted (anything else is a 400, never a
+    silent write), so a crafted body cannot store arbitrary data.
+    """
+    import json
+
+    from django.http import JsonResponse
+
+    try:
+        payload = json.loads(request.body or b"{}")
+    except (ValueError, UnicodeDecodeError):
+        return JsonResponse({"detail": "بدنهٔ درخواست نامعتبر است."}, status=400)
+    theme = payload.get("theme") if isinstance(payload, dict) else None
+    allowed = {choice for choice, _ in request.user.Theme.choices}
+    if theme not in allowed:
+        return JsonResponse({"detail": "پوستهٔ نامعتبر."}, status=400)
+    if request.user.theme != theme:
+        request.user.theme = theme
+        request.user.save(update_fields=["theme"])
+    return JsonResponse({"theme": theme})

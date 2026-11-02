@@ -219,7 +219,11 @@ class WhiteboardImpl {
         const gridBtn = document.getElementById('wb-grid');
         if (gridBtn) {
             const mode = this._pageGrid.get(this.page) || 'none';
-            gridBtn.textContent = mode === 'dots' ? '⁙' : '▦';
+            // The button is icon-based (SVG); only legacy glyph buttons get
+            // their label rewritten — otherwise textContent would wipe the icon.
+            if (!gridBtn.querySelector('svg')) {
+                gridBtn.textContent = mode === 'dots' ? '⁙' : '▦';
+            }
             gridBtn.classList.toggle('active', mode !== 'none');
             gridBtn.setAttribute('aria-pressed', String(mode !== 'none'));
             gridBtn.title = mode === 'none' ? 'پس‌زمینهٔ شطرنجی' : (mode === 'grid' ? 'پس‌زمینهٔ نقطه‌ای' : 'بدون پس‌زمینه');

@@ -17,7 +17,7 @@
     <dl class="meta-list wide">
         <div><dt>وضعیت</dt><dd>{% if classroom.is_active %}فعال{% else %}غیرفعال{% endif %}</dd></div>
         <div><dt>محافظت با رمز</dt><dd>{% if classroom.is_password_protected %}بله{% else %}خیر{% endif %}</dd></div>
-        <div><dt>قفل کلاس</dt><dd>{% if classroom.is_locked %}🔒 قفل{% else %}باز{% endif %}</dd></div>
+        <div><dt>قفل کلاس</dt><dd>{% if classroom.is_locked %}قفل{% else %}باز{% endif %}</dd></div>
         <div><dt>توضیحات</dt><dd>{{ classroom.description|default:"—" }}</dd></div>
     </dl>
     <div class="card-actions">

@@ -6,6 +6,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="color-scheme" content="light dark">
     <title>{% block title %}{{ ui.app_name }}{% endblock %}</title>
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
     <link href="https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css" rel="stylesheet">
@@ -17,28 +18,52 @@
 <body{% if full_page %} class="full-page"{% endif %}>
 <a class="skip-link" href="#main-content">پرش به محتوای اصلی</a>
 {% if not full_page %}
+{% with path=request.path %}
 <header class="site-header">
     <div class="container header-inner">
         <a class="brand" href="{% url 'home' %}">
-            <span class="brand-mark" aria-hidden="true">◈</span> {{ ui.app_name }}
+            <span class="brand-mark" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M3 7.5 12 3l9 4.5-9 4.5-9-4.5Z"/><path d="M3 12.5 12 17l9-4.5"/><path d="M3 17.5 12 22l9-4.5"/></svg>
+            </span>
+            <span class="brand-text">
+                {{ ui.app_name }}
+                <small>کلاس مجازی، ساده و سریع</small>
+            </span>
         </a>
         <nav class="main-nav" aria-label="ناوبری اصلی">
             {% if user.is_authenticated %}
-                <a href="{% url 'dashboard' %}">داشبورد</a>
-                <a href="{% url 'classrooms:list' %}">کلاس‌های من</a>
+                <a href="{% url 'dashboard' %}" {% if path == '/' or '/dashboard' in path %}aria-current="page"{% endif %}>داشبورد</a>
+                <a href="{% url 'classrooms:list' %}" {% if '/classrooms' in path %}aria-current="page"{% endif %}>کلاس‌های من</a>
                 <a href="{% url 'classrooms:create' %}">ایجاد کلاس</a>
-                <a href="{% url 'accounts:profile' %}">پروفایل</a>
+                <a href="{% url 'accounts:profile' %}" {% if '/profile' in path %}aria-current="page"{% endif %}>پروفایل</a>
+                <span class="nav-sep" aria-hidden="true"></span>
+                <button type="button" class="icon-btn" id="theme-toggle"
+                        title="تغییر پوسته (روشن / تیره / خودکار)"
+                        aria-label="تغییر پوسته" data-theme-mode="{{ ui.theme }}">
+                    <svg class="t-icon-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.2 5.2l1.6 1.6M17.2 17.2l1.6 1.6M18.8 5.2l-1.6 1.6M6.8 17.2l-1.6 1.6"/></svg>
+                    <svg class="t-icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z"/></svg>
+                </button>
                 <form method="post" action="{% url 'accounts:logout' %}" class="inline-form">
                     {% csrf_token %}
-                    <button type="submit" class="link-button">خروج</button>
+                    <button type="submit" class="icon-btn" title="خروج از حساب" aria-label="خروج از حساب">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3"/><path d="M10 8l-4 4 4 4"/><path d="M6 12h9"/></svg>
+                    </button>
                 </form>
             {% else %}
-                <a href="{% url 'accounts:login' %}">ورود</a>
+                <a href="{% url 'accounts:login' %}" {% if '/login' in path %}aria-current="page"{% endif %}>ورود</a>
+                <span class="nav-sep" aria-hidden="true"></span>
+                <button type="button" class="icon-btn" id="theme-toggle"
+                        title="تغییر پوسته (روشن / تیره / خودکار)"
+                        aria-label="تغییر پوسته" data-theme-mode="{{ ui.theme }}">
+                    <svg class="t-icon-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.2 5.2l1.6 1.6M17.2 17.2l1.6 1.6M18.8 5.2l-1.6 1.6M6.8 17.2l-1.6 1.6"/></svg>
+                    <svg class="t-icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z"/></svg>
+                </button>
                 <a href="{% url 'accounts:register' %}" class="btn btn-primary btn-sm">ثبت‌نام</a>
             {% endif %}
         </nav>
     </div>
 </header>
+{% endwith %}
 {% endif %}
 
 <main {% if not full_page %}class="container" {% endif %}id="main-content">

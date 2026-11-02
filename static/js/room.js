@@ -41,6 +41,16 @@ const PERM_ORDER = [
     'can_use_microphone', 'can_use_camera', 'can_share_screen', 'can_use_whiteboard',
     'can_send_messages', 'can_upload_files', 'can_raise_hand', 'can_present',
 ];
+/** Inline SVG state icons (sprite lives in room.html) — emoji rendered as
+ *  tofu on systems without an emoji font and looked inconsistent anyway. */
+const svgUse = (id, cls = 'ic') => `<svg class="${cls}"><use href="#${id}"/></svg>`;
+const STATE_ICONS = {
+    mic: svgUse('i-mic', 'ic state-ic'),
+    micOff: svgUse('i-mic-off', 'ic state-ic'),
+    cam: svgUse('i-cam', 'ic state-ic'),
+    camOff: svgUse('i-cam-off', 'ic state-ic'),
+};
+
 const PERM_LABELS = {
     can_use_microphone: 'میکروفون',
     can_use_camera: 'دوربین',
@@ -241,10 +251,10 @@ class PresenceClient {
             <span class="participant-name"></span>
             <span class="participant-role"></span>
             <span class="participant-states" aria-hidden="true">
-                <i class="s-hand ${p.hand_raised ? 'on' : ''}" title="دست بالا">✋</i>
-                <i class="s-mic ${p.mic_on === false ? 'off' : ''}" title="میکروفون">🎤</i>
-                <i class="s-camera ${p.camera_on === false ? 'off' : ''}" title="دوربین">📹</i>
-                <i class="s-muted ${p.muted ? 'on' : ''}" title="بی‌صدا توسط مدیر">🔇</i>
+                <i class="s-hand ${p.hand_raised ? 'on' : ''}" title="دست بالا"><svg class="ic"><use href="#i-hand"/></svg></i>
+                <i class="s-mic ${p.mic_on === false ? 'off' : ''}" title="میکروفون">${p.mic_on === false ? STATE_ICONS.micOff : STATE_ICONS.mic}</i>
+                <i class="s-camera ${p.camera_on === false ? 'off' : ''}" title="دوربین">${p.camera_on === false ? STATE_ICONS.camOff : STATE_ICONS.cam}</i>
+                <i class="s-muted ${p.muted ? 'on' : ''}" title="بی‌صدا توسط مدیر">${STATE_ICONS.micOff}</i>
             </span>`;
         li.querySelector('.participant-avatar').textContent = (p.name || '?').charAt(0);
         li.querySelector('.participant-name').textContent =
@@ -273,23 +283,23 @@ class PresenceClient {
         };
 
         box.append(
-            btn(p.muted ? 'باصدا کردن' : 'بی‌صدا کردن', p.muted ? '🔊' : '🔇', () =>
+            btn(p.muted ? 'باصدا کردن' : 'بی‌صدا کردن', p.muted ? 'باصدا' : 'بی‌صدا', () =>
                 api(`/members/${p.member_id}/mute/`, { muted: !p.muted })),
-            btn('درخواست روشن کردن میکروفون', '🎙️', () =>
+            btn('درخواست روشن کردن میکروفون', 'درخواست میکروفون', () =>
                 api(`/members/${p.member_id}/mute/`, { request_unmute: true })),
-            btn('دسترسی‌ها و نقش', '⚙️', () => openPermsDialog(p.identity)),
+            btn('دسترسی‌ها و نقش', 'دسترسی‌ها', () => openPermsDialog(p.identity)),
         );
         // Role assignment is owner-only (the server enforces the same rule).
         if (SELF_ROLE === 'OWNER' && p.role !== 'OWNER') {
             box.append(
-                btn('ارتقا به ارائه‌دهنده', '🧑‍🏫', () =>
+                btn('ارتقا به ارائه‌دهنده', 'ارائه‌دهنده', () =>
                     api(`/members/${p.member_id}/role/`, { role: 'PRESENTER' })),
-                btn('ارتقا به مدیر', '🛡️', () =>
+                btn('ارتقا به مدیر', 'مدیر', () =>
                     api(`/members/${p.member_id}/role/`, { role: 'MODERATOR' })),
             );
         }
 
-        const rm = btn('حذف از کلاس', '🚫', async () => {
+        const rm = btn('حذف از کلاس', 'حذف', async () => {
             if (!await confirmDialog('حذف شرکت‌کننده', `${p.name} از کلاس حذف شود؟`, { danger: true, okLabel: 'حذف' })) return;
             const ban = await confirmDialog('مسدودسازی موقت', 'ورود مجدد او ۵ دقیقه مسدود شود؟', { okLabel: 'بله، مسدود شود' });
             await api(`/members/${p.member_id}/remove/`, { ban_minutes: ban ? 5 : 0 });
@@ -383,7 +393,7 @@ function fillPermsDialog(p) {
     }
 
     const muteBtn = document.getElementById('perms-mute');
-    muteBtn.textContent = p.muted ? '🔊 باز کردن بی‌صدا' : '🔇 بی‌صدا کردن';
+    muteBtn.textContent = p.muted ? 'باز کردن بی‌صدا' : 'بی‌صدا کردن';
     muteBtn.onclick = () => api(`/members/${p.member_id}/mute/`, { muted: !p.muted });
 
     // Role select — owner only (the server rejects role changes by anyone else).
@@ -433,7 +443,7 @@ function refreshPermsDialog(identity) {
         if (key && cb.checked !== !!perms[key]) cb.checked = !!perms[key];
     });
     const muteBtn = document.getElementById('perms-mute');
-    muteBtn.textContent = p.muted ? '🔊 باز کردن بی‌صدا' : '🔇 بی‌صدا کردن';
+    muteBtn.textContent = p.muted ? 'باز کردن بی‌صدا' : 'بی‌صدا کردن';
     const roleSel = document.getElementById('perms-role');
     if (document.activeElement !== roleSel && ['MODERATOR', 'PRESENTER', 'STUDENT'].includes(p.role)) {
         roleSel.value = p.role;
@@ -785,7 +795,7 @@ function showLockBadge(locked) {
         badge = document.createElement('span');
         badge.id = 'lock-badge';
         badge.className = 'badge badge-warn';
-        badge.textContent = '🔒 قفل';
+        badge.textContent = 'کلاس قفل است';
         document.querySelector('.room-title').appendChild(badge);
     } else if (!locked && badge) {
         badge.remove();
@@ -1227,11 +1237,11 @@ function showShortcuts() {
 function showHelp() {
     infoDialog('راهنمای کلاس', `
         <ul class="shortcut-list">
-            <li>🎤📹 از نوار پایین میکروفون و دوربین را کنترل کنید.</li>
+            <li>از نوار پایین میکروفون و دوربین را کنترل کنید.</li>
             <li>✋ با «دست بالا» از میزبان اجازهٔ صحبت بگیرید.</li>
             <li>▦ چیدمان صحنه را از دکمه‌های بالای ویدیوها تغییر دهید؛ انتخاب شما ذخیره می‌شود.</li>
             <li>⋯ منوی «بیشتر»: دستگاه‌ها، پوسته، تنظیمات و گزارش مشکل.</li>
-            <li>🔒 دسترسی‌ها (میکروفون، دوربین، تخته، گفتگو) توسط میزبان مدیریت می‌شود.</li>
+            <li>دسترسی‌ها (میکروفون، دوربین، تخته، گفتگو) توسط میزبان مدیریت می‌شود.</li>
         </ul>`);
 }
 
@@ -1383,9 +1393,10 @@ function onQualityChange(quality) {
         return;
     }
     el.classList.remove('hidden');
-    const icons = { excellent: '📶', good: '📶', poor: '📵', lost: '❌', reconnecting: '🔄' };
-    el.textContent = `${icons[quality] || '📶'} ${qualityLabel(quality)}`;
+    // Text + icon (no emoji: they render as tofu without an emoji font).
+    el.textContent = qualityLabel(quality);
     el.className = `conn-quality q-${quality}`;
+    el.dataset.quality = quality;
     presence._updateTitle();
 }
 
@@ -1583,11 +1594,24 @@ function initFiles() {
     });
 }
 
-/** Icon glyph per extension — mirrors SharedFile.type_icon server-side. */
+/** Short type label per extension — rendered as a coloured file chip.
+ *  Emoji icons looked inconsistent across platforms (and showed as tofu on
+ *  systems without an emoji font), so a typographic badge is used. */
 function iconForName(name) {
     const ext = (name || '').includes('.') ? name.split('.').pop().toLowerCase() : '';
-    return { pdf: '📄', png: '🖼️', jpg: '🖼️', jpeg: '🖼️', docx: '📝',
-             pptx: '📽️', xlsx: '📊', zip: '📦' }[ext] || '📎';
+    const map = { pdf: 'PDF', png: 'PNG', jpg: 'JPG', jpeg: 'JPG', docx: 'DOC',
+                  pptx: 'PPT', xlsx: 'XLS', zip: 'ZIP' };
+    return map[ext] || 'FILE';
+}
+
+/** File-kind class for the chip colour (kept in sync with room.css). */
+function fileKind(name) {
+    const ext = (name || '').includes('.') ? name.split('.').pop().toLowerCase() : '';
+    if (['png', 'jpg', 'jpeg'].includes(ext)) return 'img';
+    if (['docx', 'pptx', 'xlsx'].includes(ext)) return 'office';
+    if (['zip'].includes(ext)) return 'zip';
+    if (ext === 'pdf') return 'pdf';
+    return 'file';
 }
 
 /** Management rights over a file: privileged members, or its uploader. */
@@ -1634,7 +1658,9 @@ function addFileItem(file) {
             <a class="btn btn-sm btn-ghost file-download" href="${file.url}" download
                title="دانلود این فایل" aria-label="دانلود این فایل">⬇</a>
         </div>`;
-    li.querySelector('.file-icon').textContent = file.icon || iconForName(file.name);
+    const iconEl = li.querySelector('.file-icon');
+    iconEl.textContent = file.icon || iconForName(file.name);
+    iconEl.dataset.kind = fileKind(file.name);
     li.querySelector('.file-name').textContent = file.name;
     if (file.has_pdf) {
         const pill = document.createElement('span');

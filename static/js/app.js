@@ -32,3 +32,21 @@ document.addEventListener('click', (event) => {
         try { document.execCommand('copy'); done(); } catch (e) { /* ignored */ }
     }
 });
+
+/* --------------------------------------------------------------------------
+ * Colour swatches
+ * A <input type="color"> cannot style its own wrapper, so any `.wb-swatch`
+ * (whiteboard ink, page background, presentation annotations) mirrors the
+ * picked value into a `--sw` custom property that paints the visible dot.
+ * Delegated + bubbling `input` events work for controls created later too.
+ * ------------------------------------------------------------------------ */
+const paintSwatch = (input) => {
+    const wrap = input.closest('.wb-swatch');
+    if (wrap) wrap.style.setProperty('--sw', input.value);
+};
+document.addEventListener('input', (event) => {
+    if (event.target.matches?.('input[type="color"]')) paintSwatch(event.target);
+});
+document.addEventListener('DOMContentLoaded', () => {
+    document.querySelectorAll('.wb-swatch input[type="color"]').forEach(paintSwatch);
+});
