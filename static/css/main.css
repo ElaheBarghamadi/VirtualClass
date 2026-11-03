@@ -1755,6 +1755,7 @@ code {
 }
 .join-role-btn .ic { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .join-role-btn:hover { border-color: var(--accent); color: var(--accent); }
+a.join-role-btn { text-decoration: none; }
 .join-role-btn[aria-pressed="true"] {
     border-style: solid; border-color: var(--accent);
     background: var(--accent-soft); color: var(--accent);

@@ -103,6 +103,14 @@
           </button>
         </div>
 
+        {% else %}
+        {# no class password → the only way in as a teacher is a real login #}
+        <div class="join-role-toggle">
+          <a class="join-role-btn" href="{% url 'accounts:login' %}?next={{ request.path }}">
+            <svg class="ic" aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3.6 3.4 7.8 12 12l8.6-4.2z"/><path d="M6.6 10.6v4.8c0 1.6 2.4 2.9 5.4 2.9s5.4-1.3 5.4-2.9v-4.8"/></svg>
+            <span>معلم هستم — ورود با حساب</span>
+          </a>
+        </div>
         {% endif %}
 
         {% if join_form.password %}
