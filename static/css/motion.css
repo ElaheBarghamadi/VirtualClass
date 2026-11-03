@@ -390,5 +390,46 @@ dialog.app-dialog[open]::backdrop { animation: fade-in .28s var(--ease) both; }
 
 @media (prefers-reduced-motion: reduce) {
     .hp-card, .hp-glow, .hp-float-a, .hp-float-b, .hp-avatar,
-    .hp-board-line, .hp-board-cursor, .hp-live i { animation: none !important; }
+    .hp-board-line, .hp-board-cursor, .hp-live i,
+    .step-num, .cta-glow, p.faq-answer { animation: none !important; }
 }
+
+/* --------------------------------------------------------------------------
+   Landing sections — steps, FAQ and the closing call to action
+   -------------------------------------------------------------------------- */
+/* the number badge pops once its card scrolls into view */
+.js-anim .step.is-revealed .step-num { animation: step-pop .55s var(--ease-spring) backwards; }
+.js-anim .step:nth-child(2).is-revealed .step-num { animation-delay: .1s; }
+.js-anim .step:nth-child(3).is-revealed .step-num { animation-delay: .2s; }
+@keyframes step-pop {
+    from { opacity: 0; transform: scale(.55) rotate(-12deg); }
+    to   { opacity: 1; transform: none; }
+}
+
+/* capability chips land one after another under the hero */
+.js-anim .hero-chips li { animation: fade-up .5s var(--ease) backwards; }
+.js-anim .hero-chips li:nth-child(1) { animation-delay: .05s; }
+.js-anim .hero-chips li:nth-child(2) { animation-delay: .1s; }
+.js-anim .hero-chips li:nth-child(3) { animation-delay: .15s; }
+.js-anim .hero-chips li:nth-child(4) { animation-delay: .2s; }
+.js-anim .hero-chips li:nth-child(5) { animation-delay: .25s; }
+.js-anim .hero-chips li:nth-child(6) { animation-delay: .3s; }
+
+/* the FAQ answer slides open */
+.faq-item[open] > p { animation: faq-in .3s var(--ease) both; }
+@keyframes faq-in {
+    from { opacity: 0; transform: translateY(-5px); }
+    to   { opacity: 1; transform: none; }
+}
+.faq-item summary::after { transition: transform .3s var(--ease), border-color .3s var(--ease); }
+
+/* the light inside the closing band keeps drifting */
+.cta-glow { animation: cta-drift 11s ease-in-out infinite alternate; }
+@keyframes cta-drift {
+    from { transform: translate3d(-7%, -3%, 0) scale(1); }
+    to   { transform: translate3d(7%, 4%, 0) scale(1.1); }
+}
+[data-motion="reduced"] .step-num,
+[data-motion="reduced"] .cta-glow,
+[data-motion="reduced"] .faq-item[open] > p,
+[data-motion="reduced"] .hero-chips li { animation: none !important; }

@@ -9,6 +9,12 @@
         <symbol id="f-users" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7.5" r="3.6"/><path d="M22 21v-2a4 4 0 0 0-3-3.9"/><path d="M16.5 4.2a3.6 3.6 0 0 1 0 6.6"/></symbol>
         <symbol id="f-board" viewBox="0 0 24 24"><rect x="2.6" y="4" width="18.8" height="11.2" rx="1.8"/><path d="M12 15.2v4.2M8.5 20.6h7"/><path d="m10.4 10.6 3.6 2.1-3.6 2.1z" fill="currentColor" stroke="none"/></symbol>
         <symbol id="f-bolt" viewBox="0 0 24 24"><path d="M13 2.5 4.5 13.5H11l-1 8 8.5-11H12Z"/></symbol>
+        <symbol id="f-video" viewBox="0 0 24 24"><rect x="2.6" y="6" width="12.6" height="12" rx="2.6"/><path d="m15.2 12.6 5.1 3.1a.6.6 0 0 0 .9-.5V8.8a.6.6 0 0 0-.9-.5l-5.1 3.1z"/></symbol>
+        <symbol id="f-screen" viewBox="0 0 24 24"><rect x="2.6" y="4" width="18.8" height="12.4" rx="2.2"/><path d="M8.4 20.4h7.2M12 16.4v4"/><path d="M12 7.6v6M9.4 10.2 12 7.6l2.6 2.6"/></symbol>
+        <symbol id="f-quiz" viewBox="0 0 24 24"><path d="M8 3.6h8a1.8 1.8 0 0 1 1.8 1.8v14.4a1.4 1.4 0 0 1-1.4 1.4H7.6a1.4 1.4 0 0 1-1.4-1.4V5.4A1.8 1.8 0 0 1 8 3.6z"/><path d="m8.8 12.2 2 2 4-4.2"/></symbol>
+        <symbol id="f-file" viewBox="0 0 24 24"><path d="M13.4 2.8H7a2 2 0 0 0-2 2v14.4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8.4z"/><path d="M13.4 2.8v5.6h5.6"/><path d="M8.4 13.4h7.2M8.4 17h4.6"/></symbol>
+        <symbol id="f-check" viewBox="0 0 24 24"><path d="M4.5 12.5 9.5 17.5 19.5 6.5"/></symbol>
+        <symbol id="f-shield" viewBox="0 0 24 24"><path d="M12 2.8 4.6 6v5.8c0 4.4 3 8.1 7.4 9.4 4.4-1.3 7.4-5 7.4-9.4V6z"/><path d="m9 12 2.2 2.2L15.4 10"/></symbol>
     </defs>
 </svg>
 
@@ -16,8 +22,8 @@
     <span class="hero-badge"><span class="dot" aria-hidden="true"></span> بدون نصب، در مرورگر — آماده در چند ثانیه</span>
     <h1>کلاس آنلاینتان را <span class="grad">در یک لینک</span> بسازید</h1>
     <p class="hero-sub">
-        ویدیو و صدای زنده، اشتراک صفحه، تخته سفید هم‌زمان، گفتگو و مدیریت کامل شرکت‌کنندگان —
-        همه در یک اتاق ساده با لینک اختصاصی و رمز دلخواه.
+        ویدیو و صدای زنده، اشتراک صفحه، تخته سفید هم‌زمان، آزمون و تکلیف، گفتگو و مدیریت کامل
+        شرکت‌کنندگان — همه در یک اتاق ساده با لینک اختصاصی و رمز دلخواه.
     </p>
     <div class="hero-actions">
         {% if user.is_authenticated %}
@@ -31,6 +37,12 @@
             <a class="btn btn-ghost btn-lg" href="{% url 'accounts:login' %}">ورود به حساب</a>
         {% endif %}
     </div>
+    <ul class="hero-trust">
+        <li><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#f-check"/></svg> بدون نصب</li>
+        <li><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#f-check"/></svg> بدون کارت بانکی</li>
+        <li><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#f-check"/></svg> روی موبایل و دسکتاپ</li>
+    </ul>
+
     <div class="hero-preview" aria-hidden="true">
         <div class="hp-glow"></div>
         <div class="hp-card">
@@ -65,7 +77,48 @@
         </div>
     </div>
 
-    <div class="hero-features">
+    <ul class="hero-chips" aria-label="قابلیت‌ها">
+        <li>تخته سفید هم‌زمان</li>
+        <li>اشتراک صفحه</li>
+        <li>آزمون و تکلیف</li>
+        <li>گفتگوی گروهی</li>
+        <li>اتاق انتظار</li>
+        <li>اشتراک فایل</li>
+    </ul>
+</section>
+
+<section class="landing-sec" aria-labelledby="how-title">
+    <div class="sec-head">
+        <span class="sec-eyebrow">در سه گام</span>
+        <h2 id="how-title">از ساختن کلاس تا شروع درس</h2>
+        <p class="sec-lead">بدون تنظیمات پیچیده و بدون نصب نرم‌افزار؛ کل مسیر کمتر از یک دقیقه است.</p>
+    </div>
+    <ol class="steps">
+        <li class="step">
+            <span class="step-num" aria-hidden="true">۱</span>
+            <h3>کلاس را بساز</h3>
+            <p>نام، رمز دلخواه و تنظیمات اتاق را انتخاب کن؛ همان لحظه لینک اختصاصی کلاس آماده می‌شود.</p>
+        </li>
+        <li class="step">
+            <span class="step-num" aria-hidden="true">۲</span>
+            <h3>لینک را بفرست</h3>
+            <p>لینک را کپی کن و در گروه یا پیام بفرست؛ دانش‌آموزان بدون حساب و بدون نصب وارد می‌شوند.</p>
+        </li>
+        <li class="step">
+            <span class="step-num" aria-hidden="true">۳</span>
+            <h3>درس را شروع کن</h3>
+            <p>دوربین و میکروفون، تخته سفید، اشتراک صفحه، گفتگو و آزمون — همه در یک صفحه و هم‌زمان.</p>
+        </li>
+    </ol>
+</section>
+
+<section class="landing-sec" aria-labelledby="features-title">
+    <div class="sec-head">
+        <span class="sec-eyebrow">امکانات</span>
+        <h2 id="features-title">هر چیزی که یک کلاس زنده لازم دارد</h2>
+        <p class="sec-lead">یک اتاق، بدون افزونه و بدون جابه‌جایی بین چند ابزار.</p>
+    </div>
+    <div class="features-grid">
         <div class="feature">
             <span class="feature-icon"><svg><use href="#f-link"/></svg></span>
             <strong>لینک امن و یکتا</strong>
@@ -73,18 +126,107 @@
         </div>
         <div class="feature">
             <span class="feature-icon"><svg><use href="#f-lock"/></svg></span>
-            <strong>ورود با رمز</strong>
+            <strong>رمز و اتاق انتظار</strong>
             <span>رمز اختیاری، اتاق انتظار و قفل کلاس در کنترل میزبان.</span>
         </div>
         <div class="feature">
             <span class="feature-icon"><svg><use href="#f-board"/></svg></span>
-            <strong>تخته و اشتراک صفحه</strong>
-            <span>تخته سفید چندصفحه‌ای و حاشیه‌نویسی روی اسلایدها، هم‌زمان برای همه.</span>
+            <strong>تخته سفید چندصفحه‌ای</strong>
+            <span>رسم آزاد، شکل، متن و رنگ — هم‌زمان برای همه و بدون خط‌خوردگی.</span>
+        </div>
+        <div class="feature">
+            <span class="feature-icon"><svg><use href="#f-screen"/></svg></span>
+            <strong>ویدیو، صدا و اشتراک صفحه</strong>
+            <span>با سرور رسانه یا حالت همتا‌به‌همتا، حتی پشت شبکه‌های سخت.</span>
+        </div>
+        <div class="feature">
+            <span class="feature-icon"><svg><use href="#f-quiz"/></svg></span>
+            <strong>آزمون و تکلیف</strong>
+            <span>ساخت آزمون چندگزینه‌ای، تعریف تکلیف و تصحیح پاسخ‌ها داخل همان کلاس.</span>
         </div>
         <div class="feature">
             <span class="feature-icon"><svg><use href="#f-users"/></svg></span>
             <strong>نقش و دسترسی دقیق</strong>
             <span>میکروفون، دوربین، گفتگو و تخته را برای هر نفر جدا روشن یا خاموش کنید.</span>
+        </div>
+    </div>
+</section>
+
+<section class="landing-sec" aria-labelledby="roles-title">
+    <div class="sec-head">
+        <span class="sec-eyebrow">برای هر دو طرف</span>
+        <h2 id="roles-title">میزبان کنترل کامل دارد، دانش‌آموز ساده‌ترین مسیر</h2>
+    </div>
+    <div class="roles">
+        <article class="role-card role-host">
+            <header>
+                <span class="role-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#f-shield"/></svg></span>
+                <h3>برای میزبان</h3>
+            </header>
+            <ul class="check-list">
+                <li><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#f-check"/></svg> مدیریت میکروفون، دوربین و نقش هر شرکت‌کننده</li>
+                <li><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#f-check"/></svg> قفل اتاق، اتاق انتظار و اخراج مهمان ناخوانده</li>
+                <li><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#f-check"/></svg> ساخت آزمون و تکلیف و دیدن پاسخ‌ها</li>
+                <li><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#f-check"/></svg> تخته سفید، اشتراک صفحه و حاشیه‌نویسی</li>
+            </ul>
+        </article>
+        <article class="role-card role-student">
+            <header>
+                <span class="role-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#f-bolt"/></svg></span>
+                <h3>برای دانش‌آموز</h3>
+            </header>
+            <ul class="check-list">
+                <li><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#f-check"/></svg> ورود با یک لینک و یک نام — بدون ثبت‌نام</li>
+                <li><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#f-check"/></svg> شرکت در گفتگو، تخته سفید و آزمون کلاس</li>
+                <li><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#f-check"/></svg> ارسال تکلیف و دیدن فایل‌های درس</li>
+                <li><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#f-check"/></svg> تجربهٔ کامل روی موبایل و تبلت</li>
+            </ul>
+        </article>
+    </div>
+</section>
+
+<section class="landing-sec" aria-labelledby="faq-title">
+    <div class="sec-head">
+        <span class="sec-eyebrow">پرسش‌های پرتکرار</span>
+        <h2 id="faq-title">قبل از شروع بدانید</h2>
+    </div>
+    <div class="faq">
+        <details class="faq-item">
+            <summary>برای استفاده باید چیزی نصب کنم؟</summary>
+            <p>نه. کلاس کاملاً در مرورگر اجرا می‌شود؛ کافی است لینک اتاق را باز کنید. برای بهترین تجربه از کروم، اج یا فایرفاکس به‌روز استفاده کنید.</p>
+        </details>
+        <details class="faq-item">
+            <summary>چند نفر می‌توانند هم‌زمان در کلاس باشند؟</summary>
+            <p>اگر سرور رسانه (LiveKit) پیکربندی شده باشد، تعداد شرکت‌کنندگان به منابع سرور شما بستگی دارد. در حالت همتا‌به‌همتا (mesh) کار تا حدود ۱۲ نفر روان است.</p>
+        </details>
+        <details class="faq-item">
+            <summary>بدون سرور رسانه هم صدا و تصویر کار می‌کند؟</summary>
+            <p>بله، در حالت همتا‌به‌همتا تصویر و صدا مستقیم بین مرورگرها رد و بدل می‌شود. برای کلاس‌های بزرگ‌تر، اتصال LiveKit پایدارتر و سبک‌تر است.</p>
+        </details>
+        <details class="faq-item">
+            <summary>کلاس خصوصی است؟</summary>
+            <p>هر کلاس لینک یکتا دارد و می‌توانید رمز بگذارید، اتاق انتظار را فعال کنید و در میانهٔ درس اتاق را قفل کنید تا کسی تازه وارد نشود.</p>
+        </details>
+        <details class="faq-item">
+            <summary>روی موبایل و اینترنت ضعیف چطور؟</summary>
+            <p>رابط برای صفحه‌های کوچک طراحی شده و نوار ابزار اتاق روی موبایل جداگانه چیده می‌شود. در شبکهٔ ضعیف می‌توانید دوربین را خاموش کنید و فقط با صدا و تخته سفید ادامه دهید.</p>
+        </details>
+    </div>
+</section>
+
+<section class="cta-band">
+    <div class="cta-glow" aria-hidden="true"></div>
+    <div class="cta-inner">
+        <h2>اولین کلاس آنلاینتان را همین حالا بسازید</h2>
+        <p>ساخت کلاس و ورود مهمان‌ها رایگان است و در چند ثانیه انجام می‌شود.</p>
+        <div class="cta-actions">
+            {% if user.is_authenticated %}
+                <a class="btn btn-primary btn-lg" href="{% url 'classrooms:create' %}">ایجاد کلاس جدید</a>
+                <a class="btn btn-ghost btn-lg" href="{% url 'dashboard' %}">داشبورد من</a>
+            {% else %}
+                <a class="btn btn-primary btn-lg" href="{% url 'accounts:register' %}">ساخت حساب رایگان</a>
+                <a class="btn btn-ghost btn-lg" href="{% url 'accounts:login' %}">ورود به حساب</a>
+            {% endif %}
         </div>
     </div>
 </section>
