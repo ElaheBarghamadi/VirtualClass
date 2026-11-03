@@ -285,7 +285,182 @@
                     </div>
                     <div class="wb-canvas-wrap"><canvas id="whiteboard-canvas" aria-label="تخته سفید"></canvas></div>
                 </div>
+        <section class="dt-card hidden" id="device-test-card" aria-hidden="true" aria-labelledby="dt-title">
+            <div class="dt-lead">
+                <h3 id="dt-title">
+                    <svg class="ic" aria-hidden="true"><use href="#i-mic"/></svg>
+                    تست صدا و تصویر
+                </h3>
+                <p class="dt-hint">اختیاری — تا نزنید دوربین و میکروفون روشن نمی‌شوند.</p>
             </div>
+            <div class="dt-body" id="dt-body" hidden>
+                <video id="dt-video" playsinline muted aria-label="پیش‌نمایش دوربین"></video>
+                <div class="dt-meter" aria-label="سطح صدا"><div id="dt-level"></div></div>
+                <p class="dt-status" id="dt-status" role="status"></p>
+            </div>
+            <div class="dt-actions">
+                <button type="button" class="btn btn-sm btn-primary" id="dt-start">شروع تست</button>
+                <button type="button" class="btn btn-sm btn-ghost" id="dt-later">بعداً</button>
+                <button type="button" class="dt-close" id="dt-close" aria-label="بستن تست دستگاه">
+                    <svg class="ic" aria-hidden="true"><use href="#i-close"/></svg>
+                </button>
+            </div>
+        </section>
+            </div><!-- /.stage -->
+        {% comment %}The control bar lives inside the stage column so it centres
+           over the video area, never over the chat panel.{% endcomment %}
+        <footer class="room-controls">
+            {% comment %} One row on every screen: the rail scrolls sideways instead of
+               wrapping into a stack of rows. {% endcomment %}
+            <div class="ctrl-scroll" id="ctrl-scroll" role="toolbar" aria-label="کنترل‌های جلسه">
+            <button type="button" class="ctrl-btn" id="btn-mic" title="میکروفون (M)" aria-label="میکروفون" aria-pressed="false">
+                <svg class="ic icon-on" viewBox="0 0 24 24"><use href="#i-mic"/></svg>
+                <svg class="ic icon-off" viewBox="0 0 24 24"><use href="#i-mic-off"/></svg>
+            </button>
+            <button type="button" class="ctrl-btn" id="btn-camera" title="دوربین (V)" aria-label="دوربین" aria-pressed="false">
+                <svg class="ic icon-on" viewBox="0 0 24 24"><use href="#i-cam"/></svg>
+                <svg class="ic icon-off" viewBox="0 0 24 24"><use href="#i-cam-off"/></svg>
+            </button>
+            <button type="button" class="ctrl-btn" id="btn-screen" title="اشتراک صفحه (S)" aria-label="اشتراک صفحه">
+                <svg class="ic" viewBox="0 0 24 24"><use href="#i-screen"/></svg>
+            </button>
+            <button type="button" class="ctrl-btn" id="btn-whiteboard" title="تخته سفید" aria-label="تخته سفید">
+                <svg class="ic" viewBox="0 0 24 24"><use href="#i-board"/></svg>
+            </button>
+            <button type="button" class="ctrl-btn" id="btn-hand" title="بالا بردن دست" aria-label="بالا بردن دست" aria-pressed="false">
+                <svg class="ic" viewBox="0 0 24 24"><use href="#i-hand"/></svg>
+            </button>
+            <span class="reaction-holder">
+                <button type="button" class="ctrl-btn" id="btn-reactions" title="واکنش سریع (R)"
+                        aria-label="واکنش" aria-haspopup="true" aria-expanded="false">
+                    <svg class="ic" viewBox="0 0 24 24"><use href="#i-heart"/></svg>
+                </button>
+                <div class="reaction-tray hidden" id="reaction-tray" role="menu" aria-label="واکنش‌ها">
+                    <button type="button" role="menuitem" data-reaction="heart" aria-label="دوست دارم"><svg viewBox="0 0 24 24"><use href="#i-heart"/></svg></button>
+                    <button type="button" role="menuitem" data-reaction="clap" aria-label="تشویق"><svg viewBox="0 0 24 24"><use href="#i-clap"/></svg></button>
+                    <button type="button" role="menuitem" data-reaction="thumbs" aria-label="موافقم"><svg viewBox="0 0 24 24"><use href="#i-thumbs"/></svg></button>
+                    <button type="button" role="menuitem" data-reaction="star" aria-label="عالی بود"><svg viewBox="0 0 24 24"><use href="#i-star"/></svg></button>
+                    <button type="button" role="menuitem" data-reaction="question" aria-label="سؤال دارم"><svg viewBox="0 0 24 24"><use href="#i-question"/></svg></button>
+                </div>
+            </span>
+            <span class="ctrl-sep" aria-hidden="true"></span>
+            <button type="button" class="ctrl-btn side-toggle" id="btn-chat" title="گفتگو (C)" aria-label="گفتگو">
+                <svg class="ic" viewBox="0 0 24 24"><use href="#i-chat"/></svg>
+            </button>
+            <button type="button" class="ctrl-btn side-toggle" id="btn-people" title="شرکت‌کنندگان (P)" aria-label="شرکت‌کنندگان">
+                <svg class="ic" viewBox="0 0 24 24"><use href="#i-users"/></svg>
+            </button>
+
+            </div><!-- /.ctrl-scroll -->
+            <span class="ctrl-sep ctrl-pinned" aria-hidden="true"></span>
+            <button type="button" class="ctrl-btn ctrl-pinned" id="btn-more" title="بیشتر" aria-label="منوی بیشتر" aria-haspopup="true" aria-expanded="false">
+                <svg class="ic" viewBox="0 0 24 24"><use href="#i-more"/></svg>
+            </button>
+            <!-- Outside the scrolling rail: leaving the class must never require
+                 a sideways swipe on a phone. -->
+            <button type="button" class="ctrl-btn ctrl-exit" id="btn-exit" title="خروج از کلاس" aria-label="خروج از کلاس">
+                <svg class="ic" viewBox="0 0 24 24"><use href="#i-leave"/></svg>
+            </button>
+
+    
+        {% comment %} Rarely used controls live in the «⋯» menu, but the original
+           buttons stay in the DOM so every existing handler, keyboard shortcut
+           and state indicator keeps working. The menu rows click them.{% endcomment %}
+        <div class="ctrl-parked" aria-hidden="true">
+                <button type="button" class="ctrl-btn" id="btn-captions" title="زیرنویس زنده"
+                        aria-label="زیرنویس زنده" aria-pressed="false">
+                    <svg class="ic" viewBox="0 0 24 24"><use href="#i-cc"/></svg>
+                </button>
+            {% if is_privileged %}
+                <span class="ctrl-sep parked-only" aria-hidden="true"></span>
+                <button type="button" class="ctrl-btn parked-only" id="btn-mute-all" title="بی‌صدا کردن همه" aria-label="بی‌صدا کردن همه">
+                    <svg class="ic" viewBox="0 0 24 24"><use href="#i-muteall"/></svg>
+                </button>
+                <button type="button" class="ctrl-btn parked-only" id="btn-lock" title="قفل کلاس" aria-label="قفل کلاس">
+                    <svg class="ic" viewBox="0 0 24 24"><use href="#i-lock"/></svg>
+                </button>
+                <button type="button" class="ctrl-btn parked-only" id="btn-settings" title="تنظیمات کلاس" aria-label="تنظیمات کلاس">
+                    <svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="2"/>
+                        <path d="M12 3v2.4M12 18.6V21M3 12h2.4M18.6 12H21M5.6 5.6l1.7 1.7M16.7 16.7l1.7 1.7M18.4 5.6l-1.7 1.7M7.3 16.7l-1.7 1.7"
+                              stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                </button>
+                <button type="button" class="ctrl-btn parked-only" id="btn-session" title="شروع/پایان جلسه" aria-label="مدیریت جلسه">
+                    <svg class="ic" viewBox="0 0 24 24"><use href="#i-session"/></svg>
+                </button>
+                <button type="button" class="ctrl-btn parked-only" id="btn-record" title="ضبط جلسه (ذخیره در دستگاه شما)"
+                        aria-label="ضبط جلسه" aria-pressed="false" aria-haspopup="true" aria-expanded="false">
+                    <span class="rec-dot" aria-hidden="true"></span>
+                    <svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="6" fill="currentColor"/></svg>
+                    <span class="rec-timer hidden" id="rec-timer" aria-hidden="true">00:00</span>
+                </button>
+            {% endif %}
+        </div>
+        <!-- ===== more menu ===== -->
+            <div class="more-menu hidden" id="more-menu" role="menu" aria-label="منوی بیشتر">
+                <div class="menu-group menu-grid" role="group" aria-label="ظاهر و دستگاه‌ها">
+                    <button type="button" role="menuitem" id="menu-devices">
+                        <svg class="mi" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-sliders"/></svg>
+                        <span>دستگاه‌ها</span>
+                    </button>
+                    <button type="button" role="menuitem" id="menu-theme">
+                        <svg class="mi" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-palette"/></svg>
+                        <span>پوسته</span>
+                    </button>
+                    <button type="button" role="menuitem" class="menu-sync" data-sync="btn-captions" aria-pressed="false">
+                        <svg class="mi" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-cc"/></svg>
+                        <span>زیرنویس</span>
+                        <span class="menu-state" aria-hidden="true"></span>
+                    </button>
+                </div>
+                {% if is_privileged %}
+                    <div class="menu-group menu-grid" role="group" aria-label="جلسه">
+                        <button type="button" role="menuitem" class="menu-sync" data-sync="btn-session" aria-pressed="false">
+                            <svg class="mi" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-session"/></svg>
+                            <span>جلسه</span>
+                            <span class="menu-state" aria-hidden="true"></span>
+                        </button>
+                        <button type="button" role="menuitem" class="menu-sync" data-sync="btn-record" aria-pressed="false">
+                            <svg class="mi" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="6" fill="currentColor"/></svg>
+                            <span>ضبط</span>
+                            <span class="menu-state" aria-hidden="true"></span>
+                        </button>
+                        <button type="button" role="menuitem" class="menu-sync" data-sync="btn-mute-all">
+                            <svg class="mi" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-muteall"/></svg>
+                            <span>بی‌صدا کردن همه</span>
+                        </button>
+                        <button type="button" role="menuitem" class="menu-sync" data-sync="btn-lock" aria-pressed="false">
+                            <svg class="mi" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-lock"/></svg>
+                            <span>قفل کلاس</span>
+                            <span class="menu-state" aria-hidden="true"></span>
+                        </button>
+                    </div>
+                    <div class="menu-group menu-grid" role="group" aria-label="مدیریت کلاس">
+                        <button type="button" role="menuitem" id="menu-settings">
+                            <svg class="mi" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-cog"/></svg>
+                            <span>تنظیمات کلاس</span>
+                        </button>
+                        <button type="button" role="menuitem" id="menu-manage" data-href="{% url 'classrooms:detail' classroom.room_code %}">
+                            <svg class="mi" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-list"/></svg>
+                            <span>مدیریت کلاس</span>
+                        </button>
+                    </div>
+                {% endif %}
+                <div class="menu-group menu-grid" role="group" aria-label="راهنما و پشتیبانی">
+                    <button type="button" role="menuitem" id="menu-shortcuts">
+                        <svg class="mi" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-keyboard"/></svg>
+                        <span>میان‌برها</span>
+                    </button>
+                    <button type="button" role="menuitem" id="menu-help">
+                        <svg class="mi" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-help"/></svg>
+                        <span>راهنما</span>
+                    </button>
+                    <button type="button" role="menuitem" id="menu-report" class="danger">
+                        <svg class="mi" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-flag"/></svg>
+                        <span>گزارش مشکل</span>
+                    </button>
+                </div>
+            </div>
+        </footer>
         </main>
 
         <aside class="room-side" id="room-side" aria-label="پنل کناری">
@@ -436,148 +611,8 @@
     <div class="caption-layer" id="caption-layer" role="status" aria-live="polite" aria-atomic="false"></div>
     <div class="reaction-layer" id="reaction-layer" aria-hidden="true"></div>
 
-    <footer class="room-controls">
-        {% comment %} One row on every screen: the rail scrolls sideways instead of
-           wrapping into a stack of rows. {% endcomment %}
-        <div class="ctrl-scroll" id="ctrl-scroll" role="toolbar" aria-label="کنترل‌های جلسه">
-        <button type="button" class="ctrl-btn" id="btn-mic" title="میکروفون (M)" aria-label="میکروفون" aria-pressed="false">
-            <svg class="ic icon-on" viewBox="0 0 24 24"><use href="#i-mic"/></svg>
-            <svg class="ic icon-off" viewBox="0 0 24 24"><use href="#i-mic-off"/></svg>
-        </button>
-        <button type="button" class="ctrl-btn" id="btn-camera" title="دوربین (V)" aria-label="دوربین" aria-pressed="false">
-            <svg class="ic icon-on" viewBox="0 0 24 24"><use href="#i-cam"/></svg>
-            <svg class="ic icon-off" viewBox="0 0 24 24"><use href="#i-cam-off"/></svg>
-        </button>
-        <button type="button" class="ctrl-btn" id="btn-screen" title="اشتراک صفحه (S)" aria-label="اشتراک صفحه">
-            <svg class="ic" viewBox="0 0 24 24"><use href="#i-screen"/></svg>
-        </button>
-        <button type="button" class="ctrl-btn" id="btn-whiteboard" title="تخته سفید" aria-label="تخته سفید">
-            <svg class="ic" viewBox="0 0 24 24"><use href="#i-board"/></svg>
-        </button>
-        <button type="button" class="ctrl-btn" id="btn-hand" title="بالا بردن دست" aria-label="بالا بردن دست" aria-pressed="false">
-            <svg class="ic" viewBox="0 0 24 24"><use href="#i-hand"/></svg>
-        </button>
-        <span class="reaction-holder">
-            <button type="button" class="ctrl-btn" id="btn-reactions" title="واکنش سریع (R)"
-                    aria-label="واکنش" aria-haspopup="true" aria-expanded="false">
-                <svg class="ic" viewBox="0 0 24 24"><use href="#i-heart"/></svg>
-            </button>
-            <div class="reaction-tray hidden" id="reaction-tray" role="menu" aria-label="واکنش‌ها">
-                <button type="button" role="menuitem" data-reaction="heart" aria-label="دوست دارم"><svg viewBox="0 0 24 24"><use href="#i-heart"/></svg></button>
-                <button type="button" role="menuitem" data-reaction="clap" aria-label="تشویق"><svg viewBox="0 0 24 24"><use href="#i-clap"/></svg></button>
-                <button type="button" role="menuitem" data-reaction="thumbs" aria-label="موافقم"><svg viewBox="0 0 24 24"><use href="#i-thumbs"/></svg></button>
-                <button type="button" role="menuitem" data-reaction="star" aria-label="عالی بود"><svg viewBox="0 0 24 24"><use href="#i-star"/></svg></button>
-                <button type="button" role="menuitem" data-reaction="question" aria-label="سؤال دارم"><svg viewBox="0 0 24 24"><use href="#i-question"/></svg></button>
-            </div>
-        </span>
-        <button type="button" class="ctrl-btn" id="btn-captions" title="زیرنویس زنده"
-                aria-label="زیرنویس زنده" aria-pressed="false">
-            <svg class="ic" viewBox="0 0 24 24"><use href="#i-cc"/></svg>
-        </button>
-        <span class="ctrl-sep" aria-hidden="true"></span>
-        <button type="button" class="ctrl-btn side-toggle" id="btn-chat" title="گفتگو (C)" aria-label="گفتگو">
-            <svg class="ic" viewBox="0 0 24 24"><use href="#i-chat"/></svg>
-        </button>
-        <button type="button" class="ctrl-btn side-toggle" id="btn-people" title="شرکت‌کنندگان (P)" aria-label="شرکت‌کنندگان">
-            <svg class="ic" viewBox="0 0 24 24"><use href="#i-users"/></svg>
-        </button>
-        {% if is_privileged %}
-            <span class="ctrl-sep host-only" aria-hidden="true"></span>
-            <button type="button" class="ctrl-btn host-only" id="btn-mute-all" title="بی‌صدا کردن همه" aria-label="بی‌صدا کردن همه">
-                <svg class="ic" viewBox="0 0 24 24"><use href="#i-muteall"/></svg>
-            </button>
-            <button type="button" class="ctrl-btn host-only" id="btn-lock" title="قفل کلاس" aria-label="قفل کلاس">
-                <svg class="ic" viewBox="0 0 24 24"><use href="#i-lock"/></svg>
-            </button>
-            <button type="button" class="ctrl-btn host-only" id="btn-settings" title="تنظیمات کلاس" aria-label="تنظیمات کلاس">
-                <svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="2"/>
-                    <path d="M12 3v2.4M12 18.6V21M3 12h2.4M18.6 12H21M5.6 5.6l1.7 1.7M16.7 16.7l1.7 1.7M18.4 5.6l-1.7 1.7M7.3 16.7l-1.7 1.7"
-                          stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-            </button>
-            <button type="button" class="ctrl-btn host-only" id="btn-session" title="شروع/پایان جلسه" aria-label="مدیریت جلسه">
-                <svg class="ic" viewBox="0 0 24 24"><use href="#i-session"/></svg>
-            </button>
-            <button type="button" class="ctrl-btn host-only" id="btn-record" title="ضبط جلسه (ذخیره در دستگاه شما)"
-                    aria-label="ضبط جلسه" aria-pressed="false" aria-haspopup="true" aria-expanded="false">
-                <span class="rec-dot" aria-hidden="true"></span>
-                <svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="6" fill="currentColor"/></svg>
-                <span class="rec-timer hidden" id="rec-timer" aria-hidden="true">00:00</span>
-            </button>
-        {% endif %}
-        <span class="ctrl-sep" aria-hidden="true"></span>
-        <button type="button" class="ctrl-btn" id="btn-more" title="بیشتر" aria-label="منوی بیشتر" aria-haspopup="true" aria-expanded="false">
-            <svg class="ic" viewBox="0 0 24 24"><use href="#i-more"/></svg>
-        </button>
-        </div><!-- /.ctrl-scroll -->
-        <!-- Outside the scrolling rail: leaving the class must never require
-             a sideways swipe on a phone. -->
-        <button type="button" class="ctrl-btn ctrl-exit" id="btn-exit" title="خروج از کلاس" aria-label="خروج از کلاس">
-            <svg class="ic" viewBox="0 0 24 24"><use href="#i-leave"/></svg>
-        </button>
 
-        <!-- ===== more menu ===== -->
-        <div class="more-menu hidden" id="more-menu" role="menu" aria-label="منوی بیشتر">
-            <div class="menu-group" role="group" aria-label="ظاهر و دستگاه‌ها">
-                <button type="button" role="menuitem" id="menu-devices">
-                    <svg class="mi" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-sliders"/></svg>
-                    <span>تنظیمات دستگاه‌ها</span>
-                </button>
-                <button type="button" role="menuitem" id="menu-theme">
-                    <svg class="mi" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-palette"/></svg>
-                    <span>تغییر پوسته</span>
-                </button>
-            </div>
-            {% if is_privileged %}
-                <div class="menu-group" role="group" aria-label="مدیریت کلاس">
-                    <button type="button" role="menuitem" id="menu-settings">
-                        <svg class="mi" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-cog"/></svg>
-                        <span>تنظیمات کلاس</span>
-                    </button>
-                    <button type="button" role="menuitem" id="menu-manage" data-href="{% url 'classrooms:detail' classroom.room_code %}">
-                        <svg class="mi" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-list"/></svg>
-                        <span>صفحهٔ مدیریت کلاس</span>
-                    </button>
-                </div>
-            {% endif %}
-            <div class="menu-group" role="group" aria-label="راهنما و پشتیبانی">
-                <button type="button" role="menuitem" id="menu-shortcuts">
-                    <svg class="mi" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-keyboard"/></svg>
-                    <span>کلیدهای میان‌بر</span>
-                </button>
-                <button type="button" role="menuitem" id="menu-help">
-                    <svg class="mi" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-help"/></svg>
-                    <span>راهنما</span>
-                </button>
-                <button type="button" role="menuitem" id="menu-report" class="danger">
-                    <svg class="mi" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-flag"/></svg>
-                    <span>گزارش مشکل</span>
-                </button>
-            </div>
-        </div>
-    </footer>
 
-    {# Optional, one-time device check — never shown again in this tab. #}
-    <section class="dt-card hidden" id="device-test-card" aria-hidden="true" aria-labelledby="dt-title">
-        <div class="dt-head">
-            <h3 id="dt-title">
-                <svg class="ic" aria-hidden="true"><use href="#i-mic"/></svg>
-                تست صدا و تصویر
-            </h3>
-            <button type="button" class="dt-close" id="dt-close" aria-label="بستن تست دستگاه">
-                <svg class="ic" aria-hidden="true"><use href="#i-close"/></svg>
-            </button>
-        </div>
-        <p class="dt-hint">اختیاری است — تا روی «شروع تست» نزنید، دوربین و میکروفون روشن نمی‌شوند.</p>
-        <div class="dt-body" id="dt-body" hidden>
-            <video id="dt-video" playsinline muted aria-label="پیش‌نمایش دوربین"></video>
-            <div class="dt-meter" aria-label="سطح صدا"><div id="dt-level"></div></div>
-            <p class="dt-status" id="dt-status" role="status"></p>
-        </div>
-        <div class="dt-actions">
-            <button type="button" class="btn btn-sm btn-primary" id="dt-start">شروع تست</button>
-            <button type="button" class="btn btn-sm btn-ghost" id="dt-later">بعداً</button>
-        </div>
-    </section>
 
     {# Touch backdrop for the side-panel drawer (tap/Escape to close). #}
     <div class="drawer-backdrop" id="drawer-backdrop" aria-hidden="true"></div>

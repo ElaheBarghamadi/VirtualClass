@@ -1617,6 +1617,15 @@ function refreshControlStates() {
 // ---------------------------------------------------------------------------
 let menuPlace = () => {};
 
+/** Mirror the parked controls' pressed state onto their menu rows. */
+function syncMenuStates() {
+    document.querySelectorAll('.menu-sync[data-sync]').forEach((row) => {
+        const source = document.getElementById(row.dataset.sync);
+        if (!source || !row.hasAttribute('aria-pressed')) return;
+        row.setAttribute('aria-pressed', source.getAttribute('aria-pressed') || 'false');
+    });
+}
+
 function toggleMoreMenu(force) {
     const menu = document.getElementById('more-menu');
     const btn = document.getElementById('btn-more');
@@ -1626,6 +1635,7 @@ function toggleMoreMenu(force) {
     if (show) setDrawer(false);
     btn.setAttribute('aria-expanded', String(show));
     if (show) {
+        syncMenuStates();
         menu.classList.remove('hidden');
         // The control bar scrolls its own overflow, and the menu is taller
         // than the bar — park it on <body> and place it above the button.
@@ -1664,6 +1674,15 @@ function initMoreMenu() {
     });
 
     const bind = (id, fn) => document.getElementById(id)?.addEventListener('click', () => { toggleMoreMenu(false); fn(); });
+    // Rows that mirror a parked control: click the original node so the one
+    // handler (and its state) stays authoritative, then mirror its aria-pressed.
+    document.querySelectorAll('.menu-sync').forEach((row) => {
+        row.addEventListener('click', () => {
+            document.getElementById(row.dataset.sync)?.click();
+            syncMenuStates();
+            toggleMoreMenu(false);
+        });
+    });
     bind('menu-devices', openDevicesDialog);
     bind('menu-theme', () => {
         const order = ['system', 'light', 'dark'];

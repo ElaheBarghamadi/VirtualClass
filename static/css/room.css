@@ -41,9 +41,9 @@ body.full-page .messages {
 .room-header {
     display: flex; align-items: center; justify-content: space-between;
     padding: .55rem 1.1rem;
-    background: color-mix(in srgb, var(--room-surface) 82%, transparent);
-    -webkit-backdrop-filter: blur(18px) saturate(170%);
-    backdrop-filter: blur(18px) saturate(170%);
+    background: color-mix(in srgb, var(--room-surface) 96%, transparent);
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
     border-bottom: 1px solid var(--glass-line);
     gap: .4rem .75rem;
     flex: none;
@@ -104,6 +104,9 @@ body.full-page .messages {
 .room-main {
     padding: .85rem .9rem calc(var(--bar-h) + 1.4rem);
     min-width: 0; display: flex;
+    /* the floating control bar is a child of this column, so it centres over
+       the stage instead of over the stage + chat panel */
+    position: relative;
 }
 .stage { flex: 1; display: flex; flex-direction: column; min-height: 0; position: relative; }
 .stage-view { flex: 1; display: flex; flex-direction: column; min-height: 0; gap: .6rem; }
@@ -119,13 +122,15 @@ body.full-page .messages {
     z-index: 6;
     display: flex; align-items: center; gap: .15rem; flex-wrap: wrap;
     padding: .25rem;
-    background: color-mix(in srgb, var(--room-surface) 78%, transparent);
-    backdrop-filter: blur(22px) saturate(180%);
-    -webkit-backdrop-filter: blur(22px) saturate(180%);
+    background: color-mix(in srgb, var(--room-surface) 95%, transparent);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
     border: 1px solid var(--glass-line);
     border-radius: var(--radius-pill);
     box-shadow: var(--shadow);
 }
+.stage-toolbar { opacity: .92; transition: opacity 160ms var(--ease, ease); }
+.stage-toolbar:hover, .stage-toolbar:focus-within { opacity: 1; }
 .layout-btn {
     display: inline-flex; align-items: center; gap: .35rem;
     background: transparent; border: 1px solid transparent;
@@ -225,19 +230,45 @@ body.full-page .messages {
 /* Camera-off tile: a soft studio surface with the participant's initial in
    a brand disc — calm instead of a full-bleed colour block. */
 .tile-initial {
-    width: 76px; height: 76px; border-radius: 50%;
+    width: clamp(64px, 13vw, 148px); height: clamp(64px, 13vw, 148px); border-radius: 50%;
     display: flex; align-items: center; justify-content: center;
     background: var(--gradient-brand);
     color: #fff; font-size: 1.9rem; font-weight: 800;
     box-shadow: 0 12px 28px -14px color-mix(in srgb, var(--accent) 85%, transparent);
 }
 @media (max-width: 700px) { .tile-initial { width: 60px; height: 60px; font-size: 1.5rem; } }
+/* Phones: the five-word layout switcher wrapped to two rows across the top of
+   the video. Icons alone keep it one row and out of the way. */
+@media (max-width: 620px) {
+    .stage-toolbar { gap: 0; padding: .2rem; border-radius: var(--radius-pill); }
+    .stage-toolbar .lb-label { display: none; }
+    .layout-btn { padding: .38rem .45rem; }
+    .stage-toolbar .ctrl-sep { display: none; }
+}
+
+@media (max-width: 620px) {
+    /* two side-by-side columns on a phone leave ~180px per tile, which
+       truncates every name to «رضا کری…» — stack them instead */
+    .tiles[data-count="2"], .tiles[data-count="3"], .tiles[data-count="4"] {
+        grid-template-columns: 1fr;
+    }
+}
+/* A big empty panel with just an initial reads as "broken video". Say what it
+   is; the placeholder is hidden the moment a video track is attached. */
+.tile-placeholder::after {
+    content: "دوربین خاموش";
+    font-size: .74rem; font-weight: 600; color: var(--room-muted);
+    letter-spacing: .01em;
+}
+.tile-placeholder.hidden::after { content: none; }
 .tile-overlay {
     position: absolute; inset-inline-start: .5rem; bottom: .45rem;
     display: flex; align-items: center; gap: .5rem;
-    background: color-mix(in srgb, var(--background) 72%, transparent);
-    color: var(--text); padding: .15rem .6rem; border-radius: var(--radius-pill);
-    font-size: .78rem; max-width: calc(100% - 1rem);
+    background: color-mix(in srgb, var(--background) 93%, transparent);
+    border: 1px solid color-mix(in srgb, var(--room-border) 70%, transparent);
+    color: var(--text); padding: .2rem .65rem; border-radius: var(--radius-pill);
+    font-size: .8rem; font-weight: 600; max-width: calc(100% - 1rem);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, .07);
 }
 .tile-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tile-icons i { font-style: normal; font-size: .7rem; margin-inline-start: .3rem; }
@@ -427,9 +458,9 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
    keep the dock to one comfortable row on a laptop. */
 .wb-toolbar {
     display: flex; align-items: center; gap: .3rem; flex-wrap: wrap;
-    background: color-mix(in srgb, var(--room-surface) 82%, transparent);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
+    background: color-mix(in srgb, var(--room-surface) 96%, transparent);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
     border: 1px solid var(--room-border);
     border-radius: var(--radius-lg, 14px);
     padding: .3rem .35rem;
@@ -624,7 +655,8 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
     background: var(--danger);
     flex: none;
 }
-.ws-dot.connected { background: var(--success); }
+.ws-dot.connected { display: none; }  /* the header already says "متصل" — a
+   second green dot read as an unread badge on the chat tab */
 
 .side-panel { display: none; flex-direction: column; flex: 1; min-height: 0; }
 .side-panel.active { display: flex; }
@@ -827,8 +859,8 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
     /* iOS-style floating "island": frosted glass, hairline border, layered
        shadow.  Buttons never wrap — the rail scrolls sideways instead, so
        the bar is exactly one row tall on every screen size. */
-    --glass: color-mix(in srgb, var(--room-surface) 62%, transparent);
-    --glass-line: color-mix(in srgb, var(--room-border) 55%, transparent);
+    --glass: color-mix(in srgb, var(--room-surface) 93%, transparent);
+    --glass-line: color-mix(in srgb, var(--room-border) 82%, transparent);
     position: absolute;
     bottom: calc(.9rem + env(safe-area-inset-bottom, 0px));
     left: 0; right: 0;
@@ -838,8 +870,8 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
     z-index: 30;
     padding: 5px;
     background: var(--glass);
-    -webkit-backdrop-filter: blur(26px) saturate(180%);
-    backdrop-filter: blur(26px) saturate(180%);
+    -webkit-backdrop-filter: blur(12px) saturate(140%);
+    backdrop-filter: blur(12px) saturate(140%);
     border: .5px solid var(--glass-line);
     border-radius: 28px;
     box-shadow:
@@ -849,8 +881,24 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
     display: flex; align-items: center; gap: 3px;
     overflow: visible; /* the "more" menu pops out of the bar */
 }
-/* the exit button sits outside .ctrl-scroll — always reachable */
-.room-controls .ctrl-exit { flex: none; }
+/* «⋯» and «خروج» live outside the scrolling rail: on a phone the rail is
+   wider than the screen, and a menu you have to swipe to find is a hidden
+   menu. */
+.room-controls .ctrl-pinned { flex: none; }
+.room-controls .ctrl-sep.ctrl-pinned { margin: 0 3px; }
+
+/* The exit button sits outside .ctrl-scroll — always reachable, and tinted so
+   it never reads as one more neutral tool next to the mic. */
+.room-controls .ctrl-exit {
+    flex: none;
+    color: var(--danger);
+    background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+.room-controls .ctrl-exit:hover,
+.room-controls .ctrl-exit:focus-visible {
+    background: color-mix(in srgb, var(--danger) 18%, transparent);
+    color: var(--danger);
+}
 /* Edge fades tell the user the rail continues past the screen. */
 .room-controls::before,
 .room-controls::after {
@@ -869,6 +917,7 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
 
 .ctrl-scroll {
     display: flex; align-items: center; flex-wrap: nowrap;
+    flex: 1 1 auto; min-width: 0;
     gap: 5px; padding: 2px;
     overflow-x: auto; overflow-y: hidden;
     scroll-behavior: smooth;
@@ -1091,20 +1140,32 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
     position: fixed;
     z-index: 80;
     transform: translate(-50%, -100%);
-    background: var(--room-surface);
-    color: var(--room-text);
-    border: 1px solid var(--room-border);
+    /* These popovers are re-parented to <body> for placement, so the room's
+       custom properties are no longer inherited — without the fallbacks the
+       whole menu painted transparent over the video. */
+    background: var(--room-surface, var(--surface));
+    color: var(--room-text, var(--text));
+    border: 1px solid var(--room-border, var(--border));
     border-radius: 16px;
     box-shadow: var(--shadow-lg, 0 18px 40px rgb(0 0 0 / .28));
     padding: .3rem;
 }
 
-.more-menu { width: max-content; min-width: 236px; }
+.more-menu { width: max-content; min-width: 236px; max-width: min(92vw, 420px); }
+
+/* A twelve-row menu is its own kind of crowd: the rows are short, so lay the
+   groups out two-up and halve the height. */
+.more-menu .menu-group.menu-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1px 3px;
+}
+.more-menu .menu-group.menu-grid button { white-space: nowrap; font-size: .82rem; padding: .5rem .45rem; }
 
 .menu-group { display: flex; flex-direction: column; gap: 1px; }
 
 .more-menu .menu-group + .menu-group {
-    border-top: 1px solid var(--room-border);
+    border-top: 1px solid var(--room-border, var(--border));
     margin-top: .25rem;
     padding-top: .25rem;
 }
@@ -1140,6 +1201,30 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
 
 .more-menu button.danger,
 .row-menu-item.danger { color: var(--danger); }
+
+/* Controls that moved into the «⋯» menu keep their original node (so every
+   handler and state indicator still works) but take no space in the rail. */
+.ctrl-parked { display: none !important; }
+
+/* A menu row that mirrors a toggle shows its state on the trailing edge —
+   otherwise "ضبط جلسه" in a menu looks like a one-shot action. */
+.more-menu .menu-state {
+    margin-inline-start: auto;
+    padding-inline-start: .5rem;
+    font-size: .74rem;
+    font-weight: 600;
+    color: var(--room-muted, var(--muted));
+}
+.more-menu button.menu-sync[aria-pressed="true"] {
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 9%, transparent);
+}
+.more-menu button.menu-sync[aria-pressed="true"] .menu-state { color: var(--accent); }
+.more-menu .menu-sync[aria-pressed="true"] .menu-state::after { content: "روشن"; }
+.more-menu .menu-sync[aria-pressed="false"] .menu-state::after { content: "خاموش"; }
+/* «ضبط» needs words, not "روشن": it is a live recording state. */
+.more-menu .menu-sync[data-sync="btn-record"][aria-pressed="true"] .menu-state::after { content: "در حال ضبط"; }
+.more-menu .menu-sync[data-sync="btn-session"][aria-pressed="true"] .menu-state::after { content: "در حال برگزاری"; }
 
 .more-menu button.danger:hover,
 .row-menu-item.danger:hover {
@@ -1249,14 +1334,19 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
    of a 100vh column and was cut off by the viewport.
 --------------------------------------------------------------------------- */
 .dt-card {
-    position: fixed;
-    /* anchored to the stage edge (physical right in RTL) so it never covers
-       the chat composer, which docks on the left */
-    inset-inline-start: 16px;
-    bottom: calc(var(--bar-h, 76px) + 1.4rem + env(safe-area-inset-bottom, 0px));
-    z-index: 70;
-    width: min(320px, calc(100vw - 32px));
-    padding: .85rem .9rem .9rem;
+    /* A one-line invitation docked *in the stage flow* under the videos: as a
+       fixed overlay it covered the bottom-right corner of a participant tile
+       and hid the name plate. In flow it simply takes its own row. */
+    flex: none;
+    align-self: center;
+    width: min(560px, 100%);
+    margin-top: .6rem;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: .55rem .8rem;
+    padding: .55rem .6rem .55rem .85rem;
+    z-index: 4;
     background: var(--room-surface);
     color: var(--room-text);
     border: 1px solid var(--room-border);
@@ -1266,15 +1356,9 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
 
 .dt-card[hidden] { display: none; }
 
-.dt-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: .5rem;
-    margin-bottom: .35rem;
-}
+.dt-lead { display: flex; align-items: baseline; flex-wrap: wrap; gap: .1rem .55rem; flex: 1 1 220px; min-width: 0; }
 
-.dt-head h3 {
+.dt-lead h3 {
     margin: 0;
     font-size: .92rem;
     font-weight: 700;
@@ -1283,7 +1367,7 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
     gap: .4rem;
 }
 
-.dt-head .ic {
+.dt-lead .ic {
     width: 17px; height: 17px;
     fill: none; stroke: currentColor; stroke-width: 1.8;
     stroke-linecap: round; stroke-linejoin: round;
@@ -1304,13 +1388,13 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
 .dt-close .ic { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
 
 .dt-hint {
-    margin: 0 0 .6rem;
-    font-size: .76rem;
-    line-height: 1.75;
+    margin: 0;
+    font-size: .75rem;
+    line-height: 1.6;
     color: var(--room-muted);
 }
 
-.dt-body { display: grid; gap: .5rem; margin-bottom: .7rem; }
+.dt-body { display: grid; gap: .5rem; flex: 1 1 100%; }
 .dt-body[hidden] { display: none; }
 
 .dt-body video {
@@ -1339,15 +1423,11 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
 
 .dt-status { margin: 0; font-size: .74rem; color: var(--room-muted); min-height: 1.2em; }
 
-.dt-actions { display: flex; gap: .4rem; }
-.dt-actions .btn { flex: 1 1 auto; justify-content: center; }
+.dt-actions { display: flex; align-items: center; gap: .4rem; }
+.dt-actions .btn { justify-content: center; }
 
 @media (max-width: 640px) {
-    .dt-card {
-        inset-inline: 8px;
-        width: auto;
-        bottom: calc(var(--bar-h, 76px) + .8rem + env(safe-area-inset-bottom, 0px));
-    }
+    .dt-card { width: 100%; }
 }
 
 @media (prefers-reduced-motion: no-preference) {
