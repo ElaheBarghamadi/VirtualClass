@@ -16,6 +16,8 @@
    ========================================================================== */
 
 :root {
+    /* Inline SVG mask for the read-only (view-only) badge — no image files. */
+    --eye-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z'/%3E%3Ccircle cx='12' cy='12' r='3'/%3E%3C/svg%3E");
   /* ---- brand ---------------------------------------------------------- */
   --brand-500: #6366f1;
   --brand-600: #5457e5;

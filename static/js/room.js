@@ -1593,8 +1593,16 @@ function refreshControlStates() {
     document.getElementById('btn-camera')?.classList.toggle('off', !PERMISSIONS.can_use_camera);
     document.getElementById('btn-screen')?.classList.toggle('off', !PERMISSIONS.can_share_screen);
     document.getElementById('btn-hand')?.classList.toggle('off', !PERMISSIONS.can_raise_hand);
-    // not dimmed: read-only members open the board to watch it
-    document.getElementById('btn-whiteboard')?.classList.toggle('view-only', !PERMISSIONS.can_use_whiteboard);
+    // Not dimmed: read-only members still open the board to watch it — but the
+    // button says so, and the toolbar hides its tools (the server re-checks
+    // permission on every operation anyway).
+    const wbBtn = document.getElementById('btn-whiteboard');
+    if (wbBtn) {
+        const viewOnly = !PERMISSIONS.can_use_whiteboard;
+        wbBtn.classList.toggle('view-only', viewOnly);
+        wbBtn.title = viewOnly ? 'تخته سفید — فقط نمایش' : 'تخته سفید';
+        wbBtn.setAttribute('aria-label', wbBtn.title);
+    }
 }
 
 // ---------------------------------------------------------------------------
