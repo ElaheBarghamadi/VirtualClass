@@ -55,7 +55,15 @@ body.full-page .messages {
 .room-logo { width: 30px; height: 30px; border-radius: var(--radius-sm); object-fit: cover; border: 1px solid var(--room-border); }
 .room-header-actions { display: flex; align-items: center; gap: .8rem; }
 .room-clock { font-variant-numeric: tabular-nums; color: var(--room-muted); font-size: .95rem; direction: ltr; }
-.live-dot { color: var(--danger); font-size: .75rem; font-weight: 800; animation: pulse 1.6s infinite; }
+.live-dot {
+    color: var(--danger); font-size: .75rem; font-weight: 800;
+    display: inline-flex; align-items: center; gap: .3rem;
+    animation: pulse 1.6s infinite;
+}
+.live-dot .dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: currentColor; flex: none;
+}
 @keyframes pulse { 50% { opacity: .45; } }
 
 .conn-pill {
@@ -564,12 +572,20 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
     background: var(--room-surface);
     min-height: 0;
 }
+/* The tab strip must never clip: four Persian labels plus badges are wider
+   than a 330px panel, and flex items refuse to shrink past their min-content,
+   so the last tab used to be cut off by the stage edge. */
 .side-tabs {
     display: flex; gap: .2rem; padding: .45rem;
     border-bottom: 1px solid var(--room-border);
+    overflow-x: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
 }
+.side-tabs::-webkit-scrollbar { display: none; }
 .side-tab {
-    flex: 1; background: none; border: 1px solid transparent; color: var(--room-muted);
+    flex: 1 0 auto; min-width: 0; white-space: nowrap;
+    background: none; border: 1px solid transparent; color: var(--room-muted);
     border-radius: var(--radius-sm);
     font: inherit; font-size: .8rem; font-weight: 650; padding: .48rem .3rem;
     cursor: pointer;
@@ -582,11 +598,33 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
     border-color: color-mix(in srgb, var(--accent) 24%, transparent);
 }
 .side-tab:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+/* The drawer close button only exists for the stacked (mobile) layout. */
+.drawer-close {
+    display: none;
+    flex: none;
+    width: 34px; height: 34px;
+    align-items: center; justify-content: center;
+    border: 1px solid var(--room-border);
+    border-radius: var(--radius-sm);
+    background: var(--room-surface);
+    color: var(--room-muted);
+    font: inherit; font-size: 1rem; line-height: 1;
+    cursor: pointer;
+}
+.drawer-close:hover { color: var(--room-text); border-color: var(--border-strong); }
+.drawer-close:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .count-pill { background: var(--surface-3); border-radius: var(--radius-pill); padding: 0 .45rem; font-size: .72rem; font-weight: 700; }
 .unread-pill { background: var(--danger); color: var(--on-primary); border-radius: var(--radius-pill); padding: 0 .45rem; font-size: .7rem; }
 .hand-pill { background: var(--warning-soft); color: var(--warning); border-radius: var(--radius-pill); padding: 0 .45rem; font-size: .72rem; }
-.ws-dot { color: var(--danger); font-size: .65rem; }
-.ws-dot.connected { color: var(--success); }
+/* Connection dot for the chat tab — a real circle, not a glyph. */
+.ws-dot {
+    display: inline-block;
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--danger);
+    flex: none;
+}
+.ws-dot.connected { background: var(--success); }
 
 .side-panel { display: none; flex-direction: column; flex: 1; min-height: 0; }
 .side-panel.active { display: flex; }
@@ -736,6 +774,11 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
     transition: border-color var(--speed) var(--ease), background var(--speed) var(--ease);
 }
 .file-item:hover { border-color: var(--border-strong); }
+.file-icon .ic {
+    width: 19px; height: 19px;
+    fill: none; stroke: currentColor; stroke-width: 1.6;
+    stroke-linecap: round; stroke-linejoin: round;
+}
 .file-icon {
     flex: none; width: 36px; height: 36px;
     display: inline-flex; align-items: center; justify-content: center;
@@ -889,4 +932,429 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
     mask: var(--eye-mask) center / contain no-repeat;
     opacity: 0.85;
     pointer-events: none;
+}
+
+/* ---------------------------------------------------------------------------
+   Empty stage — the very first thing a host sees in a fresh room.
+   It had no layout at all: the hint icons rendered at their default 300×150,
+   so the "waiting" screen was a wall of giant black glyphs.
+--------------------------------------------------------------------------- */
+.stage-empty .se-avatar {
+    position: relative;
+    display: grid;
+    place-items: center;
+    margin-bottom: .2rem;
+}
+
+.stage-empty .se-ring {
+    position: absolute;
+    inset: -14px;
+    border-radius: 50%;
+    border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
+}
+
+.stage-empty .se-title {
+    margin: 0;
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: var(--room-text, var(--text));
+}
+
+.stage-empty #stage-empty-text {
+    margin: 0;
+    max-width: 34ch;
+    color: var(--room-muted, var(--muted));
+    font-size: .84rem;
+}
+
+.stage-empty .se-hints {
+    list-style: none;
+    margin: .5rem 0 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: .4rem .5rem;
+    justify-content: center;
+}
+
+.stage-empty .se-hints li {
+    display: inline-flex;
+    align-items: center;
+    gap: .35rem;
+    padding: .3rem .6rem;
+    border-radius: 999px;
+    border: 1px solid color-mix(in srgb, currentColor 16%, transparent);
+    background: color-mix(in srgb, currentColor 6%, transparent);
+    font-size: .74rem;
+    line-height: 1.6;
+}
+
+.stage-empty .se-hints .ic {
+    width: 14px;
+    height: 14px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+
+/* ---------------------------------------------------------------------------
+   Narrow screens: the whiteboard toolbar and the control bar
+--------------------------------------------------------------------------- */
+@media (max-width: 900px) {
+    /* Twenty-odd tools used to wrap into five rows and cover the board (and
+       the roster tabs behind it).  Keep one scrollable row instead. */
+    .wb-toolbar {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        overflow-y: hidden;
+        scrollbar-width: none;
+        max-width: 100%;
+        scroll-behavior: smooth;
+        /* the row continues off the inline-end edge — fade it so the cut
+           reads as "swipe for more" instead of a broken pill */
+        -webkit-mask-image: linear-gradient(to left, #000 calc(100% - 22px), transparent);
+        mask-image: linear-gradient(to left, #000 calc(100% - 22px), transparent);
+    }
+    .wb-toolbar::-webkit-scrollbar { display: none; }
+    .wb-toolbar > * { flex: 0 0 auto; }
+    .wb-group { flex-wrap: nowrap; }
+    .wb-tool, .wb-action { flex: 0 0 auto; }
+
+    /* the panel becomes the whole width when it is the only thing on screen */
+    .room-side { min-width: 0; }
+}
+
+/* Four Persian labels plus badges must fit a 330px rail without clipping —
+   tighten the strip instead of letting the last tab slide out of reach. */
+.side-tabs { gap: .12rem; padding: .4rem .3rem; }
+.side-tab { font-size: .76rem; padding: .42rem .22rem; gap: .2rem; }
+.side-tab .count-pill,
+.side-tab .hand-pill { padding: 0 .3rem; font-size: .68rem; }
+.side-tab .ws-dot { margin-inline-start: .05rem; }
+
+
+/* ---------------------------------------------------------------------------
+   Phones / small tablets: the side panel becomes a drawer.
+   The markup and room.js (setDrawer, backdrop, Escape, outside-tap) already
+   existed — the CSS was missing, so the panel stayed docked and squeezed the
+   stage to a sliver at 390px.
+--------------------------------------------------------------------------- */
+@media (max-width: 900px) {
+    .room-body { grid-template-columns: 1fr; }
+
+    .room-side {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        left: 0;
+        width: min(340px, 88vw);
+        z-index: 42;
+        border-inline-start: none;
+        border-inline-end: 1px solid var(--room-border);
+        box-shadow: var(--shadow-lg);
+        transform: translateX(-104%);
+        transition: transform 220ms var(--ease, ease-out);
+        will-change: transform;
+    }
+    .room-side.drawer-open { transform: translateX(0); }
+
+    .drawer-close { display: inline-flex; }
+
+    .drawer-backdrop {
+        position: absolute;
+        inset: 0;
+        z-index: 41;
+        background: color-mix(in srgb, #04060f 45%, transparent);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 200ms var(--ease, ease-out);
+    }
+    .drawer-backdrop.open { opacity: 1; pointer-events: auto; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .room-side, .drawer-backdrop { transition: none; }
+}
+
+/* ---------------------------------------------------------------------------
+   Popovers: the "more" menu, the reaction tray and the per-participant menu.
+   All three are moved to <body> by room.js and placed above their anchor by
+   anchorPopover(), so they need position:fixed + a translate that centres and
+   lifts them.  Without this they rendered as unstyled blocks with 300×150 icons.
+--------------------------------------------------------------------------- */
+.more-menu,
+.reaction-tray,
+.row-menu {
+    position: fixed;
+    z-index: 80;
+    transform: translate(-50%, -100%);
+    background: var(--room-surface);
+    color: var(--room-text);
+    border: 1px solid var(--room-border);
+    border-radius: 16px;
+    box-shadow: var(--shadow-lg, 0 18px 40px rgb(0 0 0 / .28));
+    padding: .3rem;
+}
+
+.more-menu { width: max-content; min-width: 236px; }
+
+.menu-group { display: flex; flex-direction: column; gap: 1px; }
+
+.more-menu .menu-group + .menu-group {
+    border-top: 1px solid var(--room-border);
+    margin-top: .25rem;
+    padding-top: .25rem;
+}
+
+.more-menu button,
+.row-menu-item {
+    display: flex;
+    align-items: center;
+    gap: .55rem;
+    width: 100%;
+    padding: .52rem .6rem;
+    background: none;
+    border: 0;
+    border-radius: 10px;
+    color: inherit;
+    font: inherit;
+    font-size: .85rem;
+    line-height: 1.6;
+    text-align: start;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background 140ms var(--ease, ease), color 140ms var(--ease, ease);
+}
+
+.more-menu button:hover,
+.more-menu button:focus-visible,
+.row-menu-item:hover,
+.row-menu-item:focus-visible {
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+    color: var(--accent);
+    outline: none;
+}
+
+.more-menu button.danger,
+.row-menu-item.danger { color: var(--danger); }
+
+.more-menu button.danger:hover,
+.row-menu-item.danger:hover {
+    background: color-mix(in srgb, var(--danger) 12%, transparent);
+    color: var(--danger);
+}
+
+/* menu icons: never let an unsized <svg> take over the popover */
+.mi {
+    width: 18px;
+    height: 18px;
+    flex: none;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.7;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+/* ---- reaction tray ---- */
+.reaction-tray {
+    display: flex;
+    align-items: center;
+    gap: .2rem;
+    padding: .3rem .4rem;
+    border-radius: 999px;
+}
+
+.reaction-tray button {
+    width: 38px;
+    height: 38px;
+    display: grid;
+    place-items: center;
+    border: 0;
+    border-radius: 50%;
+    background: none;
+    color: var(--room-text);
+    cursor: pointer;
+    transition: background 140ms var(--ease, ease), color 140ms var(--ease, ease),
+                transform 140ms var(--ease, ease);
+}
+
+.reaction-tray button:hover,
+.reaction-tray button:focus-visible {
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    color: var(--accent);
+    transform: translateY(-2px);
+    outline: none;
+}
+
+.reaction-tray button svg {
+    width: 20px;
+    height: 20px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+/* ---- per-participant menu ---- */
+.row-menu { min-width: 214px; }
+
+.row-menu-head {
+    padding: .45rem .6rem .3rem;
+    font-size: .78rem;
+    font-weight: 700;
+    color: var(--room-muted);
+    max-width: 22ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.row-menu-sep {
+    height: 1px;
+    margin: .25rem .4rem;
+    background: var(--room-border);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .reaction-tray button { transition: none; }
+}
+
+/* Icons inside the file row's buttons and the waiting-room avatar. */
+.file-actions .btn .ic {
+    width: 14px; height: 14px;
+    fill: none; stroke: currentColor; stroke-width: 1.9;
+    stroke-linecap: round; stroke-linejoin: round;
+}
+.file-download .ic { width: 15px; height: 15px; }
+
+.participant-avatar.is-waiting {
+    background: var(--surface-3);
+    color: var(--room-muted);
+    box-shadow: 0 0 0 2px var(--room-surface);
+}
+.participant-avatar.is-waiting .ic {
+    width: 16px; height: 16px;
+    fill: none; stroke: currentColor; stroke-width: 1.7;
+    stroke-linecap: round; stroke-linejoin: round;
+}
+
+/* ---------------------------------------------------------------------------
+   Optional device check card (inside the room, first visit only).
+   It had no styling at all, so it fell into the page flow at the very bottom
+   of a 100vh column and was cut off by the viewport.
+--------------------------------------------------------------------------- */
+.dt-card {
+    position: fixed;
+    /* anchored to the stage edge (physical right in RTL) so it never covers
+       the chat composer, which docks on the left */
+    inset-inline-start: 16px;
+    bottom: calc(var(--bar-h, 76px) + 1.4rem + env(safe-area-inset-bottom, 0px));
+    z-index: 70;
+    width: min(320px, calc(100vw - 32px));
+    padding: .85rem .9rem .9rem;
+    background: var(--room-surface);
+    color: var(--room-text);
+    border: 1px solid var(--room-border);
+    border-radius: 18px;
+    box-shadow: var(--shadow-lg);
+}
+
+.dt-card[hidden] { display: none; }
+
+.dt-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: .5rem;
+    margin-bottom: .35rem;
+}
+
+.dt-head h3 {
+    margin: 0;
+    font-size: .92rem;
+    font-weight: 700;
+    display: inline-flex;
+    align-items: center;
+    gap: .4rem;
+}
+
+.dt-head .ic {
+    width: 17px; height: 17px;
+    fill: none; stroke: currentColor; stroke-width: 1.8;
+    stroke-linecap: round; stroke-linejoin: round;
+    color: var(--accent);
+}
+
+.dt-close {
+    flex: none;
+    width: 28px; height: 28px;
+    display: inline-flex; align-items: center; justify-content: center;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    background: none; color: var(--room-muted);
+    cursor: pointer;
+}
+
+.dt-close:hover { background: color-mix(in srgb, currentColor 8%, transparent); color: var(--room-text); }
+.dt-close .ic { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+
+.dt-hint {
+    margin: 0 0 .6rem;
+    font-size: .76rem;
+    line-height: 1.75;
+    color: var(--room-muted);
+}
+
+.dt-body { display: grid; gap: .5rem; margin-bottom: .7rem; }
+.dt-body[hidden] { display: none; }
+
+.dt-body video {
+    width: 100%;
+    aspect-ratio: 4 / 3;
+    border-radius: 12px;
+    background: #000;
+    object-fit: cover;
+    transform: scaleX(-1); /* self-view mirror */
+}
+
+.dt-meter {
+    height: 8px;
+    border-radius: 999px;
+    background: var(--surface-3);
+    overflow: hidden;
+}
+
+.dt-meter > div {
+    height: 100%;
+    width: 0%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, var(--success), var(--warning));
+    transition: width 90ms linear;
+}
+
+.dt-status { margin: 0; font-size: .74rem; color: var(--room-muted); min-height: 1.2em; }
+
+.dt-actions { display: flex; gap: .4rem; }
+.dt-actions .btn { flex: 1 1 auto; justify-content: center; }
+
+@media (max-width: 640px) {
+    .dt-card {
+        inset-inline: 8px;
+        width: auto;
+        bottom: calc(var(--bar-h, 76px) + .8rem + env(safe-area-inset-bottom, 0px));
+    }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+    .dt-card:not([hidden]) { animation: dt-in 240ms var(--ease, ease-out) both; }
+}
+
+@keyframes dt-in {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
 }

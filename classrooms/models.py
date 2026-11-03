@@ -340,14 +340,21 @@ class SharedFile(models.Model):
             size /= 1024
         return f"{size:.1f} GB"
 
+    #: Extension → semantic icon kind.  The UI maps each kind to an inline SVG
+    #: from the shared sprite; the server never sends glyphs or emoji.
+    TYPE_KINDS = {
+        "pdf": "pdf",
+        "png": "img", "jpg": "img", "jpeg": "img", "gif": "img", "webp": "img",
+        "docx": "office", "doc": "office", "pptx": "office", "ppt": "office",
+        "xlsx": "office", "xls": "office",
+        "zip": "zip", "rar": "zip", "7z": "zip",
+    }
+
     @property
-    def type_icon(self) -> str:
-        """Human-friendly glyph per format, used by the files panel."""
+    def type_kind(self) -> str:
+        """Coarse format bucket used to pick the file icon (pdf/img/office/zip/file)."""
         ext = self.original_name.rsplit(".", 1)[-1].lower() if "." in self.original_name else ""
-        return {
-            "pdf": "📄", "png": "🖼️", "jpg": "🖼️", "jpeg": "🖼️",
-            "docx": "📝", "pptx": "📽️", "xlsx": "📊", "zip": "📦",
-        }.get(ext, "📎")
+        return self.TYPE_KINDS.get(ext, "file")
 
 
 # ---------------------------------------------------------------------------

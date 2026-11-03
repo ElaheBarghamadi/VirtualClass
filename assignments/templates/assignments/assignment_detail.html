@@ -14,15 +14,15 @@
 </div>
 
 {% if assignment.description %}
-    <div class="card form-card"><p>{{ assignment.description|linebreaksbr }}</p></div>
+    <div class="card form-card form-card--wide"><p>{{ assignment.description|linebreaksbr }}</p></div>
 {% endif %}
 
-<div class="two-col">
+<div class="stack">
     {% if is_owner %}
         <div>
             <h2 class="section-title">ارسال‌ها ({{ submissions|length }})</h2>
             {% for s in submissions %}
-                <div class="card form-card">
+                <div class="card form-card form-card--wide">
                     <div class="page-head">
                         <div>
                             <h3>{{ s.student_name }}</h3>
@@ -32,7 +32,7 @@
                     </div>
                     {% if s.content %}<p>{{ s.content|linebreaksbr }}</p>{% endif %}
                     {% if s.file %}
-                        <p><a class="btn btn-sm btn-ghost" href="{% url 'assignments_manage:submission_download' classroom.room_code assignment.id s.id %}" download>⬇ دانلود فایل پاسخ</a></p>
+                        <p><a class="btn btn-sm btn-ghost" href="{% url 'assignments_manage:submission_download' classroom.room_code assignment.id s.id %}" download><svg class="ic" aria-hidden="true"><use href="#g-download"/></svg> دانلود فایل پاسخ</a></p>
                     {% endif %}
                     <form method="post" class="grade-form">
                         {% csrf_token %}
@@ -57,15 +57,15 @@
         <div>
             <h2 class="section-title">پاسخ من</h2>
             {% if submission and submission.graded_at %}
-                <div class="card form-card">
+                <div class="card form-card form-card--wide">
                     <p><span class="badge badge-info">نمرهٔ شما: {{ submission.score }} از {{ assignment.max_score }}</span></p>
                     {% if submission.feedback %}<p>{{ submission.feedback|linebreaksbr }}</p>{% endif %}
                     <hr>
                     {% if submission.content %}<p>{{ submission.content|linebreaksbr }}</p>{% endif %}
-                    {% if submission.file %}<p><a class="btn btn-sm btn-ghost" href="{% url 'assignments_manage:submission_download' classroom.room_code assignment.id submission.id %}" download>⬇ فایل ارسالی من</a></p>{% endif %}
+                    {% if submission.file %}<p><a class="btn btn-sm btn-ghost" href="{% url 'assignments_manage:submission_download' classroom.room_code assignment.id submission.id %}" download><svg class="ic" aria-hidden="true"><use href="#g-download"/></svg> فایل ارسالی من</a></p>{% endif %}
                 </div>
             {% else %}
-                <div class="card form-card">
+                <div class="card form-card form-card--wide">
                     {% if submission %}
                         <p class="muted">ارسال شده در {{ submission.submitted_at|date:"Y/m/d H:i" }} — تا پایان مهلت می‌توانید ویرایش کنید.</p>
                     {% endif %}

@@ -30,6 +30,7 @@ urlpatterns = [
     path("<str:room_code>/members/<int:member_id>/role/", views.member_role_view, name="member_role"),
     path("<str:room_code>/members/<int:member_id>/mute/", views.member_mute_view, name="member_mute"),
     path("<str:room_code>/members/<int:member_id>/remove/", views.member_remove_view, name="member_remove"),
+    path("<str:room_code>/members/<int:member_id>/unban/", views.member_unban_view, name="member_unban"),
     path("<str:room_code>/members/<int:member_id>/waiting/", views.waiting_room_action_view, name="waiting_action"),
     # File sharing.
     path("<str:room_code>/files/upload/", views.file_upload_view, name="file_upload"),

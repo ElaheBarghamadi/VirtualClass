@@ -28,7 +28,7 @@
                 <ul class="option-list">
                     {% for o in q.options.all %}
                         <li class="{% if o.is_correct %}option-correct{% endif %}">
-                            {{ o.text }}{% if o.is_correct %} <span class="badge badge-success">✓ صحیح</span>{% endif %}
+                            {{ o.text }}{% if o.is_correct %} <span class="badge badge-success"><svg class="ic" aria-hidden="true"><use href="#g-check"/></svg> صحیح</span>{% endif %}
                         </li>
                     {% endfor %}
                 </ul>

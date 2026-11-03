@@ -9,7 +9,7 @@
     <a class="btn btn-ghost" href="{% url 'classrooms:detail' classroom.room_code %}">بازگشت به مدیریت</a>
 </div>
 
-<div class="card form-card">
+<div class="card form-card form-card--wide">
     <h2 class="section-title">آزمون جدید</h2>
     <form method="post" novalidate>
         {% csrf_token %}

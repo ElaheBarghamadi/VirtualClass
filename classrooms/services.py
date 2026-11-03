@@ -736,6 +736,45 @@ def remove_member(classroom: Classroom, operator: User, member_id: int, ban_minu
     logger.info("participant_removed", extra={"room_code": classroom.room_code, "target": target.user_id})
 
 
+def banned_members(classroom: Classroom):
+    """Members whose ban is still in force (owner/moderator view)."""
+    return (
+        ClassroomMember.objects.filter(
+            classroom=classroom, banned_until__gt=timezone.now()
+        )
+        .select_related("user")
+        .order_by("banned_until")
+    )
+
+
+def lift_ban(classroom: Classroom, operator: User, member_id: int) -> ClassroomMember:
+    """Lift a ban so the member may join again.
+
+    Banning was one-way: nothing in the product could undo it, so one
+    mis-tap locked a student out for up to a week.  Privileges mirror
+    ``remove_member`` (owner/moderator, never the owner themselves).
+    """
+    actor = _require_privileged(classroom, operator)
+    target = _target_member(classroom, member_id)
+    if not _can_manage(actor, target):
+        raise PermissionDenied("اجازهٔ مدیریت این عضو را ندارید.")
+    if target.banned_until is None:
+        return target
+    target.banned_until = None
+    target.save(update_fields=["banned_until"])
+    logger.info(
+        "ban_lifted",
+        extra={"room_code": classroom.room_code, "target": target.user_id, "by": operator.id},
+    )
+    notify_member(classroom.room_code, target, {
+        "type": "notification",
+        "text": "محرومیت شما از این کلاس برداشته شد.",
+        "level": "info",
+        "event": "unbanned",
+    })
+    return target
+
+
 def _waiting_action_members(classroom: Classroom, operator: User, member_id: int):
     # Lock the classroom to serialize admission/removal decisions on PostgreSQL.
     classroom = Classroom.objects.select_for_update().get(pk=classroom.pk)

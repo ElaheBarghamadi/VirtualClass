@@ -164,6 +164,41 @@ class KickVersusBanTests(TestCase):
         with self.assertRaises(ClassroomAccessError):
             remove_member(self.classroom, self.owner, 999999, ban_minutes=0)
 
+    # -- lifting a ban -------------------------------------------------------
+    def test_lift_ban_lets_the_member_join_again(self):
+        from .services import banned_members, lift_ban
+
+        remove_member(self.classroom, self.owner, self.member.id, ban_minutes=60)
+        self.assertEqual([m.id for m in banned_members(self.classroom)], [self.member.id])
+
+        lift_ban(self.classroom, self.owner, self.member.id)
+        self.assertEqual(list(banned_members(self.classroom)), [])
+        rejoined = join_classroom(self.classroom, self.student)
+        self.assertTrue(rejoined.is_active)
+        self.assertIsNone(rejoined.banned_until)
+
+    def test_only_privileged_members_can_lift_a_ban(self):
+        from .services import lift_ban
+
+        remove_member(self.classroom, self.owner, self.member.id, ban_minutes=60)
+        with self.assertRaises(PermissionDenied):
+            lift_ban(self.classroom, self.student, self.member.id)
+
+    def test_unban_endpoint_requires_post_and_privilege(self):
+        remove_member(self.classroom, self.owner, self.member.id, ban_minutes=60)
+        url = reverse("room:member_unban", args=[self.classroom.room_code, self.member.id])
+
+        student_client = Client()
+        student_client.force_login(self.student)
+        self.assertEqual(student_client.post(url).status_code, 403)
+
+        owner_client = Client()
+        owner_client.force_login(self.owner)
+        self.assertEqual(owner_client.get(url).status_code, 405)
+        self.assertEqual(owner_client.post(url).status_code, 200)
+        self.member.refresh_from_db()
+        self.assertIsNone(self.member.banned_until)
+
 
 @override_settings(ALLOWED_HOSTS=["testserver"])
 class FileDeliveryTests(TestCase):

@@ -18,6 +18,7 @@
     <link rel="stylesheet" href="{% static 'css/motion.css' %}?v={{ ASSET_V }}">
 </head>
 <body{% if full_page %} class="full-page"{% endif %}>
+{% include "_icon_sprite.html" %}
 <a class="skip-link" href="#main-content">پرش به محتوای اصلی</a>
 {% if not full_page %}
 {% with path=request.path %}

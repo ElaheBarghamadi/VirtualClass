@@ -6,6 +6,18 @@
 
 * { box-sizing: border-box; }
 
+/* Baseline for inline sprite icons.
+   An <svg> that only carries a viewBox has no intrinsic size, so it falls back
+   to the replaced-element default (300×150) and blows up wherever a component
+   forgot to size it — that is exactly what happened to the empty room stage.
+   Components still override this with their own `.ic` rules. */
+svg.ic {
+    width: 1.15em;
+    height: 1.15em;
+    flex: none;
+    vertical-align: -.15em;
+}
+
 html {
     scroll-behavior: smooth;
     -webkit-text-size-adjust: 100%;
@@ -376,6 +388,25 @@ code {
     background: var(--gradient-brand); flex: none;
 }
 .form-card { max-width: 660px; }
+/* A card that owns a whole row (page summary, list wrapper) must not stop at
+   660px: the leftover space next to it read as a broken two-column layout. */
+.form-card--wide { max-width: none; }
+/* Class cards: the primary action takes a full row, the three secondary links
+   share one row — previously the last link wrapped alone under the others. */
+.classroom-card .card-actions {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: .4rem;
+}
+.classroom-card .card-actions > :first-child { grid-column: 1 / -1; }
+.classroom-card .card-actions .btn {
+    width: 100%;
+    justify-content: center;
+    padding-inline: .5rem;
+}
+/* <form> wrappers inside the action grid must not create their own box —
+   otherwise the button inside escapes the grid track. */
+.classroom-card .card-actions form { display: contents; }
 .empty-state {
     text-align: center; padding: 2.5rem 1.5rem; color: var(--muted);
     border: 1px dashed var(--border-strong); border-radius: var(--radius);
@@ -579,6 +610,16 @@ code {
    Status / blocked pages
    ========================================================================== */
 .status-page { max-width: 540px; margin: 3.5rem auto; text-align: center; }
+.status-page .status-icon-ic {
+    width: 34px;
+    height: 34px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.7;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    color: var(--accent);
+}
 .status-page .status-icon {
     font-size: 2rem; line-height: 1;
     width: 72px; height: 72px; margin: 0 auto .9rem;
@@ -601,6 +642,9 @@ code {
 .switch-row input { width: 18px; height: 18px; accent-color: var(--primary); flex: none; }
 
 .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; align-items: start; }
+/* Single-column stack — for pages that used .two-col with one child (which
+   left half the page empty). */
+.stack { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1rem; align-items: start; }
 /* Grid items default to min-width:auto, so a wide child (e.g. a data table)
    used to stretch the column past the viewport in RTL — 0 lets it shrink
    and .table-wrap scroll instead. */

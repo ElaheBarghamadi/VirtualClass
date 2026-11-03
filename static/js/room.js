@@ -362,7 +362,7 @@ class PresenceClient {
         const li = document.createElement('li');
         li.className = 'participant waiting';
         li.innerHTML = `
-            <span class="participant-avatar">⏳</span>
+            <span class="participant-avatar is-waiting"><svg class="ic" aria-hidden="true"><use href="#i-clock"/></svg></span>
             <span class="participant-name"></span>
             <button type="button" class="btn btn-sm btn-primary">تأیید</button>
             <button type="button" class="btn btn-sm btn-ghost">رد</button>`;
@@ -1048,7 +1048,7 @@ function setSessionUI(live) {
     if (live && !dot) {
         dot = document.createElement('span');
         dot.className = 'live-dot';
-        dot.textContent = '● LIVE';
+        dot.textContent = 'LIVE';
         document.querySelector('.room-title').appendChild(dot);
     } else if (!live && dot) {
         dot.remove();
@@ -1608,6 +1608,8 @@ function refreshControlStates() {
 // ---------------------------------------------------------------------------
 // "More" menu — permission-filtered
 // ---------------------------------------------------------------------------
+let menuPlace = () => {};
+
 function toggleMoreMenu(force) {
     const menu = document.getElementById('more-menu');
     const btn = document.getElementById('btn-more');
@@ -1618,10 +1620,16 @@ function toggleMoreMenu(force) {
     btn.setAttribute('aria-expanded', String(show));
     if (show) {
         menu.classList.remove('hidden');
+        // The control bar scrolls its own overflow, and the menu is taller
+        // than the bar — park it on <body> and place it above the button.
+        if (menu.parentElement !== document.body) document.body.appendChild(menu);
+        menuPlace = anchorPopover(btn, menu, 10);
+        window.addEventListener('resize', menuPlace);
         // Next frame so the spring-in transition actually runs.
         requestAnimationFrame(() => menu.classList.add('show'));
         menu.querySelector('button')?.focus();
     } else {
+        window.removeEventListener('resize', menuPlace);
         menu.classList.remove('show');
         window.setTimeout(() => {
             if (!menu.classList.contains('show')) menu.classList.add('hidden');
@@ -1700,7 +1708,7 @@ function showReport() {
     infoDialog('گزارش مشکل', wrap, 'ارسال').then(() => {
         const text = (wrap.querySelector('#report-text')?.value || '').trim();
         if (text) {
-            ChatClient.send(`🚩 گزارش مشکل: ${text.slice(0, 300)}`);
+            ChatClient.send(`گزارش مشکل: ${text.slice(0, 300)}`);
             toast('گزارش شما ارسال شد.', 'success');
         }
     });
@@ -2103,7 +2111,6 @@ function initFiles() {
                     id: data.id, name: data.name,
                     size: formatBytes(file.size),
                     uploader: 'شما', uploader_id: SELF_USER_ID,
-                    icon: iconForName(file.name),
                     url: `/class/${ROOM_CODE}/files/${data.id}/download/`,
                 });
                 toast('فایل بارگذاری شد.', 'success');
@@ -2161,16 +2168,6 @@ function initFiles() {
     });
 }
 
-/** Short type label per extension — rendered as a coloured file chip.
- *  Emoji icons looked inconsistent across platforms (and showed as tofu on
- *  systems without an emoji font), so a typographic badge is used. */
-function iconForName(name) {
-    const ext = (name || '').includes('.') ? name.split('.').pop().toLowerCase() : '';
-    const map = { pdf: 'PDF', png: 'PNG', jpg: 'JPG', jpeg: 'JPG', docx: 'DOC',
-                  pptx: 'PPT', xlsx: 'XLS', zip: 'ZIP' };
-    return map[ext] || 'FILE';
-}
-
 /** File-kind class for the chip colour (kept in sync with room.css). */
 function fileKind(name) {
     const ext = (name || '').includes('.') ? name.split('.').pop().toLowerCase() : '';
@@ -2210,24 +2207,25 @@ function addFileItem(file) {
         ? ` data-present="${Number(file.id)}" role="button" tabindex="0" title="کلیک: ارائهٔ این فایل"`
         : '';
     li.innerHTML = `
-        <span class="file-icon" aria-hidden="true"></span>
+        <span class="file-icon" aria-hidden="true"><svg class="ic" viewBox="0 0 24 24"><use href="#i-file"/></svg></span>
         <div class="file-info"${presentAttrs}>
             <span class="file-name"></span>
             <small class="muted"></small>
         </div>
-        <span class="file-presenting-pill" title="این فایل اکنون ارائه می‌شود">📽 در حال ارائه</span>
+        <span class="file-presenting-pill" title="این فایل اکنون ارائه می‌شود">در حال ارائه</span>
         <div class="file-actions">
             ${PERMISSIONS.can_present
                 ? `<button type="button" class="btn btn-sm btn-primary file-present"
                            data-present="${Number(file.id)}"
-                           title="ارائهٔ این فایل برای همه" aria-label="ارائهٔ این فایل">📽 ارائه</button>`
+                           title="ارائهٔ این فایل برای همه" aria-label="ارائهٔ این فایل"><svg class="ic" aria-hidden="true"><use href="#i-play"/></svg> ارائه</button>`
                 : ''}
             <a class="btn btn-sm btn-ghost file-download" href="${file.url}" download
-               title="دانلود این فایل" aria-label="دانلود این فایل">⬇</a>
+               title="دانلود این فایل" aria-label="دانلود این فایل"><svg class="ic" aria-hidden="true"><use href="#i-download"/></svg></a>
         </div>`;
     const iconEl = li.querySelector('.file-icon');
-    iconEl.textContent = file.icon || iconForName(file.name);
-    iconEl.dataset.kind = fileKind(file.name);
+    const kind = file.kind || fileKind(file.name);
+    iconEl.dataset.kind = kind;
+    iconEl.querySelector('use').setAttribute('href', `#i-file-${kind}` === '#i-file-file' ? '#i-file' : `#i-file-${kind}`);
     li.querySelector('.file-name').textContent = file.name;
     if (file.has_pdf) {
         const pill = document.createElement('span');

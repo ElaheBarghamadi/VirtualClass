@@ -45,6 +45,7 @@ from .services import (
     active_members,
     approve_waiting_room,
     attendance_summary,
+    banned_members,
     create_classroom,
     deactivate_classroom,
     end_classroom_for_all,
@@ -58,6 +59,7 @@ from .services import (
     join_classroom,
     join_classroom_guest,
     leave_classroom,
+    lift_ban,
     mute_all,
     password_attempts_blocked_ip,
     register_failed_password_ip,
@@ -210,6 +212,7 @@ def classroom_detail_view(request, room_code: str):
         {
             "classroom": classroom,
             "members": members,
+            "banned": banned_members(classroom),
             "sessions": sessions,
             "schedule_form": schedule_form,
             "settings_form": settings_form,
@@ -551,6 +554,22 @@ def member_remove_view(request, room_code: str, member_id: int):
 
 @login_required
 @require_POST
+def member_unban_view(request, room_code: str, member_id: int):
+    """Privileged: lift a re-entry ban (the counterpart of «اخراج»)."""
+    classroom = get_object_or_404(Classroom, room_code=room_code)
+    try:
+        lift_ban(classroom, request.user, member_id)
+    except PermissionDenied as exc:
+        return _json_error(exc)
+    except ClassroomAccessError as exc:
+        return _json_error(exc, status=404)
+    except ValueError as exc:
+        return _json_error(exc, status=400)
+    return JsonResponse({"ok": True})
+
+
+@login_required
+@require_POST
 def waiting_room_action_view(request, room_code: str, member_id: int):
     classroom = get_object_or_404(Classroom, room_code=room_code)
     try:
@@ -752,7 +771,7 @@ def file_upload_view(request, room_code: str):
             "size": shared.size_display,
             "uploader": request.user.name,
             "uploader_id": request.user.id,
-            "icon": shared.type_icon,
+            "kind": shared.type_kind,
             "has_pdf": bool(shared.pdf_version),
             "url": f"/class/{classroom.room_code}/files/{shared.id}/download/",
         },

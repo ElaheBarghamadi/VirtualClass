@@ -394,12 +394,14 @@ class FileSharingTests(TestCase):
         self.assertEqual(resp.status_code, 400)
         self.assertIn("حداکثر", resp.json()["detail"])
 
-    def test_type_icon_per_extension(self):
+    def test_type_kind_per_extension(self):
+        """The server sends a semantic kind, never a glyph — the UI draws SVG."""
         from .models import SharedFile
-        for name, icon in [("a.pdf", "📄"), ("b.png", "🖼️"), ("c.docx", "📝"),
-                           ("d.xlsx", "📊"), ("e.pptx", "📽️"), ("f.zip", "📦"), ("g", "📎")]:
+        for name, kind in [("a.pdf", "pdf"), ("b.png", "img"), ("c.docx", "office"),
+                           ("d.xlsx", "office"), ("e.pptx", "office"), ("f.zip", "zip"),
+                           ("g", "file"), ("h.PDF", "pdf"), (".hidden", "file")]:
             sf = SharedFile(original_name=name, size=1)
-            self.assertEqual(sf.type_icon, icon, name)
+            self.assertEqual(sf.type_kind, kind, name)
 
 
 class RemainingHardeningTests(TestCase):

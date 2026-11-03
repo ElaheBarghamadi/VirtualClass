@@ -233,7 +233,10 @@ class WhiteboardImpl {
             // The button is icon-based (SVG); only legacy glyph buttons get
             // their label rewritten — otherwise textContent would wipe the icon.
             if (!gridBtn.querySelector('svg')) {
-                gridBtn.textContent = mode === 'dots' ? '⁙' : '▦';
+                // Tiny inline glyphs, not emoji: grid = squares, dots = dots.
+        gridBtn.innerHTML = mode === 'dots'
+            ? '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="7" cy="7" r="1.6"/><circle cx="12" cy="7" r="1.6"/><circle cx="17" cy="7" r="1.6"/><circle cx="7" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="17" cy="12" r="1.6"/><circle cx="7" cy="17" r="1.6"/><circle cx="12" cy="17" r="1.6"/><circle cx="17" cy="17" r="1.6"/></svg>'
+            : '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="7" height="7" rx="1.2"/><rect x="13" y="4" width="7" height="7" rx="1.2"/><rect x="4" y="13" width="7" height="7" rx="1.2"/><rect x="13" y="13" width="7" height="7" rx="1.2"/></svg>';
             }
             gridBtn.classList.toggle('active', mode !== 'none');
             gridBtn.setAttribute('aria-pressed', String(mode !== 'none'));

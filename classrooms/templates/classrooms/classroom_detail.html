@@ -9,7 +9,7 @@
     <a class="btn btn-ghost" href="{% url 'classrooms:list' %}">بازگشت</a>
 </div>
 
-<div class="card form-card">
+<div class="card form-card form-card--wide">
     <div class="link-box" data-copy-link>
         <input type="text" readonly value="{{ request.scheme }}://{{ request.get_host }}/class/{{ classroom.room_code }}/" aria-label="لینک کلاس">
         <button type="button" class="btn btn-sm btn-ghost copy-btn" data-copy>کپی لینک</button>
@@ -134,6 +134,36 @@
             </table>
             </div>
             <p class="muted small">مدیریت زندهٔ نقش‌ها، بی‌صدا کردن، اتاق انتظار و سطح دسترسی شرکت‌کنندگان از داخل صفحهٔ کلاس (پنل میزبان) انجام می‌شود.</p>
+        </div>
+
+        {% comment %}Bans used to be a one-way door: the host could kick someone
+           out for up to a week and had no way to undo it.{% endcomment %}
+        <h2 class="section-title">مسدودشده‌ها ({{ banned|length }})</h2>
+        <div class="card">
+            <div class="table-wrap">
+            <table class="data-table">
+                <thead><tr><th>کاربر</th><th>تا</th><th>عملیات</th></tr></thead>
+                <tbody>
+                    {% for m in banned %}
+                        <tr>
+                            <td>
+                                {{ m.participant_name }}
+                                {% if m.is_guest %}<span class="badge badge-muted">مهمان</span>{% endif %}
+                            </td>
+                            <td>{{ m.banned_until|date:"Y/m/d H:i" }}</td>
+                            <td>
+                                <form method="post" action="{% url 'room:member_unban' classroom.room_code m.id %}">
+                                    {% csrf_token %}
+                                    <button type="submit" class="btn btn-sm btn-ghost">رفع مسدودی</button>
+                                </form>
+                            </td>
+                        </tr>
+                    {% empty %}
+                        <tr><td colspan="3" class="muted">کسی مسدود نیست.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            </div>
         </div>
     </div>
 </div>
