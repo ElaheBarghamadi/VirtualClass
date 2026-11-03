@@ -40,7 +40,7 @@ body.full-page .messages {
 /* ---------- header (slim, minimal) ---------- */
 .room-header {
     display: flex; align-items: center; justify-content: space-between;
-    padding: .55rem 1.1rem;
+    padding: .7rem 1.1rem;
     background: color-mix(in srgb, var(--room-surface) 96%, transparent);
     -webkit-backdrop-filter: blur(8px);
     backdrop-filter: blur(8px);
@@ -96,7 +96,27 @@ body.full-page .messages {
 .conn-quality.q-lost, .conn-quality.q-reconnecting { color: var(--danger); }
 
 /* ---------- body ---------- */
-.room-body { flex: 1; display: grid; grid-template-columns: 1fr 330px; min-height: 0; position: relative; }
+.room-body {
+    flex: 1; display: grid; grid-template-columns: 1fr 330px; min-height: 0;
+    position: relative;
+    transition: grid-template-columns 200ms var(--ease, ease);
+}
+/* The panel is a tool, not furniture: it can be collapsed so the video fills
+   the window (Meet/Zoom behave the same way). */
+.room-body.side-closed { grid-template-columns: 1fr; }
+.room-body.side-closed .room-side { display: none; }
+@media (prefers-reduced-motion: reduce) { .room-body { transition: none; } }
+
+.side-collapse {
+    margin-inline-start: auto; flex: none;
+    width: 28px; height: 28px; display: inline-flex;
+    align-items: center; justify-content: center;
+    border: 1px solid transparent; border-radius: 8px;
+    background: none; color: var(--room-muted); cursor: pointer;
+}
+.side-collapse:hover { background: color-mix(in srgb, currentColor 10%, transparent); color: var(--room-text); }
+.side-collapse .ic { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+@media (max-width: 900px) { .side-collapse { display: none; } }
 /* position:relative → the mobile drawer/backdrop anchor below the room
    header (their top edge starts at the body, not at the top of .room) */
 /* bottom padding keeps content clear of the floating control bar — --bar-h
@@ -152,7 +172,20 @@ body.full-page .messages {
 }
 
 /* ---------- media grid ---------- */
-#view-media { position: relative; }
+/* The video area is its own surface: a tinted, rounded, hairline-bordered
+   frame. Without it the tiles floated on the page background and the room
+   read as a flat white sheet. */
+#view-media {
+    position: relative;
+    padding: .6rem;
+    border-radius: 18px;
+    border: 1px solid color-mix(in srgb, var(--room-border) 72%, transparent);
+    background:
+        radial-gradient(120% 85% at 50% -20%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 68%),
+        linear-gradient(180deg, color-mix(in srgb, var(--accent) 9%, var(--surface-2)), color-mix(in srgb, var(--accent) 14%, var(--surface-3)));
+    overflow: hidden;
+}
+#view-media .stage-toolbar { top: .85rem; }
 .tiles {
     flex: 1; display: grid; gap: .6rem; min-height: 0;
     grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
@@ -174,11 +207,23 @@ body.full-page .messages {
     overflow-y: auto;
 }
 .tiles[data-layout="focus"] { scrollbar-gutter: stable; }
+.tiles { align-content: stretch; }
 .tile {
     position: relative;
-    background: linear-gradient(160deg, var(--surface-3), var(--surface-2));
-    border: 2px solid color-mix(in srgb, var(--room-border) 65%, transparent);
-    border-radius: var(--radius); overflow: hidden; cursor: pointer; min-height: 110px;
+    /* A participant frame, not a painted wall: 16:9, centred in its cell, with
+       a card shadow. Filling a 700px-tall cell edge-to-edge with a flat
+       rectangle was what made an empty room look broken. */
+    align-self: stretch;
+    justify-self: stretch;
+    width: 100%;
+    /* Fill the cell (Zoom/Meet style). A fixed 16:9 card in a tall stage left
+       two thirds of the room empty, which read as a layout bug. */
+    height: 100%;
+    background: var(--surface);
+    border: 1px solid color-mix(in srgb, var(--room-border) 80%, transparent);
+    border-radius: 14px;
+    box-shadow: 0 18px 38px -26px rgba(16, 24, 40, .55), 0 2px 6px -4px rgba(16, 24, 40, .18);
+    overflow: hidden; cursor: pointer; min-height: 110px;
     transition: border-color var(--speed) var(--ease), box-shadow var(--speed) var(--ease);
 }
 .tile:focus-visible { outline: none; box-shadow: var(--focus-ring); }
@@ -221,11 +266,11 @@ body.full-page .messages {
 .tile-placeholder {
     position: absolute; inset: 0;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: .5rem;
+    gap: .55rem;
     font-size: 1.9rem; font-weight: 800; color: #fff;
     background:
-        radial-gradient(120% 120% at 50% 0%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 70%),
-        var(--surface-2);
+        radial-gradient(80% 65% at 50% 8%, color-mix(in srgb, var(--accent) 11%, transparent), transparent 70%),
+        linear-gradient(180deg, var(--surface), color-mix(in srgb, var(--accent) 4%, var(--surface)));
 }
 /* Camera-off tile: a soft studio surface with the participant's initial in
    a brand disc — calm instead of a full-bleed colour block. */
@@ -239,6 +284,14 @@ body.full-page .messages {
 @media (max-width: 700px) { .tile-initial { width: 60px; height: 60px; font-size: 1.5rem; } }
 /* Phones: the five-word layout switcher wrapped to two rows across the top of
    the video. Icons alone keep it one row and out of the way. */
+/* Phones: the five essentials (mic, camera, chat, people, hand) have to fit
+   without a swipe — chat in particular must never start off-screen. */
+@media (max-width: 620px) {
+    .room-controls { padding: 4px; }
+    .room-controls .ctrl-btn { width: 42px; height: 42px; }
+    .room-controls .ctrl-sep { margin: 0 1px; }
+}
+
 @media (max-width: 620px) {
     .stage-toolbar { gap: 0; padding: .2rem; border-radius: var(--radius-pill); }
     .stage-toolbar .lb-label { display: none; }
@@ -272,6 +325,34 @@ body.full-page .messages {
 }
 .tile-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tile-icons i { font-style: normal; font-size: .7rem; margin-inline-start: .3rem; }
+
+/* Camera-off tile: the name belongs under the avatar, not in a pill in the
+   far corner — a corner label next to a centred disc looked like two
+   unrelated pieces of UI. */
+.tile:has(.tile-placeholder:not(.hidden)) .tile-overlay {
+    inset: auto; top: 50%; left: 50%;
+    /* margin-top (not translate) keeps the gap tied to the disc's radius
+       instead of to the label's own height */
+    transform: translateX(-50%);
+    margin-top: calc(clamp(64px, 13vw, 148px) / 2 + 16px);
+    flex-direction: column;
+    align-items: center;
+    gap: .1rem;
+    max-width: 92%;
+    padding: 0;
+    background: none; border: 0; box-shadow: none;
+    font-size: .95rem; font-weight: 700;
+    text-align: center;
+}
+.tile:has(.tile-placeholder:not(.hidden)) .tile-overlay::after {
+    content: "دوربین خاموش";
+    font-size: .74rem; font-weight: 500; color: var(--room-muted);
+}
+.tile:has(.tile-placeholder:not(.hidden)) .tile-placeholder::after { content: none; }
+/* the mic/fullscreen chips belong to a video frame; under an avatar they
+   wrapped into a second stray row */
+.tile:has(.tile-placeholder:not(.hidden)) .tile-icons,
+.tile:has(.tile-placeholder:not(.hidden)) .tile-fs { display: none; }
 .tile-fs {
     background: transparent; border: none; color: inherit; cursor: pointer;
     font-size: .85rem; padding: 0 .2rem; line-height: 1; opacity: .55;
@@ -859,7 +940,7 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
     /* iOS-style floating "island": frosted glass, hairline border, layered
        shadow.  Buttons never wrap — the rail scrolls sideways instead, so
        the bar is exactly one row tall on every screen size. */
-    --glass: color-mix(in srgb, var(--room-surface) 93%, transparent);
+    --glass: color-mix(in srgb, var(--room-surface) 96%, transparent);
     --glass-line: color-mix(in srgb, var(--room-border) 82%, transparent);
     position: absolute;
     bottom: calc(.9rem + env(safe-area-inset-bottom, 0px));
@@ -943,6 +1024,14 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
     /* Apple-ish press physics: quick, springy, never sluggish. */
     transition: background .16s var(--ease), color .16s var(--ease),
                 transform .22s cubic-bezier(.16, 1, .3, 1), opacity .16s var(--ease);
+}
+/* unread chat while the panel is collapsed */
+.ctrl-btn.has-unread::after {
+    content: "";
+    position: absolute; inset-block-start: 8px; inset-inline-end: 9px;
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--danger);
+    box-shadow: 0 0 0 2px var(--room-surface, var(--surface));
 }
 .ctrl-btn .ic {
     width: 21px; height: 21px;
@@ -1161,6 +1250,35 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
     gap: 1px 3px;
 }
 .more-menu .menu-group.menu-grid button { white-space: nowrap; font-size: .82rem; padding: .5rem .45rem; }
+
+/* Third tier: plain words, no boxes.  Navigation and support links stop
+   competing with the live session controls for attention. */
+.more-menu .menu-group.menu-links {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: .05rem .15rem;
+    padding: .3rem .1rem .08rem;
+}
+.more-menu .menu-group.menu-links button {
+    width: auto;
+    flex: 0 0 auto;
+    padding: .3rem .5rem;
+    font-size: .76rem;
+    font-weight: 500;
+    color: var(--room-muted, var(--muted));
+    border-radius: 999px;
+}
+.more-menu .menu-group.menu-links button.danger { color: var(--danger); }
+.more-menu .menu-sep {
+    width: 1px; height: 14px; flex: none;
+    background: var(--room-border, var(--border));
+    opacity: .8;
+}
+/* Settings rows are secondary to the session ones — same layout, less weight. */
+.more-menu .menu-group.menu-quiet button { font-size: .78rem; color: var(--room-muted, var(--muted)); }
+.more-menu .menu-group.menu-quiet button:hover { color: var(--accent); }
 
 .menu-group { display: flex; flex-direction: column; gap: 1px; }
 

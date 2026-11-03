@@ -142,7 +142,7 @@
         </div>
     </header>
 
-    <div class="room-body">
+    <div class="room-body" id="room-body">
         <main class="room-main">
             <!-- ===== stage: media grid / screen share / whiteboard / presentation ===== -->
             <div class="stage" id="stage">
@@ -321,11 +321,12 @@
                 <svg class="ic icon-on" viewBox="0 0 24 24"><use href="#i-cam"/></svg>
                 <svg class="ic icon-off" viewBox="0 0 24 24"><use href="#i-cam-off"/></svg>
             </button>
-            <button type="button" class="ctrl-btn" id="btn-screen" title="اشتراک صفحه (S)" aria-label="اشتراک صفحه">
-                <svg class="ic" viewBox="0 0 24 24"><use href="#i-screen"/></svg>
+            <span class="ctrl-sep" aria-hidden="true"></span>
+            <button type="button" class="ctrl-btn side-toggle" id="btn-chat" title="گفتگو (C)" aria-label="گفتگو">
+                <svg class="ic" viewBox="0 0 24 24"><use href="#i-chat"/></svg>
             </button>
-            <button type="button" class="ctrl-btn" id="btn-whiteboard" title="تخته سفید" aria-label="تخته سفید">
-                <svg class="ic" viewBox="0 0 24 24"><use href="#i-board"/></svg>
+            <button type="button" class="ctrl-btn side-toggle" id="btn-people" title="شرکت‌کنندگان (P)" aria-label="شرکت‌کنندگان">
+                <svg class="ic" viewBox="0 0 24 24"><use href="#i-users"/></svg>
             </button>
             <button type="button" class="ctrl-btn" id="btn-hand" title="بالا بردن دست" aria-label="بالا بردن دست" aria-pressed="false">
                 <svg class="ic" viewBox="0 0 24 24"><use href="#i-hand"/></svg>
@@ -344,11 +345,11 @@
                 </div>
             </span>
             <span class="ctrl-sep" aria-hidden="true"></span>
-            <button type="button" class="ctrl-btn side-toggle" id="btn-chat" title="گفتگو (C)" aria-label="گفتگو">
-                <svg class="ic" viewBox="0 0 24 24"><use href="#i-chat"/></svg>
+            <button type="button" class="ctrl-btn" id="btn-screen" title="اشتراک صفحه (S)" aria-label="اشتراک صفحه">
+                <svg class="ic" viewBox="0 0 24 24"><use href="#i-screen"/></svg>
             </button>
-            <button type="button" class="ctrl-btn side-toggle" id="btn-people" title="شرکت‌کنندگان (P)" aria-label="شرکت‌کنندگان">
-                <svg class="ic" viewBox="0 0 24 24"><use href="#i-users"/></svg>
+            <button type="button" class="ctrl-btn" id="btn-whiteboard" title="تخته سفید" aria-label="تخته سفید">
+                <svg class="ic" viewBox="0 0 24 24"><use href="#i-board"/></svg>
             </button>
 
             </div><!-- /.ctrl-scroll -->
@@ -397,7 +398,10 @@
         </div>
         <!-- ===== more menu ===== -->
             <div class="more-menu hidden" id="more-menu" role="menu" aria-label="منوی بیشتر">
-                <div class="menu-group menu-grid" role="group" aria-label="ظاهر و دستگاه‌ها">
+                <!-- Three tiers, not twelve equal rows: appearance first,
+                     the live session controls in the middle, quiet text links
+                     for navigation and support at the bottom. -->
+                <div class="menu-group menu-grid menu-quiet" role="group" aria-label="ظاهر و دستگاه‌ها">
                     <button type="button" role="menuitem" id="menu-devices">
                         <svg class="mi" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-sliders"/></svg>
                         <span>دستگاه‌ها</span>
@@ -406,14 +410,14 @@
                         <svg class="mi" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-palette"/></svg>
                         <span>پوسته</span>
                     </button>
+                </div>
+                <div class="menu-group menu-grid" role="group" aria-label="ابزارهای جلسه">
                     <button type="button" role="menuitem" class="menu-sync" data-sync="btn-captions" aria-pressed="false">
                         <svg class="mi" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-cc"/></svg>
                         <span>زیرنویس</span>
                         <span class="menu-state" aria-hidden="true"></span>
                     </button>
-                </div>
-                {% if is_privileged %}
-                    <div class="menu-group menu-grid" role="group" aria-label="جلسه">
+                    {% if is_privileged %}
                         <button type="button" role="menuitem" class="menu-sync" data-sync="btn-session" aria-pressed="false">
                             <svg class="mi" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-session"/></svg>
                             <span>جلسه</span>
@@ -433,31 +437,17 @@
                             <span>قفل کلاس</span>
                             <span class="menu-state" aria-hidden="true"></span>
                         </button>
-                    </div>
-                    <div class="menu-group menu-grid" role="group" aria-label="مدیریت کلاس">
-                        <button type="button" role="menuitem" id="menu-settings">
-                            <svg class="mi" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-cog"/></svg>
-                            <span>تنظیمات کلاس</span>
-                        </button>
-                        <button type="button" role="menuitem" id="menu-manage" data-href="{% url 'classrooms:detail' classroom.room_code %}">
-                            <svg class="mi" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-list"/></svg>
-                            <span>مدیریت کلاس</span>
-                        </button>
-                    </div>
-                {% endif %}
-                <div class="menu-group menu-grid" role="group" aria-label="راهنما و پشتیبانی">
-                    <button type="button" role="menuitem" id="menu-shortcuts">
-                        <svg class="mi" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-keyboard"/></svg>
-                        <span>میان‌برها</span>
-                    </button>
-                    <button type="button" role="menuitem" id="menu-help">
-                        <svg class="mi" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-help"/></svg>
-                        <span>راهنما</span>
-                    </button>
-                    <button type="button" role="menuitem" id="menu-report" class="danger">
-                        <svg class="mi" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-flag"/></svg>
-                        <span>گزارش مشکل</span>
-                    </button>
+                    {% endif %}
+                </div>
+                <div class="menu-group menu-links" role="group" aria-label="کلاس و راهنما">
+                    {% if is_privileged %}
+                        <button type="button" role="menuitem" id="menu-settings">تنظیمات کلاس</button>
+                        <button type="button" role="menuitem" id="menu-manage" data-href="{% url 'classrooms:detail' classroom.room_code %}">مدیریت کلاس</button>
+                        <span class="menu-sep" aria-hidden="true"></span>
+                    {% endif %}
+                    <button type="button" role="menuitem" id="menu-shortcuts">میان‌برها</button>
+                    <button type="button" role="menuitem" id="menu-help">راهنما</button>
+                    <button type="button" role="menuitem" id="menu-report" class="danger">گزارش مشکل</button>
                 </div>
             </div>
         </footer>
@@ -476,6 +466,9 @@
                 <button class="side-tab" data-tab="files" role="tab" aria-selected="false">فایل‌ها</button>
                 <button class="side-tab" data-tab="quiz" role="tab" aria-selected="false">
                     آزمون <span class="live-pill hidden" id="quiz-live-pill">زنده</span>
+                </button>
+                <button type="button" class="side-collapse" id="side-collapse" aria-label="بستن پنل کناری" title="بستن پنل">
+                    <svg class="ic" aria-hidden="true"><use href="#i-chevron-right"/></svg>
                 </button>
                 <button type="button" class="drawer-close" id="drawer-close"
                         aria-label="بستن پنل" title="بستن"><svg class="ic" aria-hidden="true"><use href="#i-close"/></svg></button>

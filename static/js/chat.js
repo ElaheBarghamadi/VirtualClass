@@ -137,12 +137,16 @@ class ChatClientImpl {
         this.messagesEl.appendChild(div);
 
         if (!silent && !own) {
-            const chatTab = document.querySelector('[data-tab="chat"]');
-            const panelVisible = document.getElementById('panel-chat')?.classList.contains('active');
+            // The panel can be "active" yet out of sight: the docked rail may be
+            // collapsed or the phone drawer closed. Ask for real visibility.
+            const panelVisible = this.isChatVisible();
             if (!panelVisible || document.hidden) {
                 this.unread += 1;
                 this.unreadEl.textContent = String(this.unread);
                 this.unreadEl.classList.remove('hidden');
+                // the tab strip may be collapsed — the control-bar button has
+                // to be able to say "there is something to read" on its own
+                document.getElementById('btn-chat')?.classList.add('has-unread');
             }
         }
         this._scroll();
@@ -157,9 +161,21 @@ class ChatClientImpl {
         div.querySelector('.chat-delete')?.remove();
     }
 
+    /** True only when the chat panel is actually on screen right now. */
+    isChatVisible() {
+        const panel = document.getElementById('panel-chat');
+        if (!panel || !panel.classList.contains('active')) return false;
+        const side = document.getElementById('room-side');
+        if (window.matchMedia('(max-width: 900px)').matches) {
+            return side?.classList.contains('drawer-open') ?? false;
+        }
+        return !document.getElementById('room-body')?.classList.contains('side-closed');
+    }
+
     resetUnread() {
         this.unread = 0;
         this.unreadEl?.classList.add('hidden');
+        document.getElementById('btn-chat')?.classList.remove('has-unread');
     }
 
     addSystemMessage(text) {

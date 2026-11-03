@@ -1165,6 +1165,24 @@ function trackControlBarHeight() {
 // ---------------------------------------------------------------------------
 // Mobile drawer: backdrop + Escape + auto-close on wide screens
 // ---------------------------------------------------------------------------
+/** Panel state on desktop (docked) and on phones (drawer). */
+function isSideOpen() {
+    if (window.matchMedia('(max-width: 900px)').matches) {
+        return document.getElementById('room-side')?.classList.contains('drawer-open') ?? false;
+    }
+    return !document.getElementById('room-body')?.classList.contains('side-closed');
+}
+
+function setSideOpen(open) {
+    if (window.matchMedia('(max-width: 900px)').matches) { setDrawer(open); return; }
+    const body = document.getElementById('room-body');
+    if (!body) return;
+    body.classList.toggle('side-closed', !open);
+    try { localStorage.setItem('room.side', open ? 'open' : 'closed'); } catch (e) { /* private mode */ }
+    // The control bar is anchored to the stage, which just changed width.
+    requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
+}
+
 function setDrawer(open) {
     const side = document.getElementById('room-side');
     const backdrop = document.getElementById('drawer-backdrop');
@@ -1174,6 +1192,9 @@ function setDrawer(open) {
 }
 
 function initDrawer() {
+    try {
+        if (localStorage.getItem('room.side') === 'closed') setSideOpen(false);
+    } catch (e) { /* private mode */ }
     document.getElementById('drawer-close')?.addEventListener('click', () => setDrawer(false));
     const backdrop = document.getElementById('drawer-backdrop');
     if (backdrop) backdrop.addEventListener('click', () => setDrawer(false));
@@ -1249,23 +1270,22 @@ function initControls() {
         presence.send({ action: 'whiteboard_state', open: !showing });
     });
     bind('btn-chat', () => {
-        const side = document.getElementById('room-side');
-        const open = side.classList.contains('drawer-open');
+        const open = isSideOpen();
         const onChat = document.querySelector('.side-tab[data-tab="chat"]')?.classList.contains('active');
         // open if closed; switch tab if open on another tab; close only when
         // re-pressing the toggle for the tab that is already showing
         activateTab('chat');
-        const show = !(open && onChat); // close only when re-pressing the active tab's toggle
-        setDrawer(show);
+        const show = !(open && onChat);
+        setSideOpen(show);
         if (show) document.getElementById('chat-input').focus();
     });
     bind('btn-people', () => {
-        const side = document.getElementById('room-side');
-        const open = side.classList.contains('drawer-open');
+        const open = isSideOpen();
         const onPeople = document.querySelector('.side-tab[data-tab="participants"]')?.classList.contains('active');
         activateTab('participants');
-        setDrawer(!(open && onPeople));
+        setSideOpen(!(open && onPeople));
     });
+    document.getElementById('side-collapse')?.addEventListener('click', () => setSideOpen(false));
     bind('btn-exit-screen', () => switchView('media'));
     bind('btn-exit-presentation', () => switchView('media'));
     bind('cam-pip-fs', () => {
