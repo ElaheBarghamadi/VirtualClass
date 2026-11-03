@@ -8,11 +8,12 @@
 import { toast } from "./toast.js";
 
 const form = document.getElementById("join-form");
-const stepJoin = document.getElementById("step-join");
-const stepDevices = document.getElementById("step-devices");
 const btnToDevices = document.getElementById("btn-to-devices");
-const btnBack = document.getElementById("btn-back-join");
+const devicePanel = document.getElementById("device-panel");
 const btnJoin = document.getElementById("btn-join");
+const btnImTeacher = document.getElementById("btn-im-teacher");
+const nameInput = document.getElementById("id_display_name");
+const avatar = document.getElementById("join-avatar");
 
 const video = document.getElementById("lobby-video");
 const camStateIcon = document.getElementById("cam-state-icon");
@@ -256,47 +257,84 @@ async function speakerTest() {
   }
 }
 
-function gotoStep(name) {
-  const devices = name === "devices";
-  stepJoin.hidden = devices;
-  stepDevices.hidden = !devices;
-  if (devices) {
+/**
+ * Optional device check.  The test is never a step you must pass: the join
+ * button submits whether it is open or closed, and closing it releases the
+ * camera/microphone immediately.
+ */
+function setDevicePanel(open) {
+  if (!devicePanel || !btnToDevices) return;
+  devicePanel.hidden = !open;
+  btnToDevices.setAttribute("aria-expanded", String(open));
+  devicePanel.classList.toggle("is-open", open);
+  if (open) {
     startPreview();
-    btnJoin.focus();
   } else {
     if (localStream) localStream.getTracks().forEach((t) => t.stop());
+    localStream = null;
     cancelAnimationFrame(micRaf);
     micLevel.style.width = "0%";
+    setCamState("idle", "تست را دوباره باز کنید");
   }
 }
 
 if (btnToDevices) {
   btnToDevices.addEventListener("click", () => {
-    // lightweight client-side gate; the server re-validates everything
-    const nameInput = document.getElementById("id_display_name");
-    if (nameInput && nameInput.value.trim().length < 2) {
-      nameInput.focus();
-      toast("نام نمایشی باید حداقل ۲ نویسه باشد.", "error");
-      return;
-    }
-    gotoStep("devices");
+    setDevicePanel(devicePanel.hidden);
   });
 }
-if (btnBack) btnBack.addEventListener("click", () => gotoStep("join"));
 if (btnMicTest) btnMicTest.addEventListener("click", micTest);
 if (btnSpeakerTest) btnSpeakerTest.addEventListener("click", speakerTest);
-cameraSelect.addEventListener("change", () => { if (!stepDevices.hidden) startPreview(); });
-micSelect.addEventListener("change", () => { if (!stepDevices.hidden) startPreview(); });
+const previewOpen = () => Boolean(devicePanel && !devicePanel.hidden);
+cameraSelect.addEventListener("change", () => { if (previewOpen()) startPreview(); });
+micSelect.addEventListener("change", () => { if (previewOpen()) startPreview(); });
 
 if (navigator.mediaDevices && "addEventListener" in navigator.mediaDevices) {
   navigator.mediaDevices.addEventListener("devicechange", listDevices);
 }
 
-form.addEventListener("submit", () => {
+if (btnImTeacher) {
+  btnImTeacher.addEventListener("click", () => {
+    const on = btnImTeacher.getAttribute("aria-pressed") !== "true";
+    btnImTeacher.setAttribute("aria-pressed", String(on));
+    document.getElementById("join-form")?.classList.toggle("teacher-mode", on);
+    const label = document.getElementById("join-password-label");
+    const help = document.getElementById("join-password-help");
+    if (label) label.textContent = on ? "رمز معلم" : "رمز کلاس";
+    if (help) {
+      help.textContent = on
+        ? "با رمز معلم وارد می‌شوید؛ اگر آن را ندارید، رمز کلاس را وارد کنید."
+        : "رمز را میزبان کلاس به شما داده است.";
+    }
+    document.getElementById("id_password")?.focus();
+    toast(on ? "حالت معلم — رمز را وارد کنید." : "حالت مهمان.", "info", 2200);
+  });
+}
+
+// live initials avatar while typing the display name
+if (nameInput && avatar) {
+  const syncAvatar = () => {
+    const v = nameInput.value.trim();
+    avatar.textContent = v ? v.charAt(0) : "؟";
+    avatar.classList.toggle("is-empty", !v);
+    nameInput.parentElement?.parentElement?.classList.toggle("has-value", Boolean(v));
+  };
+  nameInput.addEventListener("input", syncAvatar);
+  syncAvatar();
+}
+
+form.addEventListener("submit", (e) => {
+  // lightweight client-side gate; the server re-validates everything
+  if (nameInput && nameInput.offsetParent !== null && nameInput.value.trim().length < 2) {
+    e.preventDefault();
+    nameInput.focus();
+    toast("نام نمایشی باید حداقل ۲ نویسه باشد.", "error");
+    return;
+  }
   if (localStream) localStream.getTracks().forEach((t) => t.stop());
   if (btnJoin) {
     btnJoin.disabled = true;
-    btnJoin.textContent = "در حال ورود…";
+    btnJoin.querySelector("span").textContent = "در حال ورود…";
   }
 });
 

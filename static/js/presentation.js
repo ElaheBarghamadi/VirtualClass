@@ -32,6 +32,9 @@ class PresentationImpl {
         this._pdfLoading = null;     // {fileId, promise} — single-flight loader
         this._renderGen = 0;         // generation guard against render races
         this._scale = 1;             // css px per page unit (for normalisation)
+        this.zoom = 1;               // 1 = fit to the stage, 2 = 200% of fit
+        this.ZOOM_MIN = 0.5;
+        this.ZOOM_MAX = 3;
         this._fileOps = new Map();   // "fid:page" → ops
         this._myUndo = [];
         this._annot = null;          // fabric.Canvas overlay
@@ -51,6 +54,7 @@ class PresentationImpl {
         this.api = api;
         this._bindToolbar();
         this._bindNav();
+        this._bindZoom();
         this._connect();
         // re-render on container size changes (fullscreen, panels, rotate)
         const holder = document.getElementById('presentation-holder');
@@ -72,9 +76,13 @@ class PresentationImpl {
     _syncAnnotGate() {
         const wrap = document.getElementById('pres-annot');
         if (wrap) wrap.style.pointerEvents = this.canAnnotate ? 'auto' : 'none';
-        document.querySelectorAll('.pres-tools .wb-tool, .pres-tools .wb-action').forEach((b) => {
-            b.classList.toggle('denied', !this.canAnnotate);
-        });
+        // Annotation is a *writing* capability: without it the ink tools are
+        // removed (not just dimmed going by the class name) so the header shows
+        // only navigation/zoom + fullscreen.
+        document.querySelectorAll(
+            '.pres-tools .wb-tool, .pres-tools [data-paction], .pres-tools .wb-swatch, .pres-tools .wb-width'
+        ).forEach((b) => b.classList.toggle('denied', !this.canAnnotate));
+        document.getElementById('pres-viewonly-chip')?.classList.toggle('hidden', this.canAnnotate);
     }
 
     // ------------------------------------------------------------ transport
@@ -145,6 +153,7 @@ class PresentationImpl {
     }
 
     hide() {
+        this._cancelRenderTask();
         this.fileId = null;
     }
 
@@ -178,10 +187,20 @@ class PresentationImpl {
         return 'other';
     }
 
+    /**
+     * URLs used by the *renderer*: `inline=1` asks the server for
+     * Content-Disposition: inline, so the bytes are drawn in the page instead
+     * of the browser offering a download to every participant.
+     */
+    _inlineUrl({ pdf = false } = {}) {
+        const params = ['inline=1'];
+        if (pdf && this.hasPdf) params.push('format=pdf');
+        return `/class/${this.roomCode}/files/${this.fileId}/download/?${params.join('&')}`;
+    }
+
     /** URL of whatever the pdf renderer should fetch for the current file. */
     _pdfUrl() {
-        const base = `/class/${this.roomCode}/files/${this.fileId}/download/`;
-        return this.hasPdf ? `${base}?format=pdf` : base;
+        return this._inlineUrl({ pdf: true });
     }
 
     // ------------------------------------------------------------ rendering
@@ -205,7 +224,7 @@ class PresentationImpl {
             fallback.classList.remove('hidden');
             fallback.innerHTML =
                 '<p>پیش‌نمایش این فرمت در مرورگر ممکن نیست.</p>' +
-                `<a class="btn" href="/class/${this.roomCode}/files/${this.fileId}/download/" download>⬇ دانلود فایل</a>`;
+                `<a class="btn btn-primary" href="/class/${this.roomCode}/files/${this.fileId}/download/" download>دانلود فایل</a>`;
             return;
         }
         // While the view is hidden the holder measures 0×0 — rendering now
@@ -223,10 +242,11 @@ class PresentationImpl {
             else await this._renderImage(gen);
         } catch (err) {
             if (gen !== this._renderGen) return; // a newer render owns the UI
+            if (isRenderCancelled(err)) return;  // superseded by a newer render
             console.warn('[presentation] render failed:', err);
             fallback.classList.remove('hidden');
             stage.classList.add('hidden');
-            fallback.innerHTML = `<p>نمایش فایل ناموفق بود.</p><a class="btn" href="/class/${this.roomCode}/files/${this.fileId}/download/" download>⬇ دانلود فایل</a>`;
+            fallback.innerHTML = `<p>نمایش فایل ناموفق بود.</p><a class="btn" href="/class/${this.roomCode}/files/${this.fileId}/download/" download>دانلود فایل</a>`;
             return;
         }
         if (gen !== this._renderGen) return;
@@ -281,10 +301,11 @@ class PresentationImpl {
         const holderRect = holder.getBoundingClientRect();
         const base = page.getViewport({ scale: 1 });
         const dpr = Math.min(window.devicePixelRatio || 1, 2);
-        const scale = Math.max(0.1, Math.min(
+        const fit = Math.min(
             (holderRect.width - 16) / base.width,
             (holderRect.height - 16) / base.height,
-        ));
+        );
+        const scale = Math.max(0.1, fit * this.zoom);
         this._scale = scale;
         const viewport = page.getViewport({ scale });
 
@@ -294,28 +315,44 @@ class PresentationImpl {
         canvas.style.width = `${Math.floor(viewport.width)}px`;
         canvas.style.height = `${Math.floor(viewport.height)}px`;
         const ctx = canvas.getContext('2d', { alpha: false });
-        await page.render({
+        // pdf.js refuses (and throws) when two renders target one canvas — which
+        // used to happen when the resize observer and the presenter's action
+        // collided, leaving the viewer with the «نمایش فایل ناموفق بود» panel.
+        // Cancel the in-flight task instead of stacking a second one.
+        this._cancelRenderTask();
+        const task = page.render({
             canvasContext: ctx,
             viewport,
             transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : undefined,
-        }).promise;
+        });
+        this._renderTask = task;
+        try {
+            await task.promise;
+        } catch (err) {
+            if (isRenderCancelled(err)) return;
+            throw err;
+        } finally {
+            if (this._renderTask === task) this._renderTask = null;
+        }
         if (gen !== this._renderGen) return;
         this._updateNavUI();
     }
 
     async _renderImage(gen) {
+        this._cancelRenderTask();
         this.pageCount = 1;
         this.page = 1;
         const img = new Image();
-        img.src = `/class/${this.roomCode}/files/${this.fileId}/download/`;
+        img.src = this._inlineUrl();
         await img.decode();
         if (gen !== this._renderGen) return;
         const holder = document.getElementById('presentation-holder');
         const holderRect = holder.getBoundingClientRect();
-        const scale = Math.max(0.05, Math.min(
+        const fit = Math.min(
             (holderRect.width - 16) / img.naturalWidth,
             (holderRect.height - 16) / img.naturalHeight,
-        ));
+        );
+        const scale = Math.max(0.05, fit * this.zoom);
         this._scale = scale;
         const w = Math.floor(img.naturalWidth * scale);
         const h = Math.floor(img.naturalHeight * scale);
@@ -331,6 +368,12 @@ class PresentationImpl {
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         ctx.drawImage(img, 0, 0, w, h);
         this._updateNavUI();
+    }
+
+    _cancelRenderTask() {
+        if (!this._renderTask) return;
+        try { this._renderTask.cancel(); } catch (e) { /* already done */ }
+        this._renderTask = null;
     }
 
     // ------------------------------------------------------------ annotation layer
@@ -503,6 +546,71 @@ class PresentationImpl {
         });
     }
 
+    // ------------------------------------------------------------ zoom
+    setZoom(value, { silent = false } = {}) {
+        const next = Math.max(this.ZOOM_MIN, Math.min(this.ZOOM_MAX, value));
+        if (Math.abs(next - this.zoom) < 0.001 && !silent) return;
+        this.zoom = next;
+        this._syncZoomUI();
+        this.renderCurrent();
+    }
+
+    zoomBy(step) {
+        this.setZoom(Math.round((this.zoom + step) * 100) / 100);
+    }
+
+    fitToStage() {
+        this.setZoom(1);
+        this._centerStage();
+    }
+
+    _centerStage() {
+        const wrap = document.getElementById('presentation-holder');
+        if (!wrap) return;
+        wrap.scrollTo({
+            top: Math.max(0, (wrap.scrollHeight - wrap.clientHeight) / 2),
+            left: Math.max(0, (wrap.scrollWidth - wrap.clientWidth) / 2),
+            behavior: document.documentElement.getAttribute('data-motion') === 'reduced' ? 'auto' : 'smooth',
+        });
+    }
+
+    _syncZoomUI() {
+        const label = document.getElementById('pres-zoom-label');
+        if (label) label.textContent = `${Math.round(this.zoom * 100).toLocaleString('fa-IR')}٪`;
+        const fit = document.getElementById('pres-zoom-fit');
+        if (fit) {
+            fit.classList.toggle('active', Math.abs(this.zoom - 1) < 0.001);
+            fit.setAttribute('aria-pressed', String(Math.abs(this.zoom - 1) < 0.001));
+        }
+        const holder = document.getElementById('presentation-holder');
+        if (holder) holder.classList.toggle('zoomed', this.zoom > 1.001);
+    }
+
+    _bindZoom() {
+        document.getElementById('pres-zoom-in')?.addEventListener('click', () => this.zoomBy(0.25));
+        document.getElementById('pres-zoom-out')?.addEventListener('click', () => this.zoomBy(-0.25));
+        document.getElementById('pres-zoom-fit')?.addEventListener('click', () => this.fitToStage());
+        const label = document.getElementById('pres-zoom-label');
+        if (label) {
+            label.setAttribute('role', 'button');
+            label.setAttribute('tabindex', '0');
+            label.title = 'بازگشت به اندازهٔ متناسب با صفحه';
+            const reset = () => this.fitToStage();
+            label.addEventListener('click', reset);
+            label.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); reset(); }
+            });
+        }
+        // ctrl/⌘ + wheel zooms the slide; plain wheel keeps scrolling
+        const holder = document.getElementById('presentation-holder');
+        holder?.addEventListener('wheel', (e) => {
+            if (!e.ctrlKey && !e.metaKey) return;
+            e.preventDefault();
+            this.zoomBy(e.deltaY < 0 ? 0.15 : -0.15);
+        }, { passive: false });
+        this._syncZoomUI();
+    }
+
     _updateNavUI() {
         const label = document.getElementById('pres-page-label');
         if (label) label.textContent = `صفحهٔ ${Number(this.page).toLocaleString('fa-IR')} از ${this.pageCount ? Number(this.pageCount).toLocaleString('fa-IR') : '?'}`;
@@ -511,6 +619,13 @@ class PresentationImpl {
         if (prev) prev.disabled = this.page <= 1;
         if (next) next.disabled = this.pageCount ? this.page >= this.pageCount : false;
     }
+}
+
+/** pdf.js signals an aborted render with a RenderingCancelledException. */
+function isRenderCancelled(err) {
+    if (!err) return false;
+    return err.name === 'RenderingCancelledException'
+        || /cancel/i.test(String(err.message || err));
 }
 
 export const Presentation = new PresentationImpl();

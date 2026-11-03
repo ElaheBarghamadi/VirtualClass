@@ -47,6 +47,7 @@ from .services import (
     attendance_summary,
     create_classroom,
     deactivate_classroom,
+    end_classroom_for_all,
     delete_shared_file,
     deactivate_member,
     deny_waiting_room,
@@ -347,6 +348,7 @@ def _room_context(request, classroom: Classroom, member) -> dict:
         "members": [m for m in active_members(classroom)],
         "permissions": perms,
         "is_privileged": is_privileged(member),
+        "is_owner": member.role == Role.OWNER,
         "live_session": session,
         "files": files,
         "quizzes": list(Quiz.objects.filter(classroom=classroom)[:20]),
@@ -386,6 +388,20 @@ def leave_view(request, room_code: str):
             leave_classroom(classroom, request.user)
     messages.success(request, "از کلاس خارج شدید.")
     return redirect("dashboard" if request.user.is_authenticated else "home")
+
+
+@login_required
+@require_POST
+def end_class_view(request, room_code: str):
+    """Owner-only: end the meeting for everyone (server-enforced)."""
+    classroom = get_object_or_404(Classroom, room_code=room_code, is_active=True)
+    try:
+        removed = end_classroom_for_all(classroom, request.user)
+    except PermissionDenied as exc:
+        return _json_error(exc)
+    except ClassroomAccessError as exc:
+        return _json_error(exc, status=400)
+    return JsonResponse({"ok": True, "members": removed})
 
 
 # ---------------------------------------------------------------------------
@@ -754,13 +770,16 @@ def file_download_view(request, room_code: str, file_id: int):
         # not admitted yet — shared material must stay hidden
         raise Http404
     shared = get_object_or_404(SharedFile, id=file_id, classroom=classroom)
+    # ?inline=1 → the presentation renderer draws these bytes in the page.
+    # Only allow-listed (pdf/image) types are ever served inline.
+    inline = request.GET.get("inline") in {"1", "true", "yes"}
     if request.GET.get("format") == "pdf":
         # the server-converted copy used by the presentation renderer
         if not shared.pdf_version:
             raise Http404
         pdf_name = shared.original_name.rsplit(".", 1)[0] + ".pdf"
-        return private_file_response(shared.pdf_version, pdf_name)
-    return private_file_response(shared.file, shared.original_name)
+        return private_file_response(shared.pdf_version, pdf_name, inline=inline)
+    return private_file_response(shared.file, shared.original_name, inline=inline)
 
 
 @require_http_methods(["POST"])

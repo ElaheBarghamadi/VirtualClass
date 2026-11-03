@@ -58,6 +58,8 @@
         <symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="m9.5 5 7 7-7 7"/></symbol>
         <symbol id="i-chevron-left" viewBox="0 0 24 24"><path d="m14.5 5-7 7 7 7"/></symbol>
         <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5.5v13M5.5 12h13"/></symbol>
+        <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5.5 12h13"/></symbol>
+        <symbol id="i-zoom-fit" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2.6"/><path d="M8.5 9.5h7v5h-7z"/></symbol>
         <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="17" height="17" rx="2.4"/><path d="M3.5 9.5h17M3.5 14.5h17M9.5 3.5v17M14.5 3.5v17"/></symbol>
         <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3.5v11"/><path d="m7.5 10 4.5 4.5L16.5 10"/><path d="M4 20.5h16"/></symbol>
         <symbol id="i-maximize" viewBox="0 0 24 24"><path d="M8 3.5H5.5a2 2 0 0 0-2 2V8M16 3.5h2.5a2 2 0 0 1 2 2V8M20.5 16v2.5a2 2 0 0 1-2 2H16M3.5 16v2.5a2 2 0 0 0 2 2H8"/></symbol>
@@ -90,6 +92,7 @@
      data-participant-name="{{ member.participant_name }}"
      data-is-guest="{{ member.is_guest|yesno:'1,0' }}"
      data-privileged="{{ is_privileged|yesno:'1,0' }}"
+     data-owner="{{ is_owner|yesno:'1,0' }}"
      data-live-session="{{ live_session.id|default:'' }}"
      data-media-url="{{ media.url }}"
      data-media-enabled="{{ media.enabled|yesno:'1,0' }}"
@@ -97,6 +100,20 @@
      data-mesh-enabled="{{ media.mesh_enabled|yesno:'1,0' }}"
      data-mesh-max="{{ media.mesh_max_participants }}"
      data-show-chat="{{ classroom.show_chat_default|yesno:'1,0' }}">
+
+    <section class="class-ended hidden" id="class-ended" role="alertdialog" aria-labelledby="class-ended-title">
+        <div class="class-ended-card">
+            <span class="class-ended-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M20 7.5 4 19M4 7.5 20 19"/><circle cx="12" cy="12" r="9.2"/></svg>
+            </span>
+            <h2 id="class-ended-title">کلاس تمام شد</h2>
+            <p class="muted" data-ended-by>این کلاس پایان یافته است.</p>
+            <p class="class-ended-hint">اتاق بسته شد و میکروفون/دوربین شما قطع شد. برای ورود دوباره باید از لینک کلاس اقدام کنید.</p>
+            <div class="class-ended-actions">
+                <a class="btn btn-primary" data-ended-home href="{% if member.is_guest %}/{% else %}/dashboard/{% endif %}">بازگشت به داشبورد</a>
+            </div>
+        </div>
+    </section>
 
     <header class="room-header">
         <div class="room-title">
@@ -159,6 +176,9 @@
                 <div class="stage-view hidden" id="view-presentation">
                     <div class="screen-header">
                         <span id="presentation-title">ارائه</span>
+                        <span class="wb-mode-chip hidden" id="pres-viewonly-chip">
+                            <svg class="ic" aria-hidden="true"><use href="#i-lock"/></svg> فقط نمایش
+                        </span>
                         <div class="pres-tools" role="toolbar" aria-label="ابزار حاشیه‌نویسی">
                             <button type="button" class="wb-tool active" data-ptool="pen" title="قلم" aria-label="قلم" aria-pressed="true"><svg class="ic"><use href="#i-pen"/></svg></button>
                             <button type="button" class="wb-tool" data-ptool="highlighter" title="هایلایت" aria-label="هایلایت" aria-pressed="false"><svg class="ic"><use href="#i-marker"/></svg></button>
@@ -181,6 +201,12 @@
                             <button type="button" id="pres-prev" title="صفحهٔ قبل" aria-label="صفحهٔ قبل"><svg class="ic"><use href="#i-chevron-right"/></svg></button>
                             <span id="pres-page-label" aria-live="polite">صفحهٔ ۱ از ۱</span>
                             <button type="button" id="pres-next" title="صفحهٔ بعد" aria-label="صفحهٔ بعد"><svg class="ic"><use href="#i-chevron-left"/></svg></button>
+                            <div class="pres-zoom" role="group" aria-label="بزرگ‌نمایی ارائه">
+                                <button type="button" id="pres-zoom-out" title="کوچک‌تر" aria-label="کوچک‌تر"><svg class="ic"><use href="#i-minus"/></svg></button>
+                                <span id="pres-zoom-label" class="pres-zoom-value" title="اندازهٔ متناسب با صفحه">۱۰۰٪</span>
+                                <button type="button" id="pres-zoom-in" title="بزرگ‌تر" aria-label="بزرگ‌تر"><svg class="ic"><use href="#i-plus"/></svg></button>
+                                <button type="button" id="pres-zoom-fit" title="متناسب با صفحه" aria-label="متناسب با صفحه"><svg class="ic"><use href="#i-zoom-fit"/></svg></button>
+                            </div>
                             <a id="pres-download" class="btn btn-sm btn-ghost" href="#" download title="دانلود فایل" aria-label="دانلود فایل"><svg class="ic"><use href="#i-download"/></svg></a>
                         </div>
                         <button type="button" class="btn btn-sm btn-ghost" id="btn-exit-presentation">بازگشت</button>
@@ -196,10 +222,13 @@
 
                 <div class="stage-view hidden" id="view-whiteboard">
                     <div class="wb-nodraw-hint hidden" id="wb-nodraw-hint" role="note">
-                        نوشتن روی تخته برای شما فعال نیست. از مالک کلاس بخواهید مجوز «تختهٔ اشتراکی» را برایتان روشن کند؛ برای دانش‌آموزان، گزینهٔ «تختهٔ دانش‌آموزان» در تنظیمات کلاس هم باید فعال باشد.
+                        تخته در حالت نمایش است — ابزار نوشتن فقط برای مالک و افراد مجاز فعال می‌شود.
                     </div>
                     <div class="wb-error-hint hidden" id="wb-error-hint" role="alert"></div>
                     <div class="wb-toolbar" role="toolbar" aria-label="ابزار تخته سفید">
+                        <span class="wb-mode-chip hidden" id="wb-mode-chip">
+                            <svg class="ic" aria-hidden="true"><use href="#i-lock"/></svg> فقط نمایش
+                        </span>
                         <div class="wb-group" role="group" aria-label="ابزار قلم">
                             <button type="button" class="wb-tool active" data-tool="pen" title="قلم" aria-label="قلم" aria-pressed="true"><svg class="ic"><use href="#i-pen"/></svg></button>
                             <button type="button" class="wb-tool" data-tool="highlighter" title="هایلایت" aria-label="هایلایت" aria-pressed="false"><svg class="ic"><use href="#i-marker"/></svg></button>
@@ -519,6 +548,29 @@
         </div>
     </footer>
 
+    {# Optional, one-time device check — never shown again in this tab. #}
+    <section class="dt-card hidden" id="device-test-card" aria-hidden="true" aria-labelledby="dt-title">
+        <div class="dt-head">
+            <h3 id="dt-title">
+                <svg class="ic" aria-hidden="true"><use href="#i-mic"/></svg>
+                تست صدا و تصویر
+            </h3>
+            <button type="button" class="dt-close" id="dt-close" aria-label="بستن تست دستگاه">
+                <svg class="ic" aria-hidden="true"><use href="#i-close"/></svg>
+            </button>
+        </div>
+        <p class="dt-hint">اختیاری است — تا روی «شروع تست» نزنید، دوربین و میکروفون روشن نمی‌شوند.</p>
+        <div class="dt-body" id="dt-body" hidden>
+            <video id="dt-video" playsinline muted aria-label="پیش‌نمایش دوربین"></video>
+            <div class="dt-meter" aria-label="سطح صدا"><div id="dt-level"></div></div>
+            <p class="dt-status" id="dt-status" role="status"></p>
+        </div>
+        <div class="dt-actions">
+            <button type="button" class="btn btn-sm btn-primary" id="dt-start">شروع تست</button>
+            <button type="button" class="btn btn-sm btn-ghost" id="dt-later">بعداً</button>
+        </div>
+    </section>
+
     {# Touch backdrop for the side-panel drawer (tap/Escape to close). #}
     <div class="drawer-backdrop" id="drawer-backdrop" aria-hidden="true"></div>
 </div>
@@ -618,7 +670,8 @@
         </div>
         <div class="perms-actions">
             <button type="button" class="btn btn-ghost btn-sm" id="perms-mute">بی‌صدا کردن</button>
-            <button type="button" class="btn btn-danger btn-sm" id="perms-remove">حذف از کلاس</button>
+            <button type="button" class="btn btn-ghost btn-sm" id="perms-remove">حذف از کلاس</button>
+            <button type="button" class="btn btn-danger btn-sm" id="perms-ban">اخراج و مسدودسازی</button>
         </div>
     </div>
 </dialog>

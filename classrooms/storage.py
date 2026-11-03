@@ -22,16 +22,48 @@ class PrivateFileStorage(FileSystemStorage):
 private_storage = PrivateFileStorage()
 
 
-def private_file_response(field, filename):
-    """Serve private content only after the caller has authorized the request."""
+#: Only these types may be served *inline* (viewed inside the app).  Everything
+#: else stays an attachment, so a shared .html/.svg/.xml file can never execute
+#: script in the classroom origin.
+INLINE_TYPES = {
+    "pdf": "application/pdf",
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "gif": "image/gif",
+    "webp": "image/webp",
+}
+
+
+def private_file_response(field, filename, inline: bool = False):
+    """Serve private content only after the caller has authorized the request.
+
+    ``inline=True`` is used by the in-room presentation renderer: the browser
+    must *draw* the bytes, not save them.  Anything outside :data:`INLINE_TYPES`
+    is still sent as an attachment (a download), which is also what the explicit
+    download buttons ask for.
+    """
     from django.http import FileResponse, Http404
 
     if not field:
         raise Http404
-    try:
-        response = FileResponse(field.open("rb"), as_attachment=True, filename=filename)
-    except FileNotFoundError:
-        raise Http404 from None
+
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    content_type = INLINE_TYPES.get(ext)
+    if inline and content_type:
+        try:
+            response = FileResponse(field.open("rb"), as_attachment=False,
+                                    filename=filename, content_type=content_type)
+        except FileNotFoundError:
+            raise Http404 from None
+        # Defence in depth: even if a browser sniffs, the document is inert.
+        response["Content-Security-Policy"] = "default-src 'none'; sandbox"
+    else:
+        try:
+            response = FileResponse(field.open("rb"), as_attachment=True, filename=filename)
+        except FileNotFoundError:
+            raise Http404 from None
+
     response["Cache-Control"] = "private, no-store"
     response["X-Content-Type-Options"] = "nosniff"
     return response

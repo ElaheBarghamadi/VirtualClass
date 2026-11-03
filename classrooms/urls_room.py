@@ -21,6 +21,7 @@ urlpatterns = [
     path("<str:room_code>/lock/", views.lock_view, name="lock"),
     path("<str:room_code>/settings/", views.settings_view, name="settings"),
     path("<str:room_code>/mute-all/", views.mute_all_view, name="mute_all"),
+    path("<str:room_code>/end-class/", views.end_class_view, name="end_class"),
     path("<str:room_code>/presentation/", views.presentation_view, name="presentation"),
     path("<str:room_code>/sessions/start/", views.session_start_view, name="session_start"),
     path("<str:room_code>/sessions/<int:session_id>/end/", views.session_end_view, name="session_end"),

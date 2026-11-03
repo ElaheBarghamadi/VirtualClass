@@ -1,100 +1,141 @@
 /**
  * modal.js — the single dialog component used across the room.
  *
- * One accessible <dialog> is created lazily and reused: focus is trapped
- * by the platform, Esc closes, and focus returns to the opener. All
- * confirmations (leave, remove, end session…) go through confirmDialog
- * so styling/behaviour stays consistent.
+ * A fresh accessible <dialog> is created per call: focus is trapped by the
+ * platform, Esc closes, and focus returns to the opener. Reusing one node
+ * caused a stale `close` event (from the previous question) to dismiss the
+ * next one, so every dialog is its own element and is removed on close.
+ *
+ * - confirmDialog(title, message, opts) → Promise<boolean>
+ * - choiceDialog(title, message, options) → Promise<option id | null>
+ * - infoDialog(title, content, okLabel) → Promise<void>
  */
 
-let dialog = null;
-let resolveFn = null;
+let current = null;   // { el, resolve }
 let lastFocus = null;
 
-function ensureDialog() {
-    if (dialog) return dialog;
-    dialog = document.createElement('dialog');
-    dialog.className = 'app-dialog';
-    dialog.setAttribute('aria-modal', 'true');
-    dialog.innerHTML = `
+function build() {
+    const el = document.createElement('dialog');
+    el.className = 'app-dialog';
+    el.setAttribute('aria-modal', 'true');
+    el.innerHTML = `
         <div class="app-dialog-head">
             <h2 class="app-dialog-title" id="app-dialog-title"></h2>
-            <button type="button" class="app-dialog-x" aria-label="بستن">✕</button>
+            <button type="button" class="app-dialog-x" aria-label="بستن">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+            </button>
         </div>
         <div class="app-dialog-body" id="app-dialog-body"></div>
-        <div class="app-dialog-actions">
-            <button type="button" class="btn btn-ghost" data-act="cancel"></button>
-            <button type="button" class="btn btn-primary" data-act="ok"></button>
-        </div>`;
-    document.body.appendChild(dialog);
-
-    dialog.querySelector('.app-dialog-x').addEventListener('click', () => finish(false));
-    dialog.querySelector('[data-act="cancel"]').addEventListener('click', () => finish(false));
-    dialog.querySelector('[data-act="ok"]').addEventListener('click', () => finish(true));
-    dialog.addEventListener('close', () => finish(dialog.returnValue === 'ok'));
-    dialog.addEventListener('cancel', (e) => { e.preventDefault(); finish(false); });
-    return dialog;
+        <div class="app-dialog-actions" id="app-dialog-actions"></div>`;
+    document.body.appendChild(el);
+    return el;
 }
 
-function finish(value) {
-    if (dialog?.open) dialog.close(value ? 'ok' : 'cancel');
-    if (resolveFn) {
-        const r = resolveFn;
-        resolveFn = null;
-        r(value);
-    }
+function settle(el, value) {
+    if (current?.el !== el) return;
+    const { resolve } = current;
+    current = null;
+    if (el.open) el.close();
+    el.remove();
     if (lastFocus && typeof lastFocus.focus === 'function') lastFocus.focus();
     lastFocus = null;
+    resolve(value);
 }
 
 /**
- * Open a confirmation dialog.
+ * Create + show a dialog.
  * @param {string} title
- * @param {string} [message]
- * @param {{okLabel?: string, cancelLabel?: string, danger?: boolean}} [opts]
- * @returns {Promise<boolean>}
+ * @param {string|HTMLElement} body
+ * @param {Array<{label: string, value: any, tone?: 'primary'|'danger'|'ghost'}>} actions
+ * @param {{html?: boolean, focusIndex?: number}} [opts]
+ * @returns {Promise<any>}
  */
-export function confirmDialog(title, message = '', opts = {}) {
-    const d = ensureDialog();
+function show(title, body, actions, opts = {}) {
+    // Only one dialog at a time: a silent replacement keeps the UI coherent.
+    if (current) {
+        const previous = current;
+        current = null;
+        if (previous.el.open) previous.el.close();
+        previous.el.remove();
+        previous.resolve(null);
+    }
+    const el = build();
     lastFocus = document.activeElement;
-    d.querySelector('#app-dialog-title').textContent = title;
-    d.querySelector('#app-dialog-body').textContent = message;
-    const ok = d.querySelector('[data-act="ok"]');
-    const cancel = d.querySelector('[data-act="cancel"]');
-    ok.textContent = opts.okLabel || 'تأیید';
-    cancel.textContent = opts.cancelLabel || 'انصراف';
-    ok.className = `btn ${opts.danger ? 'btn-danger' : 'btn-primary'}`;
-    ok.style.display = '';
-    cancel.style.display = '';
+    el.querySelector('#app-dialog-title').textContent = title;
+
+    const bodyEl = el.querySelector('#app-dialog-body');
+    if (body instanceof HTMLElement) bodyEl.appendChild(body);
+    else if (opts.html) bodyEl.innerHTML = body || '';
+    else bodyEl.textContent = body || '';
+
+    const row = el.querySelector('#app-dialog-actions');
+    // three or more choices read better as a stacked list than as a wrapped row
+    if (actions.length > 2) row.classList.add('is-stacked');
+    const buttons = actions.map((action) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = `btn btn-${action.tone || 'ghost'}`;
+        btn.textContent = action.label;
+        btn.addEventListener('click', () => settle(el, action.value));
+        row.appendChild(btn);
+        return btn;
+    });
+
+    el.querySelector('.app-dialog-x').addEventListener('click', () => settle(el, null));
+    el.addEventListener('close', () => settle(el, null));          // Esc / backdrop
+    el.addEventListener('cancel', (e) => { e.preventDefault(); settle(el, null); });
+
     return new Promise((resolve) => {
-        resolveFn = resolve;
-        d.returnValue = '';
-        d.showModal();
-        ok.focus();
+        current = { el, resolve };
+        el.showModal();
+        (buttons[opts.focusIndex ?? 0] || el.querySelector('.app-dialog-x')).focus();
     });
 }
 
 /**
- * Open an informational dialog (help, shortcuts, problem report…).
+ * Confirmation dialog.
+ * @returns {Promise<boolean>}
+ */
+export function confirmDialog(title, message = '', opts = {}) {
+    return show(
+        title,
+        message,
+        [
+            { label: opts.cancelLabel || 'انصراف', value: false, tone: 'ghost' },
+            { label: opts.okLabel || 'تأیید', value: true, tone: opts.danger ? 'danger' : 'primary' },
+        ],
+        { focusIndex: 1 },
+    ).then(Boolean);
+}
+
+/**
+ * Multi-option dialog — used where "cancel" is not the only alternative
+ * (e.g. the owner leaving the class vs. ending it for everybody).
  * @param {string} title
- * @param {string|HTMLElement} content — string is inserted as text-safe HTML
+ * @param {string|HTMLElement} message
+ * @param {Array<{id: any, label: string, tone?: string}>} options
+ * @returns {Promise<any|null>} the chosen `id`, or null when dismissed
+ */
+export function choiceDialog(title, message, options) {
+    return show(title, message, options.map((opt, index) => ({
+        label: opt.label,
+        value: opt.id,
+        tone: opt.tone || (index === 0 ? 'primary' : 'ghost'),
+    })));
+}
+
+/**
+ * Informational dialog (help, shortcuts, problem report…).
+ * @param {string} title
+ * @param {string|HTMLElement} content — strings are treated as app-authored HTML
  * @param {string} [okLabel]
  * @returns {Promise<void>}
  */
 export function infoDialog(title, content, okLabel = 'بستن') {
-    const d = ensureDialog();
-    lastFocus = document.activeElement;
-    d.querySelector('#app-dialog-title').textContent = title;
-    const body = d.querySelector('#app-dialog-body');
-    if (typeof content === 'string') body.innerHTML = content;
-    else { body.textContent = ''; body.appendChild(content); }
-    d.querySelector('[data-act="ok"]').textContent = okLabel;
-    d.querySelector('[data-act="ok"]').style.display = '';
-    d.querySelector('[data-act="cancel"]').style.display = 'none';
-    return new Promise((resolve) => {
-        resolveFn = () => resolve();
-        d.returnValue = '';
-        d.showModal();
-        d.querySelector('[data-act="ok"]').focus();
-    });
+    return show(
+        title,
+        content,
+        [{ label: okLabel, value: true, tone: 'primary' }],
+        { html: typeof content === 'string' },
+    ).then(() => undefined);
 }

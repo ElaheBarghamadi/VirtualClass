@@ -17,9 +17,10 @@ import { Presentation } from './presentation.js';
 import { Media } from './media.js';
 import { QuizClient } from './quiz.js';
 import { toast } from './toast.js';
-import { confirmDialog, infoDialog } from './modal.js';
+import { choiceDialog, confirmDialog, infoDialog } from './modal.js';
 import { Recorder } from './recorder.js';
 import { Captions } from './captions.js';
+import { initDeviceTest } from './device-test.js';
 
 const root = document.getElementById('classroom-root');
 const ROOM_CODE = root.dataset.roomCode;
@@ -28,6 +29,7 @@ const SELF_USER_ID = IDENTITY.startsWith('u:') ? Number(IDENTITY.slice(2)) : nul
 const MEMBER_ID = Number(root.dataset.memberId);
 const SELF_ROLE = root.dataset.role || '';
 const PRIVILEGED = root.dataset.privileged === '1';
+const IS_OWNER = root.dataset.owner === '1';
 const MEDIA_ENABLED = root.dataset.mediaEnabled === '1';
 const MEDIA_URL = root.dataset.mediaUrl;
 const MESH_ENABLED = root.dataset.meshEnabled === '1';
@@ -250,8 +252,10 @@ class PresenceClient {
 
         li.innerHTML = `
             <span class="participant-avatar"></span>
-            <span class="participant-name"></span>
-            <span class="participant-role"></span>
+            <span class="participant-name-wrap">
+                <span class="participant-name"></span>
+                <span class="participant-role"></span>
+            </span>
             <span class="participant-states" aria-hidden="true">
                 <i class="s-hand ${p.hand_raised ? 'on' : ''}" title="دست بالا"><svg class="ic"><use href="#i-hand"/></svg></i>
                 <i class="s-mic ${p.mic_on === false ? 'off' : ''}" title="میکروفون">${p.mic_on === false ? STATE_ICONS.micOff : STATE_ICONS.mic}</i>
@@ -270,44 +274,22 @@ class PresenceClient {
     }
 
     _hostControls(p) {
+        // One quiet «⋯» per row instead of a row full of buttons: the roster
+        // stays calm and every management action lives in one menu.
         const box = document.createElement('div');
         box.className = 'host-controls';
-
-        const btn = (title, label, fn) => {
-            const b = document.createElement('button');
-            b.type = 'button';
-            b.className = 'hc-btn';
-            b.title = title;
-            b.setAttribute('aria-label', `${title} — ${p.name}`);
-            b.textContent = label;
-            b.addEventListener('click', fn);
-            return b;
-        };
-
-        box.append(
-            btn(p.muted ? 'باصدا کردن' : 'بی‌صدا کردن', p.muted ? 'باصدا' : 'بی‌صدا', () =>
-                api(`/members/${p.member_id}/mute/`, { muted: !p.muted })),
-            btn('درخواست روشن کردن میکروفون', 'درخواست میکروفون', () =>
-                api(`/members/${p.member_id}/mute/`, { request_unmute: true })),
-            btn('دسترسی‌ها و نقش', 'دسترسی‌ها', () => openPermsDialog(p.identity)),
-        );
-        // Role assignment is owner-only (the server enforces the same rule).
-        if (SELF_ROLE === 'OWNER' && p.role !== 'OWNER') {
-            box.append(
-                btn('ارتقا به ارائه‌دهنده', 'ارائه‌دهنده', () =>
-                    api(`/members/${p.member_id}/role/`, { role: 'PRESENTER' })),
-                btn('ارتقا به مدیر', 'مدیر', () =>
-                    api(`/members/${p.member_id}/role/`, { role: 'MODERATOR' })),
-            );
-        }
-
-        const rm = btn('حذف از کلاس', 'حذف', async () => {
-            if (!await confirmDialog('حذف شرکت‌کننده', `${p.name} از کلاس حذف شود؟`, { danger: true, okLabel: 'حذف' })) return;
-            const ban = await confirmDialog('مسدودسازی موقت', 'ورود مجدد او ۵ دقیقه مسدود شود؟', { okLabel: 'بله، مسدود شود' });
-            await api(`/members/${p.member_id}/remove/`, { ban_minutes: ban ? 5 : 0 });
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'hc-btn hc-more';
+        btn.title = `مدیریت ${p.name}`;
+        btn.setAttribute('aria-label', `مدیریت ${p.name}`);
+        btn.setAttribute('aria-haspopup', 'menu');
+        btn.innerHTML = `<svg class="ic" aria-hidden="true"><use href="#i-more"/></svg>`;
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            openRowMenu(btn, p);
         });
-        rm.classList.add('danger');
-        box.appendChild(rm);
+        box.appendChild(btn);
         return box;
     }
 
@@ -329,6 +311,159 @@ class PresenceClient {
         });
         return li;
     }
+}
+
+// ---------------------------------------------------------------------------
+// Per-participant «⋯» menu (roster)
+//
+// Every management action for one member lives here so the participant row
+// stays a single line.  Two distinct moderation actions, as requested:
+//   • حذف از کلاس  → the member is disconnected but may join again
+//   • اخراج         → removed *and* blocked for a chosen period (server-side
+//                     `banned_until`, re-checked on every join attempt)
+// ---------------------------------------------------------------------------
+let rowMenu = null;
+let rowMenuAnchor = null;
+let rowMenuPlace = null;
+
+const BAN_CHOICES = [
+    { id: 5, label: '۵ دقیقه' },
+    { id: 60, label: '۱ ساعت' },
+    { id: 1440, label: '۱ روز' },
+    { id: 10080, label: '۷ روز' },
+];
+
+function closeRowMenu() {
+    if (!rowMenu) return;
+    rowMenu.remove();
+    rowMenu = null;
+    rowMenuAnchor?.setAttribute('aria-expanded', 'false');
+    rowMenuAnchor = null;
+    rowMenuPlace = null;
+    document.removeEventListener('click', onRowMenuOutside, true);
+    document.removeEventListener('keydown', onRowMenuKey, true);
+    window.removeEventListener('resize', repositionRowMenu);
+}
+
+function onRowMenuOutside(e) {
+    if (rowMenu && !rowMenu.contains(e.target) && !rowMenuAnchor?.contains(e.target)) closeRowMenu();
+}
+function onRowMenuKey(e) {
+    if (e.key === 'Escape') { e.stopPropagation(); closeRowMenu(); }
+}
+function repositionRowMenu() {
+    if (rowMenu && rowMenuAnchor) rowMenuPlace?.();
+}
+
+function placeRowMenu(anchor, menu) {
+    const place = () => {
+        const r = anchor.getBoundingClientRect();
+        const w = menu.offsetWidth;
+        const h = menu.offsetHeight;
+        const margin = 8;
+        // centre on the «⋯» and clamp inside the viewport: the roster lives in a
+        // narrow rail, so a one-sided dropdown would hang off the screen edge.
+        let left = r.left + r.width / 2 - w / 2;
+        left = Math.max(margin, Math.min(left, window.innerWidth - w - margin));
+        let top = r.bottom + 6;
+        if (top + h > window.innerHeight - margin) top = Math.max(margin, r.top - h - 6);
+        menu.style.left = `${Math.round(left)}px`;
+        menu.style.top = `${Math.round(top)}px`;
+    };
+    place();
+    return place;
+}
+
+async function kickMember(p) {
+    const ok = await confirmDialog(
+        'حذف از کلاس',
+        `${p.name} از کلاس بیرون انداخته شود؟ می‌تواند دوباره از لینک کلاس وارد شود.`,
+        { danger: true, okLabel: 'حذف از کلاس' },
+    );
+    if (!ok) return;
+    try {
+        await api(`/members/${p.member_id}/remove/`, { ban_minutes: 0 });
+        toast(`${p.name} از کلاس حذف شد.`, 'info', 2500);
+    } catch (err) { /* api() already surfaced the reason */ }
+}
+
+async function banMember(p) {
+    const minutes = await choiceDialog(
+        'اخراج و مسدودسازی',
+        `«${p.name}» از کلاس اخراج و برای مدت انتخاب‌شده از ورود مجدد منع می‌شود.`,
+        [...BAN_CHOICES.map((c) => ({ id: c.id, label: c.label, tone: 'ghost' })),
+         { id: null, label: 'انصراف', tone: 'ghost' }],
+    );
+    if (!minutes) return;
+    try {
+        await api(`/members/${p.member_id}/remove/`, { ban_minutes: minutes });
+        toast(`${p.name} اخراج و مسدود شد.`, 'info', 3000);
+    } catch (err) { /* api() already surfaced the reason */ }
+}
+
+function openRowMenu(anchor, p) {
+    const same = rowMenu && rowMenuAnchor === anchor;
+    closeRowMenu();
+    if (same) return; // second press closes
+
+    const menu = document.createElement('div');
+    menu.className = 'row-menu';
+    menu.setAttribute('role', 'menu');
+    menu.setAttribute('aria-label', `مدیریت ${p.name}`);
+
+    const item = (icon, label, fn, tone = '') => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.setAttribute('role', 'menuitem');
+        b.className = `row-menu-item ${tone}`.trim();
+        b.innerHTML = `<svg class="mi" aria-hidden="true"><use href="${icon}"/></svg><span></span>`;
+        b.querySelector('span').textContent = label;
+        b.addEventListener('click', async () => { closeRowMenu(); await fn(); });
+        menu.appendChild(b);
+    };
+
+    menu.appendChild(Object.assign(document.createElement('div'), {
+        className: 'row-menu-head', textContent: p.name,
+    }));
+    item(p.muted ? '#i-mic' : '#i-mic-off', p.muted ? 'باصدا کردن' : 'بی‌صدا کردن', () =>
+        api(`/members/${p.member_id}/mute/`, { muted: !p.muted }));
+    item('#i-hand', 'درخواست روشن کردن میکروفون', () =>
+        api(`/members/${p.member_id}/mute/`, { request_unmute: true }));
+    item('#i-shield', 'دسترسی‌ها و نقش', () => openPermsDialog(p.identity));
+
+    if (SELF_ROLE === 'OWNER' && p.role !== 'OWNER') {
+        const sep = document.createElement('div');
+        sep.className = 'row-menu-sep';
+        menu.appendChild(sep);
+        if (p.role !== 'PRESENTER') {
+            item('#i-screen', 'ارتقا به ارائه‌دهنده', () =>
+                api(`/members/${p.member_id}/role/`, { role: 'PRESENTER' }));
+        }
+        if (p.role !== 'MODERATOR') {
+            item('#i-users', 'ارتقا به مدیر', () =>
+                api(`/members/${p.member_id}/role/`, { role: 'MODERATOR' }));
+        }
+        if (p.role !== 'STUDENT') {
+            item('#i-back', 'تبدیل به دانش‌آموز', () =>
+                api(`/members/${p.member_id}/role/`, { role: 'STUDENT' }));
+        }
+    }
+
+    const dangerSep = document.createElement('div');
+    dangerSep.className = 'row-menu-sep';
+    menu.appendChild(dangerSep);
+    item('#i-leave', 'حذف از کلاس', () => kickMember(p), 'danger');
+    item('#i-lock', 'اخراج و مسدودسازی', () => banMember(p), 'danger');
+
+    document.body.appendChild(menu);
+    rowMenu = menu;
+    rowMenuAnchor = anchor;
+    anchor.setAttribute('aria-expanded', 'true');
+    rowMenuPlace = placeRowMenu(anchor, menu);
+    document.addEventListener('click', onRowMenuOutside, true);
+    document.addEventListener('keydown', onRowMenuKey, true);
+    window.addEventListener('resize', repositionRowMenu);
+    menu.querySelector('.row-menu-item')?.focus();
 }
 
 // ---------------------------------------------------------------------------
@@ -423,12 +558,14 @@ function fillPermsDialog(p) {
     }
 
     const rmBtn = document.getElementById('perms-remove');
-    rmBtn.onclick = async () => {
-        const ok = await confirmDialog('حذف عضو', `${p.name} از کلاس حذف شود؟`, { danger: true, okLabel: 'حذف' });
-        if (!ok) return;
-        const ban = await confirmDialog('مسدودسازی موقت', 'ورود مجدد او ۵ دقیقه مسدود شود؟', { okLabel: 'بله، مسدود شود' });
-        await api(`/members/${p.member_id}/remove/`, { ban_minutes: ban ? 5 : 0 });
+    rmBtn.onclick = () => {
         document.getElementById('perms-dialog').close();
+        kickMember(p);
+    };
+    const banBtn = document.getElementById('perms-ban');
+    if (banBtn) banBtn.onclick = () => {
+        document.getElementById('perms-dialog').close();
+        banMember(p);
     };
 }
 
@@ -696,6 +833,9 @@ function handleEvent(data) {
             break;
         case 'classroom_deactivated':
             toast(data.text || 'این کلاس غیرفعال شد.', 'error', 6000);
+            break;
+        case 'class_ended':
+            showClassEnded({ by: data.by || '' });
             break;
         case 'file_uploaded':
             addFileItem(data.file);
@@ -999,10 +1139,18 @@ function initControls() {
         presence.send({ action: 'raise_hand', raised });
     });
     bind('btn-whiteboard', () => {
-        if (!PERMISSIONS.can_use_whiteboard) return toast('شما اجازهٔ استفاده از تخته را ندارید.', 'warning');
         if (Whiteboard.unavailable) return toast('کتابخانهٔ تخته بارگذاری نشد؛ صفحه را تازه کنید.', 'error');
-        // Ask the server to broadcast the state so EVERYONE sees the board.
         const showing = !document.getElementById('view-whiteboard').classList.contains('hidden');
+        if (!PERMISSIONS.can_use_whiteboard) {
+            // Read-only members may still *watch* the board.  This is a local
+            // view switch only — opening it for the whole class is a
+            // presenter action and stays server-gated.
+            switchView(showing ? 'media' : 'whiteboard');
+            document.getElementById('btn-whiteboard')?.classList.toggle('active', !showing);
+            if (!showing) setTimeout(() => Whiteboard.resize(), 60);
+            return;
+        }
+        // Ask the server to broadcast the state so EVERYONE sees the board.
         presence.send({ action: 'whiteboard_state', open: !showing });
     });
     bind('btn-chat', () => {
@@ -1033,8 +1181,37 @@ function initControls() {
         else target?.requestFullscreen?.().catch(() => {});
     });
     bind('btn-exit', async () => {
-        if (await confirmDialog('خروج از کلاس', 'از کلاس خارج شوید؟ برای ورود مجدد باید دوباره به کلاس بپیوندید.', { danger: true, okLabel: 'خروج' })) {
-            document.getElementById('leave-submit').form.submit();
+        if (!IS_OWNER) {
+            if (await confirmDialog('خروج از کلاس', 'از کلاس خارج شوید؟ برای ورود مجدد باید دوباره به کلاس بپیوندید.', { danger: true, okLabel: 'خروج' })) {
+                submitLeave();
+            }
+            return;
+        }
+        // The owner always chooses: leave quietly, or close the class for
+        // everyone (server-side: memberships are revoked and every client
+        // shows the "class is over" panel).
+        const choice = await choiceDialog(
+            'خروج از کلاس',
+            'می‌خواهید فقط خودتان از کلاس خارج شوید یا کلاس برای همهٔ شرکت‌کنندگان تمام شود؟',
+            [
+                { id: 'self', label: 'فقط خودم خارج می‌شوم', tone: 'primary' },
+                { id: 'end', label: 'پایان کلاس برای همه', tone: 'danger' },
+                { id: null, label: 'انصراف', tone: 'ghost' },
+            ],
+        );
+        if (choice === 'self') {
+            submitLeave();
+        } else if (choice === 'end') {
+            const sure = await confirmDialog(
+                'پایان کلاس',
+                'کلاس برای همه بسته می‌شود و همه از جلسه بیرون می‌آیند. ادامه می‌دهید؟',
+                { danger: true, okLabel: 'پایان کلاس' },
+            );
+            if (!sure) return;
+            try {
+                await api('/end-class/');
+                showClassEnded({ by: 'شما', owner: true });
+            } catch (err) { /* toast already shown by api() */ }
         }
     });
     bind('btn-more', () => toggleMoreMenu());
@@ -1328,7 +1505,8 @@ function refreshControlStates() {
     document.getElementById('btn-camera')?.classList.toggle('off', !PERMISSIONS.can_use_camera);
     document.getElementById('btn-screen')?.classList.toggle('off', !PERMISSIONS.can_share_screen);
     document.getElementById('btn-hand')?.classList.toggle('off', !PERMISSIONS.can_raise_hand);
-    document.getElementById('btn-whiteboard')?.classList.toggle('off', !PERMISSIONS.can_use_whiteboard);
+    // not dimmed: read-only members open the board to watch it
+    document.getElementById('btn-whiteboard')?.classList.toggle('view-only', !PERMISSIONS.can_use_whiteboard);
 }
 
 // ---------------------------------------------------------------------------
@@ -1986,6 +2164,33 @@ function removeFileItem(fileId) {
     updateFileEmpty();
 }
 
+/** Submit the hidden leave form (server revokes the membership/guest slot). */
+function submitLeave() {
+    document.getElementById('leave-submit')?.form?.submit();
+}
+
+/**
+ * Full-stage notice shown when the class is over — either because the owner
+ * ended it (everyone gets `class_ended` over the socket) or because this tab
+ * was the one doing the ending.
+ */
+function showClassEnded({ by = '', owner = false } = {}) {
+    const panel = document.getElementById('class-ended');
+    if (!panel) return;
+    const who = panel.querySelector('[data-ended-by]');
+    if (who) {
+        who.textContent = owner
+            ? 'کلاس توسط شما پایان یافت.'
+            : (by ? `کلاس توسط ${by} پایان یافت.` : 'این کلاس پایان یافته است.');
+    }
+    panel.classList.remove('hidden');
+    document.body.classList.add('class-is-over');
+    try { Media.stopScreenShare?.(); } catch (e) { /* nothing shared */ }
+    try { Recorder.stop?.(); } catch (e) { /* not recording */ }
+    // never leave the user on a dead room: offer the dashboard right away
+    panel.querySelector('[data-ended-home]')?.focus?.();
+}
+
 function applyPresentation(data) {
     syncPresentingBadge(data?.file_id ?? null);
     if (!data || !data.file_id) {
@@ -2088,6 +2293,7 @@ try {
     console.warn('[chat] init failed:', err);
 }
 try {
+    initDeviceTest({ roomCode: ROOM_CODE });
     Whiteboard.init({ roomCode: ROOM_CODE, identity: IDENTITY, canDraw: PERMISSIONS.can_use_whiteboard });
     Presentation.init({
         roomCode: ROOM_CODE,

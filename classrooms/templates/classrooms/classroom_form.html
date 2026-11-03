@@ -32,7 +32,7 @@
     {% csrf_token %}
 
     <div class="builder-main">
-        <section class="card builder-card">
+        <section class="card builder-card" id="step-1" data-step="1">
             <header class="builder-card-head">
                 <span class="builder-step">۱</span>
                 <div>
@@ -53,7 +53,7 @@
             </div>
         </section>
 
-        <section class="card builder-card">
+        <section class="card builder-card" id="step-2" data-step="2">
             <header class="builder-card-head">
                 <span class="builder-step">۲</span>
                 <div>
@@ -70,6 +70,7 @@
                         <small>بدون رمز، هر کسی که لینک را دارد وارد می‌شود.</small>
                     </span>
                     <span class="switch">{{ form.is_password_protected }}<span class="switch-slider" aria-hidden="true"></span></span>
+                    <span class="switch-label" data-on="روشن" data-off="خاموش" aria-hidden="true"></span>
                 </label>
                 <div class="field access-password" id="password-field" hidden>
                     <label for="{{ form.password.id_for_label }}">{{ form.password.label }}</label>
@@ -85,6 +86,7 @@
                         <small>{{ form.enable_waiting_room.help_text }}</small>
                     </span>
                     <span class="switch">{{ form.enable_waiting_room }}<span class="switch-slider" aria-hidden="true"></span></span>
+                    <span class="switch-label" data-on="روشن" data-off="خاموش" aria-hidden="true"></span>
                 </label>
 
                 <label class="access-row" for="{{ form.allow_guests.id_for_label }}">
@@ -94,6 +96,7 @@
                         <small>اگر خاموش باشد، فقط کاربران ثبت‌نام‌شده وارد می‌شوند.</small>
                     </span>
                     <span class="switch">{{ form.allow_guests }}<span class="switch-slider" aria-hidden="true"></span></span>
+                    <span class="switch-label" data-on="روشن" data-off="خاموش" aria-hidden="true"></span>
                 </label>
             </div>
 
@@ -113,7 +116,7 @@
             </div>
         </section>
 
-        <section class="card builder-card">
+        <section class="card builder-card" id="step-3" data-step="3">
             <header class="builder-card-head">
                 <span class="builder-step">۳</span>
                 <div>
@@ -148,10 +151,11 @@
                     <small>اگر خاموش باشد، پنل گفتگو بسته شروع می‌شود.</small>
                 </span>
                 <span class="switch">{{ form.show_chat_default }}<span class="switch-slider" aria-hidden="true"></span></span>
+                <span class="switch-label" data-on="روشن" data-off="خاموش" aria-hidden="true"></span>
             </label>
         </section>
 
-        <section class="card builder-card">
+        <section class="card builder-card" id="step-4" data-step="4">
             <header class="builder-card-head">
                 <span class="builder-step">۴</span>
                 <div>
@@ -184,6 +188,12 @@
 
     <aside class="builder-side">
         <div class="preview-sticky">
+            <nav class="builder-steps" id="builder-steps" aria-label="بخش‌های ساخت کلاس">
+                <a href="#step-1" class="builder-step-link active" data-step-link="1"><span>۱</span> اطلاعات کلاس</a>
+                <a href="#step-2" class="builder-step-link" data-step-link="2"><span>۲</span> دسترسی و ظرفیت</a>
+                <a href="#step-3" class="builder-step-link" data-step-link="3"><span>۳</span> امکانات دانش‌آموز</a>
+                <a href="#step-4" class="builder-step-link" data-step-link="4"><span>۴</span> ظاهر و خوش‌آمد</a>
+            </nav>
             <div class="class-preview" id="class-preview" style="--cp-accent:#6366f1">
                 <div class="cp-cover">
                     <span class="cp-badge">کلاس آنلاین</span>
@@ -207,6 +217,14 @@
                     ایجاد کلاس
                 </button>
                 <p class="field-help">بعد از ساخت مستقیم وارد کلاس می‌شوید و می‌توانید لینک را بردارید.</p>
+            </div>
+            <div class="builder-tips card">
+                <h3>بعد از ساخت چه دارید؟</h3>
+                <ul>
+                    <li><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#b-link"/></svg> لینک دعوت برای فرستادن به دانش‌آموزان</li>
+                    <li><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#b-shield"/></svg> مدیریت ورودها، مجوزها و حضور و غیاب</li>
+                    <li><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#b-users"/></svg> تختهٔ سفید، ارائهٔ فایل، آزمون و ضبط جلسه</li>
+                </ul>
             </div>
         </div>
     </aside>
@@ -315,6 +333,28 @@
         if (el) el.addEventListener('change', syncPreview);
     });
     passwordToggle.addEventListener('change', syncPassword);
+
+    // ---- sidebar stepper: highlight the section in view -------------------
+    const stepLinks = [...document.querySelectorAll('[data-step-link]')];
+    const sections = [...document.querySelectorAll('.builder-card[data-step]')];
+    if (stepLinks.length && sections.length && window.IntersectionObserver) {
+        const setActive = (n) => stepLinks.forEach((a) => {
+            a.classList.toggle('active', a.dataset.stepLink === String(n));
+        });
+        const observer = new IntersectionObserver((entries) => {
+            const visible = entries
+                .filter((e) => e.isIntersecting)
+                .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)[0];
+            if (visible) setActive(visible.target.dataset.step);
+        }, { rootMargin: '-15% 0px -60% 0px', threshold: 0 });
+        sections.forEach((sec) => observer.observe(sec));
+        stepLinks.forEach((a) => a.addEventListener('click', (e) => {
+            e.preventDefault();
+            document.getElementById(a.getAttribute('href').slice(1))
+                ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            setActive(a.dataset.stepLink);
+        }));
+    }
 
     syncPassword();
     syncPreview();

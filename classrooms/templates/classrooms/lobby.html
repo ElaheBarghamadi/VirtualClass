@@ -14,126 +14,174 @@
 </style>
 {% endblock %}
 {% block content %}
-<div class="lobby-wrapper">
-    <div class="card lobby-card wide">
-        <h1 class="lobby-title">
-            {% if classroom.logo %}<img class="lobby-logo" src="{{ classroom.logo.url }}" alt="">{% endif %}
-            {{ classroom.title }}
-        </h1>
-        {% if classroom.description %}<p class="muted">{{ classroom.description }}</p>{% endif %}
-        {% if classroom.welcome_message %}
-            <p class="lobby-welcome">{{ classroom.welcome_message }}</p>
-        {% endif %}
+<div class="join-page">
+  <div class="join-shell">
 
-        <dl class="lobby-meta">
-            <div><dt>معلم</dt><dd>{{ classroom.owner.name }}</dd></div>
-            <div><dt>شرکت‌کنندگان</dt><dd>{{ classroom.active_member_count }} نفر</dd></div>
-            {% if classroom.is_password_protected %}<div><dt>دسترسی</dt><dd>محافظت‌شده با رمز</dd></div>{% endif %}
-            {% if classroom.enable_waiting_room %}<div><dt>اتاق انتظار</dt><dd>فعال — ورود با تأیید میزبان</dd></div>{% endif %}
-        </dl>
-
-        {% if classroom.is_locked %}
-            <div class="lobby-locked" role="alert">
-                این کلاس توسط میزبان قفل شده است. امکان ورود شرکت‌کنندهٔ جدید وجود ندارد؛
-                اگر فکر می‌کنید اشتباهی رخ داده، با میزبان تماس بگیرید.
-            </div>
-        {% endif %}
-
-        <div id="browser-warning" class="alert alert-warning" hidden></div>
-
-        <!-- گام ۱: مشخصات ورود -->
-        <form method="post" novalidate id="join-form" data-step-target="devices">
-            {% csrf_token %}
-            <div id="step-join">
-                {% if not authenticated %}
-                    <div class="field">
-                        <label for="id_display_name">نام نمایشی</label>
-                        {{ join_form.display_name }}
-                        {% if join_form.display_name.help_text %}
-                            <p class="field-help">{{ join_form.display_name.help_text }}</p>
-                        {% endif %}
-                        {% if join_form.display_name.errors %}<p class="field-error" role="alert">{{ join_form.display_name.errors.0 }}</p>{% endif %}
-                    </div>
-                {% else %}
-                    <p class="muted">با حساب <strong>{{ default_name }}</strong> وارد می‌شوید.</p>
-                {% endif %}
-
-                {% if join_form and join_form.password %}
-                    <div class="field">
-                        <label for="{{ join_form.password.id_for_label }}">رمز کلاس</label>
-                        {{ join_form.password }}
-                        {% if join_form.password.errors %}<p class="field-error" role="alert">{{ join_form.password.errors.0 }}</p>{% endif %}
-                    </div>
-                {% endif %}
-
-                <button type="button" class="btn btn-accent btn-block btn-lg" id="btn-to-devices"
-                        {% if classroom.is_locked %}disabled{% endif %}>
-                    بررسی دستگاه‌ها و ورود ←
-                </button>
-                <noscript>
-                    <button type="submit" class="btn btn-accent btn-block btn-lg"
-                            {% if classroom.is_locked %}disabled{% endif %}>ورود به کلاس</button>
-                </noscript>
-                <p class="lobby-guest-note">
-                    {% if authenticated %}
-                        عضو کلاس‌های خودتان هستید؟ <a href="{% url 'dashboard' %}">داشبورد</a>
-                    {% else %}
-                        حساب کاربری دارید؟ <a href="{% url 'accounts:login' %}?next={{ request.path }}">ورود با حساب</a>
-                        — یا همین‌طور به‌عنوان مهمان بپیوندید.
-                    {% endif %}
-                </p>
-            </div>
-
-            <!-- گام ۲: بررسی دستگاه‌ها -->
-            <div id="step-devices" hidden>
-                <div class="lobby-preview">
-                    <div class="preview-shell">
-                        <video id="lobby-video" autoplay playsinline muted aria-label="پیش‌نمایش دوربین"></video>
-                        <div id="cam-state" class="cam-state" role="status">
-                            <span id="cam-state-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8.5h3l1.6-2h6.8l1.6 2h3v9H4z"/><circle cx="12" cy="12.8" r="3.2"/></svg></span>
-                            <span id="cam-state-text">دوربین را بررسی کنید</span>
-                        </div>
-                    </div>
-                    <div class="lobby-devices">
-                        <label>دوربین
-                            <select id="device-camera" aria-label="انتخاب دوربین"></select>
-                        </label>
-                        <label>میکروفون
-                            <select id="device-mic" aria-label="انتخاب میکروفون"></select>
-                        </label>
-                        <label>بلندگو
-                            <select id="device-speaker" aria-label="انتخاب بلندگو"></select>
-                        </label>
-                        <div class="device-tests">
-                            <button type="button" class="btn btn-sm btn-ghost" id="btn-mic-test">
-                            <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="2.6" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0"/><path d="M12 18v3.4"/></svg>
-                            تست میکروفون</button>
-                            <button type="button" class="btn btn-sm btn-ghost" id="btn-speaker-test">
-                            <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5h3.2L12 5.4v13.2L7.2 14.5H4z"/><path d="M15.6 9.2a4 4 0 0 1 0 5.6"/><path d="M18.4 6.6a8 8 0 0 1 0 10.8"/></svg>
-                            تست بلندگو</button>
-                        </div>
-                        <div class="mic-meter" aria-label="سطح صدا"><div id="mic-level"></div></div>
-                        <p id="mic-feedback" class="field-help" role="status"></p>
-                        <p id="speaker-feedback" class="field-help" role="status"></p>
-                    </div>
-                </div>
-                <div id="device-error" class="alert alert-error" role="alert" hidden></div>
-
-                <div class="device-actions">
-                    <button type="button" class="btn btn-ghost" id="btn-back-join">→ مرحلهٔ قبل</button>
-                    <button type="submit" class="btn btn-accent btn-lg" id="btn-join"
-                            {% if classroom.is_locked %}disabled{% endif %}>پیوستن به کلاس</button>
-                </div>
-            </div>
-        </form>
-
-        {% if authenticated %}
-        <a class="btn btn-ghost btn-block" href="{% url 'dashboard' %}">بازگشت به داشبورد</a>
+    <!-- ===== class identity ===== -->
+    <aside class="join-intro">
+      <div class="join-orb" aria-hidden="true">
+        {% if classroom.logo %}
+          <img src="{{ classroom.logo.url }}" alt="">
         {% else %}
-        <a class="btn btn-ghost btn-block" href="{% url 'home' %}">بازگشت به صفحهٔ اصلی</a>
+          <span class="join-orb-letter">{{ classroom.title|slice:":1" }}</span>
         {% endif %}
-    </div>
+      </div>
+      <h1 class="join-title">{{ classroom.title }}</h1>
+      {% if classroom.description %}<p class="join-desc">{{ classroom.description }}</p>{% endif %}
+
+      <ul class="join-facts">
+        <li>
+          <svg class="ic" aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="8.4" r="3.6"/><path d="M4.8 20.2a7.2 7.2 0 0 1 14.4 0"/></svg>
+          <span>{{ classroom.owner.display_name|default:classroom.owner.get_full_name }}</span>
+        </li>
+        <li>
+          <svg class="ic" aria-hidden="true" viewBox="0 0 24 24"><circle cx="9" cy="8.4" r="3.2"/><path d="M2.8 19.4a6.4 6.4 0 0 1 12.4 0"/><path d="M16 5.4a3.2 3.2 0 0 1 0 6"/><path d="M18.6 19.4a6.5 6.5 0 0 0-2.2-4.6"/></svg>
+          <span id="lobby-people">{{ classroom.active_member_count|default:0 }} نفر در کلاس</span>
+        </li>
+        {% if classroom.is_password_protected %}
+          <li>
+            <svg class="ic" aria-hidden="true" viewBox="0 0 24 24"><rect x="4.4" y="10.4" width="15.2" height="9.6" rx="2.4"/><path d="M8.4 10.4V7.8a3.6 3.6 0 0 1 7.2 0v2.6"/></svg>
+            <span>با رمز محافظت می‌شود</span>
+          </li>
+        {% endif %}
+        {% if classroom.enable_waiting_room %}
+          <li>
+            <svg class="ic" aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.6"/><path d="M12 7.6V12l3 1.8"/></svg>
+            <span>ورود با تأیید میزبان</span>
+          </li>
+        {% endif %}
+      </ul>
+
+      {% if classroom.welcome_message %}
+        <p class="join-welcome">{{ classroom.welcome_message }}</p>
+      {% endif %}
+    </aside>
+
+    <!-- ===== join card ===== -->
+    <section class="join-card" aria-labelledby="join-heading">
+      <header class="join-card-head">
+        <h2 id="join-heading">ورود به کلاس</h2>
+        <p class="join-sub">نام خود را وارد کنید تا وارد کلاس شوید.</p>
+      </header>
+
+      {% if classroom.is_locked %}
+        <div class="join-locked" role="alert">
+          <svg class="ic" aria-hidden="true" viewBox="0 0 24 24"><rect x="4.4" y="10.4" width="15.2" height="9.6" rx="2.4"/><path d="M8.4 10.4V7.8a3.6 3.6 0 0 1 7.2 0v2.6"/></svg>
+          <span>این کلاس توسط میزبان قفل شده است؛ ورود اعضای جدید ممکن نیست.</span>
+        </div>
+      {% endif %}
+
+      <div id="browser-warning" class="alert alert-warning" hidden></div>
+
+      <form method="post" novalidate id="join-form">
+        {% csrf_token %}
+        {% if not authenticated %}
+          <div class="field join-name-field">
+            <label for="id_display_name">نام نمایشی</label>
+            <div class="join-name-row">
+              <span class="join-avatar" id="join-avatar" aria-hidden="true">؟</span>
+              {{ join_form.display_name }}
+            </div>
+            {% if join_form.display_name.help_text %}<p class="field-help">{{ join_form.display_name.help_text }}</p>{% endif %}
+            {% if join_form.display_name.errors %}<p class="field-error" role="alert">{{ join_form.display_name.errors.0 }}</p>{% endif %}
+          </div>
+        {% else %}
+          <p class="join-account">با حساب <strong>{{ default_name }}</strong> وارد می‌شوید.</p>
+        {% endif %}
+
+        {% comment %}
+          «معلم هستم» marks the intent and labels the password field
+          accordingly. Purely presentational: the server validates the
+          password (rate-limited) and a guest never receives teacher
+          privileges from this toggle.
+        {% endcomment %}
+        {% if join_form.password %}
+        <div class="join-role-toggle" id="join-role-toggle">
+          <button type="button" class="join-role-btn" id="btn-im-teacher" aria-pressed="false">
+            <svg class="ic" aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3.6 3.4 7.8 12 12l8.6-4.2z"/><path d="M6.6 10.6v4.8c0 1.6 2.4 2.9 5.4 2.9s5.4-1.3 5.4-2.9v-4.8"/></svg>
+            <span>معلم هستم</span>
+          </button>
+        </div>
+
+        {% endif %}
+
+        {% if join_form.password %}
+        <div class="field join-password" id="join-password-wrap">
+          <label for="{{ join_form.password.id_for_label }}" id="join-password-label">رمز کلاس</label>
+          {{ join_form.password }}
+          <p class="field-help" id="join-password-help">رمز را میزبان کلاس به شما داده است.</p>
+          {% if join_form.password.errors %}<p class="field-error" role="alert">{{ join_form.password.errors.0 }}</p>{% endif %}
+        </div>
+        {% endif %}
+
+        <button type="submit" class="btn btn-accent btn-block btn-lg join-submit" id="btn-join"
+                {% if classroom.is_locked %}disabled{% endif %}>
+          <span>ورود به کلاس</span>
+          <svg class="ic" aria-hidden="true" viewBox="0 0 24 24"><path d="M20 12H5"/><path d="m11.5 5.5-6.5 6.5 6.5 6.5"/></svg>
+        </button>
+
+        <button type="button" class="join-device-toggle" id="btn-to-devices" aria-expanded="false" aria-controls="device-panel">
+          <svg class="ic" aria-hidden="true" viewBox="0 0 24 24"><rect x="9" y="2.6" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0"/><path d="M12 18v3.4"/></svg>
+          <span>تست دوربین و میکروفون</span>
+          <em>اختیاری</em>
+        </button>
+
+        <!-- optional device check -->
+        <div class="join-devices-panel" id="device-panel" hidden>
+          <div class="lobby-preview">
+            <div class="preview-shell">
+              <video id="lobby-video" autoplay playsinline muted aria-label="پیش‌نمایش دوربین"></video>
+              <div id="cam-state" class="cam-state" role="status">
+                <span id="cam-state-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8.5h3l1.6-2h6.8l1.6 2h3v9H4z"/><circle cx="12" cy="12.8" r="3.2"/></svg></span>
+                <span id="cam-state-text">دوربین را بررسی کنید</span>
+              </div>
+            </div>
+            <div class="lobby-devices">
+              <label>دوربین
+                <select id="device-camera" aria-label="انتخاب دوربین"></select>
+              </label>
+              <label>میکروفون
+                <select id="device-mic" aria-label="انتخاب میکروفون"></select>
+              </label>
+              <label>بلندگو
+                <select id="device-speaker" aria-label="انتخاب بلندگو"></select>
+              </label>
+              <div class="device-tests">
+                <button type="button" class="btn btn-sm btn-ghost" id="btn-mic-test">
+                  <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="2.6" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0"/><path d="M12 18v3.4"/></svg>
+                  تست میکروفون</button>
+                <button type="button" class="btn btn-sm btn-ghost" id="btn-speaker-test">
+                  <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5h3.2L12 5.4v13.2L7.2 14.5H4z"/><path d="M15.6 9.2a4 4 0 0 1 0 5.6"/><path d="M18.4 6.6a8 8 0 0 1 0 10.8"/></svg>
+                  تست بلندگو</button>
+              </div>
+              <div class="mic-meter" aria-label="سطح صدا"><div id="mic-level"></div></div>
+              <p id="mic-feedback" class="field-help" role="status"></p>
+              <p id="speaker-feedback" class="field-help" role="status"></p>
+            </div>
+          </div>
+          <div id="device-error" class="alert alert-error" role="alert" hidden></div>
+          <p class="field-help join-device-note">این تست اختیاری است — می‌توانید بدون آن وارد کلاس شوید و بعداً از منوی «بیشتر» دستگاه‌ها را تنظیم کنید.</p>
+        </div>
+
+        <p class="join-foot">
+          {% if authenticated %}
+            عضو کلاس‌های خودتان هستید؟ <a href="{% url 'dashboard' %}">داشبورد</a>
+          {% else %}
+            حساب کاربری دارید؟ <a href="{% url 'accounts:login' %}?next={{ request.path }}">ورود با حساب</a>
+            <span class="join-foot-sep">·</span> یا همین‌طور به‌عنوان مهمان بپیوندید
+          {% endif %}
+        </p>
+      </form>
+
+      {% if authenticated %}
+      <a class="btn btn-ghost btn-block" href="{% url 'dashboard' %}">بازگشت به داشبورد</a>
+      {% else %}
+      <a class="btn btn-ghost btn-block" href="{% url 'home' %}">بازگشت به صفحهٔ اصلی</a>
+      {% endif %}
+    </section>
+  </div>
 </div>
+
 {% endblock %}
 {% block extra_js %}
 <script type="module" src="{% static 'js/lobby.js' %}"></script>

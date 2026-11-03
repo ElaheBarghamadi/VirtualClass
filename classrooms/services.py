@@ -450,6 +450,50 @@ def deactivate_classroom(classroom: Classroom, owner: User) -> None:
     })
 
 
+@transaction.atomic
+def end_classroom_for_all(classroom: Classroom, owner: User) -> int:
+    """Owner ends the live class for *everyone*.
+
+    Unlike :func:`deactivate_classroom` (which retires the classroom itself),
+    this closes just the current meeting: every membership is deactivated so
+    nobody keeps HTTP/WS access, a live attendance session is closed, and all
+    connected clients receive ``class_ended`` and show the "class is over"
+    panel.  The classroom and its files stay intact, so the owner can open it
+    again later (members simply re-join through the lobby).
+
+    Returns the number of participants that were removed.
+    """
+    classroom = Classroom.objects.select_for_update().get(pk=classroom.pk)
+    _require_owner(classroom, owner)
+    members = list(ClassroomMember.objects.filter(classroom=classroom, is_active=True))
+    session = ClassroomSession.objects.filter(
+        classroom=classroom, status=ClassroomSession.Status.LIVE
+    ).first()
+
+    # Nothing stays "live" on the stage after the class is over.
+    Classroom.objects.filter(pk=classroom.pk).update(
+        current_file=None,
+        current_page=1,
+        whiteboard_open=False,
+        updated_at=timezone.now(),
+    )
+    if session is not None:
+        end_session(session, owner)
+
+    ClassroomMember.objects.filter(id__in=[m.id for m in members]).update(
+        is_active=False, in_waiting_room=False, hand_raised_at=None,
+    )
+    broadcast(classroom.room_code, {
+        "type": "class_ended",
+        "text": "کلاس توسط میزبان تمام شد.",
+        "by": (getattr(owner, "display_name", "") or owner.get_full_name()
+               or owner.get_username() or ""),
+        "members": len(members),
+    })
+    logger.info("class_ended_for_all", extra={"room_code": classroom.room_code, "members": len(members)})
+    return len(members)
+
+
 def active_members(classroom: Classroom) -> list[ClassroomMember]:
     return list(
         ClassroomMember.objects.filter(classroom=classroom, is_active=True)

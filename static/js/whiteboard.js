@@ -49,12 +49,10 @@ class WhiteboardImpl {
     init({ roomCode, identity, canDraw }) {
         this.identity = identity;
         this.canDraw = canDraw;
+        this._syncDrawGate();
         // Clear, permanent feedback for viewers who may not draw — instead of
         // a toolbar that looks usable but silently does nothing.
-        if (!canDraw) {
-            document.querySelector('.wb-toolbar')?.classList.add('no-draw');
-            document.getElementById('wb-nodraw-hint')?.classList.remove('hidden');
-        }
+
         if (typeof fabric === 'undefined') {
             this._showUnavailable('کتابخانهٔ تخته بارگذاری نشد. صفحه را تازه‌سازی کنید؛ اگر مشکل ادامه داشت، به پشتیبانی اطلاع دهید.');
             console.warn('[whiteboard] fabric.js is not loaded');
@@ -92,6 +90,19 @@ class WhiteboardImpl {
         this._bindPages();
         this._bindDrawing();
         this._connect(roomCode);
+    }
+
+    /**
+     * Read-only viewers get a slimmed-down dock: drawing tools disappear
+     * entirely (instead of turning grey), a «فقط نمایش» chip explains why, and
+     * page navigation / fullscreen / save stay usable.
+     */
+    _syncDrawGate() {
+        const on = Boolean(this.canDraw);
+        document.querySelector('.wb-toolbar')?.classList.toggle('no-draw', !on);
+        document.getElementById('wb-mode-chip')?.classList.toggle('hidden', on);
+        document.getElementById('wb-nodraw-hint')?.classList.toggle('hidden', on);
+        document.getElementById('view-whiteboard')?.classList.toggle('readonly', !on);
     }
 
     _showUnavailable(message) {
@@ -762,12 +773,12 @@ class WhiteboardImpl {
     }
 
     setPermission(canDraw) {
+        // Live grant/revoke: the dock and the «فقط نمایش» chip must flip
+        // immediately, otherwise a newly-authorized user still faces a
+        // locked board (and a revoked one keeps drawing tools).
         this.canDraw = canDraw;
-        // Live grant/revoke must re-style the toolbar + hint immediately —
-        // otherwise a newly-authorized presenter still sees a greyed board
-        // (or a revoked one keeps a falsely enabled toolbar).
-        document.querySelector('.wb-toolbar')?.classList.toggle('no-draw', !canDraw);
-        document.getElementById('wb-nodraw-hint')?.classList.toggle('hidden', canDraw);
+        this._syncDrawGate();
+        if (this.canvas) this.canvas.selection = canDraw;
     }
 }
 
