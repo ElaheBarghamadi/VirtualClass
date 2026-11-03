@@ -239,6 +239,9 @@
     if (!form) return;
 
     const $ = (id) => document.getElementById(id);
+    // Persian digits in the live preview, matching what the filter renders on
+    // the server — a mixed 12/۱۲ in one card looked like a bug.
+    const faNum = (n) => String(n).replace(/[0-9]/g, (d) => '۰۱۲۳۴۵۶۷۸۹'[d]);
     const preview = $('class-preview');
     const titleInput = $('id_title');
     const descInput = $('id_description');
@@ -254,7 +257,7 @@
         $('cp-desc').textContent = (descInput.value || '').trim() || 'توضیح کوتاه کلاس اینجا نمایش داده می‌شود.';
 
         const cap = parseInt(capacityInput.value, 10);
-        $('cp-capacity').textContent = (!cap || cap < 1) ? 'بی‌نهایت' : `${cap} نفر`;
+        $('cp-capacity').textContent = (!cap || cap < 1) ? 'بی‌نهایت' : `${faNum(cap)} نفر`;
 
         const badges = {
             password: passwordToggle.checked,

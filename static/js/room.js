@@ -11,6 +11,7 @@
  * Participants are keyed by their public identity (`u:<id>` / `g:<uid>`)
  * — registered users and guests share one pipeline.
  */
+
 import { ChatClient } from './chat.js';
 import { Whiteboard } from './whiteboard.js';
 import { Presentation } from './presentation.js';
@@ -21,6 +22,11 @@ import { choiceDialog, confirmDialog, infoDialog } from './modal.js';
 import { Recorder } from './recorder.js';
 import { Captions } from './captions.js';
 import { initDeviceTest } from './device-test.js';
+
+// Persian digits for anything JS renders that the server also renders
+// (participant counts), so the two never disagree.
+const FA_DIGITS = '۰۱۲۳۴۵۶۷۸۹';
+const faDigits = (value) => String(value).replace(/[0-9]/g, (d) => FA_DIGITS[d]);
 
 const root = document.getElementById('classroom-root');
 const ROOM_CODE = root.dataset.roomCode;
@@ -270,7 +276,8 @@ class PresenceClient {
         for (const p of inRoom) {
             if (this._matches(p)) this.listEl.appendChild(this._row(p));
         }
-        this.countEl.textContent = String(inRoom.length);
+        // Persian digits here too: the server renders the same count in ۱۲ form.
+        this.countEl.textContent = faDigits(inRoom.length);
 
         // Waiting room section (privileged only).
         const section = document.getElementById('waiting-section');

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load core_extras %}
 {% block title %}آزمون‌ها — {{ classroom.title }}{% endblock %}
 {% block content %}
 <div class="page-head">
@@ -30,7 +31,7 @@
             {% for q in quizzes %}
                 <li>
                     <strong>{{ q.title }}</strong>
-                    <span class="muted">{{ q.question_count }} پرسش · {{ q.total_points }} نمره</span>
+                    <span class="muted">{{ q.question_count|fa_digits }} پرسش · {{ q.total_points|fa_digits }} نمره</span>
                     <a class="btn btn-sm btn-primary" href="{% url 'quizzes_manage:detail' classroom.room_code q.id %}">ویرایش پرسش‌ها</a>
                 </li>
             {% endfor %}

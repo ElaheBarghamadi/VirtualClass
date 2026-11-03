@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load core_extras %}
 {% block title %}تکالیف — {{ classroom.title }}{% endblock %}
 {% block content %}
 <div class="page-head">
@@ -45,12 +46,12 @@
                     <span class="badge {% if a.is_open %}badge-success{% else %}badge-muted{% endif %}">
                         {% if a.is_open %}باز{% else %}مهلت تمام{% endif %}
                     </span>
-                    <span class="muted">مهلت: {{ a.due_at|date:"Y/m/d H:i" }} · بارم {{ a.max_score }}</span>
+                    <span class="muted">مهلت: {{ a.due_at|jalali:"Y/m/d H:i" }} · بارم {{ a.max_score|fa_digits }}</span>
                     {% if not is_owner %}
                         {% for aid, s in my_submissions.items %}
                             {% if aid == a.id %}
                                 <span class="badge {% if s.graded_at %}badge-info{% else %}badge-warn{% endif %}">
-                                    {% if s.graded_at %}نمره: {{ s.score }}{% else %}ارسال شده{% endif %}
+                                    {% if s.graded_at %}نمره: {{ s.score|fa_digits }}{% else %}ارسال شده{% endif %}
                                 </span>
                             {% endif %}
                         {% endfor %}

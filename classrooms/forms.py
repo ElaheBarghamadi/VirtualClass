@@ -4,6 +4,8 @@ import re
 from django import forms
 from django.core.exceptions import ValidationError
 
+from core.templatetags.core_extras import to_fa_digits
+
 from .models import Classroom, ClassroomSession
 from .services import (
     GUEST_NAME_MAX,
@@ -153,7 +155,10 @@ class GuestJoinForm(forms.Form):
         max_length=GUEST_NAME_MAX,
         label="نام نمایشی",
         widget=forms.TextInput(attrs={"autofocus": True, "autocomplete": "nickname", "maxlength": GUEST_NAME_MAX}),
-        help_text=f"بین {GUEST_NAME_MIN} تا {GUEST_NAME_MAX} نویسه — همین نام در کلاس نمایش داده می‌شود.",
+        help_text=(
+                f"بین {to_fa_digits(GUEST_NAME_MIN)} تا {to_fa_digits(GUEST_NAME_MAX)} نویسه — "
+                "همین نام در کلاس نمایش داده می‌شود."
+            ),
     )
     password = forms.CharField(
         required=False,

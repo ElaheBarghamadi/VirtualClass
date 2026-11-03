@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load core_extras %}
 {% block title %}مدیریت کلاس — {{ classroom.title }}{% endblock %}
 {% block content %}
 <div class="page-head">
@@ -97,7 +98,7 @@
                         <tr>
                             <td>{{ s.title|default:"—" }}</td>
                             <td><span class="badge {% if s.status == 'LIVE' %}badge-success{% elif s.status == 'ENDED' %}badge-muted{% else %}badge-info{% endif %}">{{ s.get_status_display }}</span></td>
-                            <td>{{ s.scheduled_start|date:"m/d H:i"|default:s.started_at|date:"m/d H:i" }}</td>
+                            <td>{{ s.scheduled_start|jalali:"m/d H:i"|default:s.started_at|jalali:"m/d H:i" }}</td>
                             <td>
                                 {% if s.status == 'ENDED' %}
                                     <a class="btn btn-sm btn-ghost" href="{% url 'room:attendance' classroom.room_code s.id %}">گزارش</a>
@@ -112,7 +113,7 @@
             </div>
         </div>
 
-        <h2 class="section-title">شرکت‌کنندگان ({{ members|length }})</h2>
+        <h2 class="section-title">شرکت‌کنندگان ({{ members|length|fa_digits }})</h2>
         <div class="card">
             <div class="table-wrap">
             <table class="data-table">
@@ -125,7 +126,7 @@
                                 {% if m.is_guest %}<span class="badge badge-muted">مهمان</span>{% endif %}
                             </td>
                             <td><span class="badge badge-info">{{ m.get_role_display }}</span></td>
-                            <td>{{ m.joined_at|date:"Y/m/d H:i" }}</td>
+                            <td>{{ m.joined_at|jalali:"Y/m/d H:i" }}</td>
                         </tr>
                     {% empty %}
                         <tr><td colspan="3" class="muted">هنوز کسی عضو نشده است.</td></tr>
@@ -138,7 +139,7 @@
 
         {% comment %}Bans used to be a one-way door: the host could kick someone
            out for up to a week and had no way to undo it.{% endcomment %}
-        <h2 class="section-title">مسدودشده‌ها ({{ banned|length }})</h2>
+        <h2 class="section-title">مسدودشده‌ها ({{ banned|length|fa_digits }})</h2>
         <div class="card">
             <div class="table-wrap">
             <table class="data-table">
@@ -150,7 +151,7 @@
                                 {{ m.participant_name }}
                                 {% if m.is_guest %}<span class="badge badge-muted">مهمان</span>{% endif %}
                             </td>
-                            <td>{{ m.banned_until|date:"Y/m/d H:i" }}</td>
+                            <td>{{ m.banned_until|jalali:"Y/m/d H:i" }}</td>
                             <td>
                                 <form method="post" action="{% url 'room:member_unban' classroom.room_code m.id %}">
                                     {% csrf_token %}

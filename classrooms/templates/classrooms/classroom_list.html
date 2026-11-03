@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load core_extras %}
 {% block title %}کلاس‌های من{% endblock %}
 {% block content %}
 <div class="page-head">
@@ -6,8 +7,8 @@
     <a class="btn btn-primary" href="{% url 'classrooms:create' %}">+ ایجاد کلاس</a>
 </div>
 
-<h2 class="section-title">کلاس‌هایی که ساخته‌ام</h2>
 {% if owned_classrooms %}
+<h2 class="section-title">کلاس‌هایی که ساخته‌ام</h2>
     <div class="card-grid">
         {% for classroom in owned_classrooms %}
             <article class="card classroom-card">
@@ -18,8 +19,8 @@
                     </span>
                 </div>
                 <dl class="meta-list">
-                    <div><dt>تاریخ ایجاد</dt><dd>{{ classroom.created_at|date:"Y/m/d H:i" }}</dd></div>
-                    <div><dt>شرکت‌کنندگان</dt><dd>{{ classroom.participant_count }} نفر</dd></div>
+                    <div><dt>تاریخ ایجاد</dt><dd>{{ classroom.created_at|jalali:"Y/m/d H:i" }}</dd></div>
+                    <div><dt>شرکت‌کنندگان</dt><dd>{{ classroom.participant_count|fa_digits }} نفر</dd></div>
                 </dl>
                 <div class="link-box" data-copy-link>
                     <input type="text" readonly value="{{ request.scheme }}://{{ request.get_host }}/class/{{ classroom.room_code }}/" aria-label="لینک کلاس">
@@ -32,12 +33,10 @@
             </article>
         {% endfor %}
     </div>
-{% else %}
-    <div class="empty-state card"><p>کلاسی نساخته‌اید.</p></div>
 {% endif %}
 
-<h2 class="section-title">کلاس‌هایی که در آن‌ها عضو هستم</h2>
 {% if memberships %}
+<h2 class="section-title">کلاس‌هایی که در آن‌ها عضو هستم</h2>
     <div class="card-grid">
         {% for membership in memberships %}
             <article class="card classroom-card">
@@ -46,7 +45,7 @@
                     <span class="badge badge-info">{{ membership.get_role_display }}</span>
                 </div>
                 <dl class="meta-list">
-                    <div><dt>زمان عضویت</dt><dd>{{ membership.joined_at|date:"Y/m/d H:i" }}</dd></div>
+                    <div><dt>زمان عضویت</dt><dd>{{ membership.joined_at|jalali:"Y/m/d H:i" }}</dd></div>
                 </dl>
                 <div class="card-actions">
                     <a class="btn btn-primary btn-sm" href="{% url 'room:lobby' membership.classroom.room_code %}">ورود به کلاس</a>
@@ -58,7 +57,12 @@
             </article>
         {% endfor %}
     </div>
-{% else %}
-    <div class="empty-state card"><p>در کلاسی عضو نیستید. از طریق لینک دعوت وارد یک کلاس شوید.</p></div>
+{% endif %}
+
+{% if not owned_classrooms and not memberships %}
+    <div class="empty-state card">
+        <p>هنوز نه کلاسی ساخته‌اید و نه در کلاسی عضو هستید.</p>
+        <p class="muted">یک کلاس بسازید و لینکش را برای دانش‌آموزان بفرستید — یا از طریق لینک دعوت به کلاس کسی بپیوندید.</p>
+    </div>
 {% endif %}
 {% endblock %}

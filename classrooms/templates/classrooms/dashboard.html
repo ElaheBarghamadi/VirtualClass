@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load core_extras %}
 {% block title %}داشبورد{% endblock %}
 {% block content %}
 <div class="page-head">
@@ -19,9 +20,9 @@
 </div>
 
 <section class="stat-row">
-    <div class="stat-card"><span class="stat-value">{{ owned_classrooms|length }}</span><span class="stat-label">کلاس‌های من</span></div>
-    <div class="stat-card"><span class="stat-value">{{ joined_count }}</span><span class="stat-label">عضویت فعال</span></div>
-    <div class="stat-card"><span class="stat-value">{{ upcoming_sessions|length }}</span><span class="stat-label">جلسهٔ پیش‌رو</span></div>
+    <div class="stat-card"><span class="stat-value">{{ owned_classrooms|length|fa_digits }}</span><span class="stat-label">کلاس‌های من</span></div>
+    <div class="stat-card"><span class="stat-value">{{ joined_count|fa_digits }}</span><span class="stat-label">عضویت فعال</span></div>
+    <div class="stat-card"><span class="stat-value">{{ upcoming_sessions|length|fa_digits }}</span><span class="stat-label">جلسهٔ پیش‌رو</span></div>
 </section>
 
 {% if upcoming_sessions %}
@@ -33,7 +34,7 @@
                     <span class="badge badge-info">زمان‌بندی‌شده</span>
                     <strong>{{ s.title|default:s.classroom.title }}</strong>
                     <span class="muted">{{ s.classroom.title }}</span>
-                    <span>{{ s.scheduled_start|date:"Y/m/d H:i" }}</span>
+                    <span>{{ s.scheduled_start|jalali:"Y/m/d H:i" }}</span>
                     <a class="btn btn-sm btn-ghost" href="{% url 'room:lobby' s.classroom.room_code %}">ورود</a>
                 </li>
             {% endfor %}
@@ -56,8 +57,8 @@
                     <span class="badge badge-warn">دارای رمز</span>
                 {% endif %}
                 <dl class="meta-list">
-                    <div><dt>تاریخ ایجاد</dt><dd>{{ classroom.created_at|date:"Y/m/d H:i" }}</dd></div>
-                    <div><dt>شرکت‌کنندگان</dt><dd>{{ classroom.participant_count }} نفر</dd></div>
+                    <div><dt>تاریخ ایجاد</dt><dd>{{ classroom.created_at|jalali:"Y/m/d H:i" }}</dd></div>
+                    <div><dt>شرکت‌کنندگان</dt><dd>{{ classroom.participant_count|fa_digits }} نفر</dd></div>
                 </dl>
                 <div class="link-box" data-copy-link>
                     <input type="text" readonly value="{{ request.scheme }}://{{ request.get_host }}/class/{{ classroom.room_code }}/" aria-label="لینک کلاس">

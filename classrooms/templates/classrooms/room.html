@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load core_extras %}
 {% load static %}
 {% block title %}{{ classroom.title }}{% endblock %}
 {% block extra_css %}
@@ -371,7 +372,7 @@
                                 <span class="file-name">{{ f.original_name }}
                                     {% if f.pdf_version %}<span class="pdf-ready-pill" title="نسخهٔ PDF آمادهٔ ارائه است">PDF</span>{% endif %}
                                 </span>
-                                <small class="muted">{{ f.uploader.name }} · {{ f.size_display }} · {{ f.uploaded_at|date:"m/d H:i" }}</small>
+                                <small class="muted">{{ f.uploader.name }} · {{ f.size_display }} · {{ f.uploaded_at|jalali:"m/d H:i" }}</small>
                             </div>
                             <span class="file-presenting-pill" title="این فایل اکنون ارائه می‌شود">در حال ارائه</span>
                             <div class="file-actions">

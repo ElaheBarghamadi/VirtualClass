@@ -1,10 +1,11 @@
 {% extends "base.html" %}
+{% load core_extras %}
 {% block title %}{{ quiz.title }} — آزمون{% endblock %}
 {% block content %}
 <div class="page-head">
     <div>
         <h1>{{ quiz.title }}</h1>
-        <p class="muted">{{ questions|length }} پرسش · مجموع {{ quiz.total_points }} نمره</p>
+        <p class="muted">{{ questions|length|fa_digits }} پرسش · مجموع {{ quiz.total_points|fa_digits }} نمره</p>
     </div>
     <a class="btn btn-ghost" href="{% url 'quizzes_manage:list' classroom.room_code %}">بازگشت</a>
 </div>
@@ -79,16 +80,16 @@
             <div class="card form-card">
                 <div class="page-head">
                     <div>
-                        <h3>اجرای {{ run.started_at|date:"m/d H:i" }}</h3>
+                        <h3>اجرای {{ run.started_at|jalali:"m/d H:i" }}</h3>
                         <p class="muted">
-                            {% if run.ended_at %}پایان: {{ run.ended_at|date:"H:i" }}{% else %}در جریان{% endif %}
+                            {% if run.ended_at %}پایان: {{ run.ended_at|jalali:"H:i" }}{% else %}در جریان{% endif %}
                         </p>
                     </div>
                 </div>
                 {% if run.results %}
                     <ul class="option-list">
                         {% for r in run.results %}
-                            <li>{{ r.name }} — <strong>{{ r.score }}</strong> از {{ r.max }}</li>
+                            <li>{{ r.name }} — <strong>{{ r.score|fa_digits }}</strong> از {{ r.max|fa_digits }}</li>
                         {% endfor %}
                     </ul>
                 {% elif run.ended_at %}

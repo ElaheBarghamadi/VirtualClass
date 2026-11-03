@@ -404,9 +404,13 @@ code {
     justify-content: center;
     padding-inline: .5rem;
 }
-/* <form> wrappers inside the action grid must not create their own box —
-   otherwise the button inside escapes the grid track. */
-.classroom-card .card-actions form { display: contents; }
+/* A <form> wrapper inside the action grid owns a whole row: as a bare grid
+   item it used to escape the track, and as `display: contents` its button was
+   squeezed into a single 1/3 column under a full-width primary button. */
+.classroom-card .card-actions form {
+    grid-column: 1 / -1;
+    display: block;
+}
 .empty-state {
     text-align: center; padding: 2.5rem 1.5rem; color: var(--muted);
     border: 1px dashed var(--border-strong); border-radius: var(--radius);

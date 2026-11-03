@@ -164,9 +164,14 @@ class ParticipantUpdateAPIView(_ClassroomScopedMixin, APIView):
                 set_member_permission(classroom, request.user, member_id, name, value)
         except PermissionDenied as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_403_FORBIDDEN)
+        except ClassroomAccessError as exc:
+            # the class itself refuses the write (closed, ended, archived)
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-        member = ClassroomMember.objects.select_related("user").get(id=member_id, classroom=classroom)
+        member = get_object_or_404(
+            ClassroomMember.objects.select_related("user"), id=member_id, classroom=classroom
+        )
         return Response(MemberSerializer(member).data)
 
 
@@ -209,7 +214,9 @@ class SessionActionAPIView(_ClassroomScopedMixin, APIView):
                 session = start_session(classroom, request.user, session)
             else:
                 session = end_session(session, request.user)
-        except (PermissionDenied, ClassroomAccessError) as exc:
+        except PermissionDenied as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_403_FORBIDDEN)
+        except ClassroomAccessError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         session.refresh_from_db()
         return Response(SessionSerializer(session).data)

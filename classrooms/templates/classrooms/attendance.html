@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load core_extras %}
 {% block title %}گزارش حضور — {{ classroom.title }}{% endblock %}
 {% block content %}
 <div class="page-head">
@@ -6,8 +7,8 @@
         <h1>گزارش حضور</h1>
         <p class="muted">
             {{ classroom.title }} — جلسهٔ {{ session.id }}
-            ({% if session.started_at %}شروع: {{ session.started_at|date:"Y/m/d H:i" }}{% endif %}
-            {% if session.ended_at %}· پایان: {{ session.ended_at|date:"Y/m/d H:i" }}{% endif %})
+            ({% if session.started_at %}شروع: {{ session.started_at|jalali:"Y/m/d H:i" }}{% endif %}
+            {% if session.ended_at %}· پایان: {{ session.ended_at|jalali:"Y/m/d H:i" }}{% endif %})
         </p>
     </div>
     <div class="page-head-actions">
@@ -32,7 +33,7 @@
                     <td>{{ row.joins }}</td>
                     <td>
                         {% widthratio row.total_seconds 60 1 %} دقیقه
-                        ({{ row.total_seconds }} ثانیه)
+                        ({{ row.total_seconds|fa_digits }} ثانیه)
                     </td>
                 </tr>
             {% empty %}

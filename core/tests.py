@@ -70,3 +70,45 @@ class DatabaseUrlTests(TestCase):
         for url in ("mongodb://x/y", "nonsense"):
             with self.assertRaises(ImproperlyConfigured):
                 _database_from_url(url)
+
+
+class PersianDisplayTests(TestCase):
+    """Numbers and dates read Persian in every browser, not only when the
+    webfont happens to load."""
+
+    def test_digits_convert_only_digits(self):
+        from core.templatetags.core_extras import fa_digits
+        self.assertEqual(fa_digits(1234), "۱۲۳۴")
+        self.assertEqual(fa_digits("کلاس 7B"), "کلاس ۷B")
+        self.assertEqual(fa_digits(None), "")
+
+    def test_thousands_use_persian_separator(self):
+        from core.templatetags.core_extras import fa_num
+        self.assertEqual(fa_num(1200), "۱٬۲۰۰")
+
+    def test_jalali_known_boundaries(self):
+        from core.templatetags.core_extras import _to_jalali
+        self.assertEqual(_to_jalali(2024, 3, 20), (1403, 1, 1))   # Nowruz 1403
+        self.assertEqual(_to_jalali(2025, 3, 21), (1404, 1, 1))   # Nowruz 1404
+        self.assertEqual(_to_jalali(2026, 11, 3), (1405, 8, 12))
+
+    def test_jalali_filter_formats_and_converts_digits(self):
+        from datetime import datetime
+        from core.templatetags.core_extras import jalali
+        self.assertEqual(jalali(datetime(2026, 11, 3, 14, 5), "Y/m/d H:i"), "۱۴۰۵/۰۸/۱۲ ۱۴:۰۵")
+        self.assertEqual(jalali(datetime(2026, 11, 3, 9, 7), "H:i"), "۰۹:۰۷")
+        self.assertEqual(jalali(None), "")
+
+    def test_jalali_filter_passes_through_already_formatted_strings(self):
+        from core.templatetags.core_extras import jalali
+        self.assertEqual(jalali("۰۸/۱۲ ۱۴:۰۵", "m/d H:i"), "۰۸/۱۲ ۱۴:۰۵")
+
+    def test_dashboard_renders_jalali_not_gregorian(self):
+        from django.contrib.auth import get_user_model
+        from classrooms.models import Classroom
+        user = get_user_model().objects.create_user("fa-user", password="Pass-12345")
+        Classroom.objects.create(owner=user, title="کلاس تقویم", room_code="FAdigits01")
+        self.client.force_login(user)
+        body = self.client.get("/dashboard/").content.decode()
+        self.assertIn("۱۴۰۵/", body)
+        self.assertNotIn("2026/", body)
