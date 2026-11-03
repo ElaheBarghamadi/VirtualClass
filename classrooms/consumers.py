@@ -28,16 +28,40 @@ so state restores automatically.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 
 from django.conf import settings
 from channels.db import database_sync_to_async
+from channels.layers import get_channel_layer
+
 from .models import Classroom, ClassroomMember
+from .ws_security import RateLimiter, SafeJsonWebsocketConsumer, ws_origin_allowed
+
+#: Live caption text is capped and rate-limited (see receive_json).
+CAPTION_MAX_CHARS = 200
+CAPTION_RATE_LIMIT = 4  # captions per second per connection
 
 #: The only reactions a client may broadcast (validated server-side).
 REACTION_KEYS = frozenset({"heart", "clap", "thumbs", "star", "question"})
-from .ws_security import RateLimiter, SafeJsonWebsocketConsumer, ws_origin_allowed
+
+#: Reaction summary batching.  Reactions stay ephemeral, but every window we
+#: post ONE digest line into chat so late joiners/recordings still see the
+#: mood.  One group_send per window, zero database writes.
+REACTION_SUMMARY_DELAY = 4.0  # seconds per aggregation window
+REACTION_SUMMARY_MIN_MEMBERS = 2  # a single reaction is just the bubble
+REACTION_SUMMARY_LABELS = {
+    "heart": "قلب فرستادند",
+    "clap": "تشویق کردند",
+    "thumbs": "تأیید کردند",
+    "star": "ستاره دادند",
+    "question": "گفتند متوجه نشدند",
+}
+_MAX_SUMMARY_ROOMS = 200  # hard cap on buffered rooms (memory guard)
+
+#: room_code → {"members": {key: set(member_id)}, "task": asyncio.Task | None}
+_reaction_windows: dict[str, dict] = {}
 
 RTC_SIGNAL_MAX_BYTES = 16 * 1024  # hard cap on relayed SDP/ICE envelopes
 RECEIVE_RATE_LIMIT = 20  # client messages per second per connection
@@ -72,6 +96,7 @@ class ClassroomConsumer(SafeJsonWebsocketConsumer):
             await self.close(code=4403)
             return
         self._limiter = RateLimiter(RECEIVE_RATE_LIMIT)
+        self._caption_limiter = RateLimiter(CAPTION_RATE_LIMIT)
 
         # Server-side authorisation: only active members (registered or
         # session-bound guests) may connect.
@@ -148,7 +173,7 @@ class ClassroomConsumer(SafeJsonWebsocketConsumer):
                 await self.send_json({"type": "pong"})
             return
 
-        if action in ("raise_hand", "media_state", "rtc_signal", "whiteboard_state", "reaction"):
+        if action in ("raise_hand", "media_state", "rtc_signal", "whiteboard_state", "reaction", "caption"):
             if not await self._member_active_now():
                 await self.close(code=4403)
                 return
@@ -166,6 +191,31 @@ class ClassroomConsumer(SafeJsonWebsocketConsumer):
                     "reaction": key,
                     "member_id": self.member.id,
                     "name": getattr(self.member, "participant_name", ""),
+                },
+            )
+            self._note_reaction(key)
+            return
+
+        if action == "caption":
+            # Speech-to-text happens in the speaker's browser; the server only
+            # relays the text to the room.  Never stored, hard length cap and a
+            # per-connection throttle so a scripted client cannot flood peers.
+            text = content.get("text")
+            if not isinstance(text, str):
+                return
+            text = " ".join(text.split())[:CAPTION_MAX_CHARS]
+            if not text:
+                return
+            if not self._caption_limiter.allow():
+                return
+            await self.channel_layer.group_send(
+                self.group_name,
+                {
+                    "type": "presence.caption",
+                    "member_id": self.member.id,
+                    "name": getattr(self.member, "participant_name", ""),
+                    "text": text,
+                    "final": bool(content.get("final")),
                 },
             )
             return
@@ -242,6 +292,50 @@ class ClassroomConsumer(SafeJsonWebsocketConsumer):
     # ------------------------------------------------------------------
     # Group event handlers
     # ------------------------------------------------------------------
+    # ------------------------------------------------------------ reactions
+    def _note_reaction(self, key: str) -> None:
+        """Buffer a reaction for the chat digest — O(1), no database work."""
+        room = self.room_code
+        window = _reaction_windows.get(room)
+        if window is None:
+            if len(_reaction_windows) >= _MAX_SUMMARY_ROOMS:
+                # Drop the oldest room rather than grow without bound.
+                _reaction_windows.pop(next(iter(_reaction_windows)), None)
+            window = _reaction_windows[room] = {"members": {}, "task": None}
+        window["members"].setdefault(key, set()).add(self.member.id)
+        task = window.get("task")
+        if task is None or task.done():
+            window["task"] = asyncio.create_task(self._flush_reaction_summary(room))
+
+    async def _flush_reaction_summary(self, room_code: str) -> None:
+        """After the window closes, broadcast a single aggregated digest line."""
+        try:
+            await asyncio.sleep(REACTION_SUMMARY_DELAY)
+        except asyncio.CancelledError:  # pragma: no cover - shutdown path
+            _reaction_windows.pop(room_code, None)
+            return
+        window = _reaction_windows.pop(room_code, None)
+        if not window:
+            return
+        parts = []
+        for key, member_ids in window["members"].items():
+            count = len(member_ids)
+            if count < REACTION_SUMMARY_MIN_MEMBERS:
+                continue
+            parts.append(f"{count} نفر {REACTION_SUMMARY_LABELS.get(key, 'واکنش دادند')}")
+        if not parts:
+            return
+        channel_layer = get_channel_layer()
+        if channel_layer is None:  # pragma: no cover - misconfiguration
+            return
+        try:
+            await channel_layer.group_send(
+                f"classroom_chat_{room_code}",
+                {"type": "chat.summary", "text": " · ".join(parts)},
+            )
+        except Exception:  # a channel-layer hiccup must never kill the socket
+            logger.warning("reaction_summary_failed room=%s", room_code, exc_info=True)
+
     async def presence_user_joined(self, event: dict) -> None:
         await self.send_json({"type": "user_joined", "participant": event["participant"]})
 
@@ -254,6 +348,15 @@ class ClassroomConsumer(SafeJsonWebsocketConsumer):
             "reaction": event["reaction"],
             "member_id": event["member_id"],
             "name": event.get("name", ""),
+        })
+
+    async def presence_caption(self, event: dict) -> None:
+        await self.send_json({
+            "type": "caption",
+            "member_id": event["member_id"],
+            "name": event.get("name", ""),
+            "text": event["text"],
+            "final": bool(event.get("final")),
         })
 
     async def presence_media_state(self, event: dict) -> None:

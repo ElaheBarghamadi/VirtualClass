@@ -53,13 +53,25 @@ function showBrowserWarning() {
   if (!missing.length) return;
   browserWarning.hidden = false;
   browserWarning.textContent =
-    "⚠️ مرورگر شما از این قابلیت‌ها پشتیبانی نمی‌کند: " +
+    "مرورگر شما از این قابلیت‌ها پشتیبانی نمی‌کند: " +
     missing.join("، ") +
     ". برای تجربهٔ کامل از جدیدترین نسخهٔ Chrome، Edge یا Firefox استفاده کنید. ورود همچنان ممکن است.";
 }
 
-function setCamState(icon, text) {
-  camStateIcon.textContent = icon;
+// Emoji render as tofu on some Linux/Windows setups and clash with the icon
+// set used everywhere else — states carry a small inline SVG instead.
+const CAM_ICONS = {
+  idle: '<path d="M4 8.5h3l1.6-2h6.8l1.6 2h3v9H4z"/><circle cx="12" cy="12.8" r="3.2"/>',
+  busy: '<circle cx="12" cy="12" r="8.4" stroke-dasharray="3 3"/>',
+  ok: '<circle cx="12" cy="12" r="8.4"/><path d="m8.4 12.3 2.5 2.5 4.8-5"/>',
+  warn: '<path d="M12 4.4 20.4 19.6H3.6z"/><path d="M12 9.8v4"/><path d="M12 16.4v.4"/>',
+  error: '<circle cx="12" cy="12" r="8.4"/><path d="M8.8 8.8l6.4 6.4M15.2 8.8l-6.4 6.4"/>',
+};
+function setCamState(state, text) {
+  camStateIcon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+    + 'stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
+    + (CAM_ICONS[state] || CAM_ICONS.idle) + '</svg>';
+  camStateIcon.dataset.state = state;
   camStateText.textContent = text;
 }
 
@@ -114,10 +126,10 @@ async function listDevices() {
 
 async function startPreview() {
   if (!supports.media) {
-    setCamState("⚠️", "پیش‌نمایش در این مرورگر ممکن نیست");
+    setCamState("warn", "پیش‌نمایش در این مرورگر ممکن نیست");
     return;
   }
-  setCamState("⏳", "در حال دسترسی به دوربین…");
+  setCamState("busy", "در حال دسترسی به دوربین…");
   deviceError.hidden = true;
   try {
     if (localStream) localStream.getTracks().forEach((t) => t.stop());
@@ -128,13 +140,13 @@ async function startPreview() {
     localStream = await navigator.mediaDevices.getUserMedia(constraints);
     video.srcObject = localStream;
     await video.play().catch(() => {});
-    setCamState("✅", "دوربین فعال است");
+    setCamState("ok", "دوربین فعال است");
     await listDevices(); // labels become available after permission
     wireMicMeter();
   } catch (err) {
     video.srcObject = null;
     const name = (err && err.name) || "";
-    setCamState("⛔", name === "NotAllowedError" ? "دسترسی داده نشد" : "دستگاه در دسترس نیست");
+    setCamState("error", name === "NotAllowedError" ? "دسترسی داده نشد" : "دستگاه در دسترس نیست");
     deviceError.hidden = false;
     deviceError.textContent = friendlyMediaError(err);
   }
@@ -195,8 +207,8 @@ async function micTest() {
     check();
   });
   micFeedback.textContent = sawSignal
-    ? "✅ صدای شما دریافت شد — میکروفون سالم است."
-    : "❌ سیگنالی از میکروفون دریافت نشد. مطمئن شوید صحبت کرده‌اید و دستگاه درست انتخاب شده است.";
+    ? "صدای شما دریافت شد — میکروفون سالم است."
+    : "سیگنالی از میکروفون دریافت نشد. مطمئن شوید صحبت کرده‌اید و دستگاه درست انتخاب شده است.";
 }
 
 async function speakerTest() {
@@ -228,19 +240,19 @@ async function speakerTest() {
         speakerFeedback.textContent = "انتخاب بلندگو در این مرورگر ممکن نشد؛ صدا از دستگاه پیش‌فرض پخش شد.";
       }
     }
-    speakerFeedback.innerHTML = "🔊 یک بوق کوتاه پخش شد — آن را شنیدید؟";
+    speakerFeedback.textContent = "یک بوق کوتاه پخش شد — آن را شنیدید؟";
     const okBtn = document.createElement("button");
     okBtn.type = "button";
     okBtn.className = "btn btn-sm btn-ghost";
-    okBtn.textContent = "بله، شنیدم ✅";
+    okBtn.textContent = "بله، شنیدم";
     okBtn.onclick = () => {
-      speakerFeedback.textContent = "✅ بلندگو سالم است.";
+      speakerFeedback.textContent = "بلندگو سالم است.";
       okBtn.remove();
     };
     speakerFeedback.appendChild(document.createTextNode(" "));
     speakerFeedback.appendChild(okBtn);
   } catch {
-    speakerFeedback.textContent = "❌ پخش صدا ممکن نشد.";
+    speakerFeedback.textContent = "پخش صدا ممکن نشد.";
   }
 }
 

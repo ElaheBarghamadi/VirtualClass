@@ -84,6 +84,10 @@ class ChatClientImpl {
             case 'chat_deleted':
                 this.markDeleted(data.message_id);
                 break;
+            case 'reaction_summary':
+                // Aggregated digest of quick reactions (ephemeral, no DB row).
+                this.addSystemMessage(data.text);
+                break;
             case 'error':
                 toast(data.message, 'warning');
                 break;
@@ -121,7 +125,9 @@ class ChatClientImpl {
                 del.className = 'chat-delete';
                 del.title = 'حذف پیام (مدیر)';
                 del.setAttribute('aria-label', 'حذف پیام');
-                del.textContent = '🗑';
+                del.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true">'
+                    + '<path d="M4.5 7h15"/><path d="M9.5 7V5.6A1.6 1.6 0 0 1 11.1 4h1.8a1.6 1.6 0 0 1 1.6 1.6V7"/>'
+                    + '<path d="M6.6 7l.8 11.4A1.7 1.7 0 0 0 9.1 20h5.8a1.7 1.7 0 0 0 1.7-1.6L17.4 7"/></svg>';
                 del.addEventListener('click', () => this.deleteMessage(m.id));
                 head.appendChild(del);
             }

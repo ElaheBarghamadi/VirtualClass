@@ -141,6 +141,12 @@ class ChatConsumer(SafeJsonWebsocketConsumer):
     async def chat_deleted(self, event: dict) -> None:
         await self.send_json({"type": "chat_deleted", "message_id": event["message_id"]})
 
+    async def chat_summary(self, event: dict) -> None:
+        """Aggregated reaction digest from the presence consumer (ephemeral)."""
+        text = str(event.get("text", "")).strip()
+        if text:
+            await self.send_json({"type": "reaction_summary", "text": text})
+
     async def classroom_notification(self, event: dict) -> None:
         payload = event["payload"]
         await self.send_json(payload)

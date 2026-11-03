@@ -36,8 +36,20 @@ export function toast(text, level = 'info', ms = 4200) {
     el.className = `toast toast-${level}`;
     el.setAttribute('role', level === 'error' ? 'alert' : 'status');
 
-    const icons = { info: 'ℹ️', success: '✅', warning: '⚠️', error: '⛔' };
-    el.innerHTML = `<span class="toast-icon" aria-hidden="true">${icons[level] || ''}</span>`;
+    // SVG only (no emoji): emoji render as tofu on many Linux/Windows setups
+    // and clash with the icon set used everywhere else in the app.
+    const paths = {
+        info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5.4"/><path d="M12 7.6v.6"/>',
+        success: '<circle cx="12" cy="12" r="9"/><path d="m8.2 12.4 2.6 2.6 5-5.2"/>',
+        warning: '<path d="M12 3.6 21 20H3z"/><path d="M12 9.6v4.2"/><path d="M12 17v.4"/>',
+        error: '<circle cx="12" cy="12" r="9"/><path d="M8.6 8.6l6.8 6.8M15.4 8.6l-6.8 6.8"/>',
+    };
+    const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    icon.setAttribute('viewBox', '0 0 24 24');
+    icon.setAttribute('class', 'toast-icon');
+    icon.setAttribute('aria-hidden', 'true');
+    icon.innerHTML = paths[level] || paths.info;
+    el.appendChild(icon);
     const span = document.createElement('span');
     span.className = 'toast-text';
     span.textContent = text;

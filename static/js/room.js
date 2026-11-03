@@ -18,6 +18,8 @@ import { Media } from './media.js';
 import { QuizClient } from './quiz.js';
 import { toast } from './toast.js';
 import { confirmDialog, infoDialog } from './modal.js';
+import { Recorder } from './recorder.js';
+import { Captions } from './captions.js';
 
 const root = document.getElementById('classroom-root');
 const ROOM_CODE = root.dataset.roomCode;
@@ -737,6 +739,9 @@ function handleEvent(data) {
         case 'reaction':
             showReaction(data.reaction, data.name);
             break;
+        case 'caption':
+            Captions.render({ member_id: data.member_id, name: data.name, text: data.text, final: data.final });
+            break;
         case 'pong':
             if (presence._pingAt) {
                 presence.rtt = Math.round(performance.now() - presence._pingAt);
@@ -1061,84 +1066,247 @@ function initControls() {
     }
 }
 
+/**
+ * Anchor a fixed-position popover above `anchor`.
+ * The control bar clips its own overflow and uses backdrop-filter (which
+ * becomes the containing block), so popovers live on <body> and are placed
+ * against the anchor's live rect; the returned function re-places them.
+ */
+function anchorPopover(anchor, pop, gap = 8) {
+    const place = () => {
+        const rect = anchor.getBoundingClientRect();
+        const half = (pop.offsetWidth || 200) / 2;
+        const margin = 8;
+        const left = Math.max(half + margin, Math.min(rect.left + rect.width / 2, window.innerWidth - half - margin));
+        pop.style.left = `${Math.round(left)}px`;
+        pop.style.top = `${Math.round(rect.top - gap)}px`;
+    };
+    place();
+    return place;
+}
+
 // ---------------------------------------------------------------------------
-// Session recording — host-side only, file saved locally in the browser.
-// Records whatever the host publishes: microphone audio plus screen share
-// when active, otherwise the camera.  Nothing is uploaded to the server.
+// Session recording — local only (no server, no upload).
+//
+// The dock button opens a quality popover, `recorder.js` composites the stage
+// and mixes every participant's audio on the device, and the finished WebM is
+// playable right here before the host saves or discards it.
 // ---------------------------------------------------------------------------
 function initRecording() {
     const btn = document.getElementById('btn-record');
     if (!btn) return;
-    let recorder = null;
-    let chunks = [];
-    let timer = null;
-    let startedAt = 0;
+    const timerEl = document.getElementById('rec-timer');
+
+    let tray = null;
+    let tick = null;
+    let lastUrl = '';
+    let starting = false;
 
     const pad = (n) => String(n).padStart(2, '0');
-    const tick = () => {
-        const s = Math.floor((Date.now() - startedAt) / 1000);
-        const label = document.getElementById('rec-timer');
-        if (label) label.textContent = `${pad(Math.floor(s / 60))}:${pad(s % 60)}`;
+    const clock = (s) => `${pad(Math.floor(s / 60))}:${pad(Math.floor(s % 60))}`;
+    const fileSize = (bytes) => (bytes >= 1048576
+        ? `${(bytes / 1048576).toFixed(1)} مگابایت`
+        : `${Math.max(1, Math.round(bytes / 1024))} کیلوبایت`);
+
+    const syncButton = () => {
+        const on = Recorder.recording;
+        btn.classList.toggle('recording', on);
+        btn.setAttribute('aria-pressed', String(on));
+        btn.title = on ? 'پایان ضبط و ذخیرهٔ فایل' : 'ضبط جلسه (ذخیره در دستگاه شما)';
+        timerEl?.classList.toggle('hidden', !on);
+        clearInterval(tick);
+        tick = null;
+        if (on) {
+            const refresh = () => { if (timerEl) timerEl.textContent = clock(Recorder.elapsed); };
+            refresh();
+            tick = setInterval(refresh, 1000);
+        }
     };
 
-    btn.addEventListener('click', () => {
-        if (recorder && recorder.state === 'recording') {
-            recorder.stop();
-            return;
-        }
-        const impl = Media.impl;
-        const local = impl?.localStream || null;
-        const screen = impl?.screenStream || null;
-        const mixed = new MediaStream();
-        if (screen && screen.getVideoTracks().length) {
-            mixed.addTrack(screen.getVideoTracks()[0]);
-        } else if (local && local.getVideoTracks().length) {
-            mixed.addTrack(local.getVideoTracks()[0]);
-        }
-        if (local && local.getAudioTracks().length) {
-            mixed.addTrack(local.getAudioTracks()[0]);
-        }
-        if (!mixed.getTracks().length) {
-            toast('برای ضبط، ابتدا میکروفون یا دوربین خود را روشن کنید.', 'warning');
-            return;
-        }
-        const mime = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm']
-            .find((m) => window.MediaRecorder?.isTypeSupported?.(m)) || '';
+    // ---- quality popover (same anchoring trick as the reactions tray) ----
+    const hideTray = () => {
+        tray?.classList.add('hidden');
+        btn.setAttribute('aria-expanded', 'false');
+    };
+    const showTray = () => {
+        if (!tray) return;
+        tray.classList.remove('hidden');
+        btn.setAttribute('aria-expanded', 'true');
+        tray._place?.();
+    };
+    const buildTray = () => {
+        const el = document.createElement('div');
+        el.className = 'rec-tray hidden';
+        el.setAttribute('role', 'menu');
+        el.setAttribute('aria-label', 'کیفیت ضبط');
+        el.innerHTML = `
+            <button type="button" class="rec-option" data-mode="light" role="menuitem">
+                <span class="rec-option-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20.5a8.5 8.5 0 1 1 8.5-8.5"/><path d="M12 12l4.6-4.6"/></svg></span>
+                <span class="rec-option-tx"><strong>ضبط سبک <em>پیشنهادی</em></strong>
+                    <span>۱۲ فریم · ۴۸۰p — کمترین فشار روی سیستم و اینترنت</span></span>
+            </button>
+            <button type="button" class="rec-option" data-mode="hd" role="menuitem">
+                <span class="rec-option-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2.6" y="5" width="18.8" height="12.4" rx="2.4"/><path d="M8.4 20.4h7.2M12 17.4v3"/></svg></span>
+                <span class="rec-option-tx"><strong>ضبط با کیفیت</strong>
+                    <span>۲۴ فریم · ۷۲۰p — واضح‌تر، ولی حجم و مصرف بالاتر</span></span>
+            </button>
+            <p class="rec-tray-note">تصویر صحنه و صدای همه روی همین دستگاه ضبط می‌شود؛ چیزی به سرور فرستاده نمی‌شود.</p>`;
+        document.body.appendChild(el);
+        el.querySelectorAll('[data-mode]').forEach((opt) => {
+            opt.addEventListener('click', () => {
+                hideTray();
+                startRecording(opt.dataset.mode);
+            });
+        });
+        document.addEventListener('click', (e) => {
+            if (el.classList.contains('hidden')) return;
+            if (el.contains(e.target) || btn.contains(e.target)) return;
+            hideTray();
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') hideTray();
+        });
+        // Reposition (never close) on scroll: focusing a dock button can
+        // scroll the page, and closing here made the tray vanish on click.
+        el._place = () => anchorPopover(btn, el);
+        window.addEventListener('scroll', () => {
+            if (!el.classList.contains('hidden')) el._place();
+        }, true);
+        window.addEventListener('resize', () => {
+            if (!el.classList.contains('hidden')) el._place();
+        });
+        return el;
+    };
+
+    // ---- recording lifecycle ----
+    const startRecording = async (mode) => {
+        if (starting || Recorder.recording) return;
+        starting = true;
+        btn.classList.add('starting');
         try {
-            recorder = mime ? new MediaRecorder(mixed, { mimeType: mime }) : new MediaRecorder(mixed);
-        } catch (e) {
-            toast('مرورگر شما از ضبط پشتیبانی نمی‌کند.', 'error');
+            // Free the previous file before allocating a new one.
+            if (lastUrl) { URL.revokeObjectURL(lastUrl); lastUrl = ''; }
+            await Recorder.start(mode);
+            syncButton();
+            toast(
+                mode === 'hd'
+                    ? 'ضبط با کیفیت آغاز شد — فایل روی دستگاه شما می‌ماند.'
+                    : 'ضبط سبک آغاز شد — فایل روی دستگاه شما می‌ماند.',
+                'info',
+                3200,
+            );
+        } catch (err) {
+            const reason = err?.message;
+            if (reason === 'no-media') {
+                toast('چیزی برای ضبط نیست — دوربین، اشتراک صفحه یا میکروفون را روشن کنید.', 'warning');
+            } else {
+                toast('مرورگر شما از ضبط پشتیبانی نمی‌کند.', 'error');
+            }
+        } finally {
+            starting = false;
+            btn.classList.remove('starting');
+        }
+    };
+
+    const stopRecording = async () => {
+        if (!Recorder.recording) return;
+        const result = await Recorder.stop();
+        syncButton();
+        if (!result || !result.blob?.size) {
+            toast('ضبط خیلی کوتاه بود؛ فایلی ساخته نشد.', 'warning');
             return;
         }
-        chunks = [];
-        recorder.ondataavailable = (ev) => { if (ev.data.size) chunks.push(ev.data); };
-        recorder.onstop = () => {
-            clearInterval(timer);
-            btn.classList.remove('recording');
-            btn.setAttribute('aria-pressed', 'false');
-            document.getElementById('rec-timer')?.classList.add('hidden');
-            const blob = new Blob(chunks, { type: recorder.mimeType || 'video/webm' });
-            chunks = [];
-            if (blob.size < 1024) { toast('ضبط خیلی کوتاه بود؛ فایلی ذخیره نشد.', 'warning'); return; }
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
-            a.href = url;
-            a.download = `classroom-${ROOM_CODE}-${stamp}.webm`;
-            a.click();
-            setTimeout(() => URL.revokeObjectURL(url), 4000);
-            toast('فایل ضبط در دستگاه شما ذخیره شد.', 'success');
-        };
-        recorder.start(1000);
-        startedAt = Date.now();
-        btn.classList.add('recording');
-        btn.setAttribute('aria-pressed', 'true');
-        const label = document.getElementById('rec-timer');
-        label?.classList.remove('hidden');
-        tick();
-        timer = setInterval(tick, 1000);
-        toast('ضبط شروع شد — فایل در پایان روی دستگاه شما ذخیره می‌شود.', 'info');
+        if (result.reason === 'size') toast('حجم ضبط به سقف رسید و خودکار متوقف شد.', 'warning');
+        if (result.reason === 'duration') toast('حداکثر مدت ضبط (۲ ساعت) پر شد.', 'warning');
+        if (result.url) {
+            lastUrl = result.url;
+            showRecordingPlayer(result);
+        }
+    };
+
+    /** Instant playback + save/discard, without ever leaving the room. */
+    const showRecordingPlayer = (rec) => {
+        const wrap = document.createElement('div');
+        wrap.className = 'rec-result';
+
+        const video = document.createElement('video');
+        video.className = 'rec-video';
+        video.controls = true;
+        video.playsInline = true;
+        video.preload = 'metadata';
+        video.src = rec.url;
+        // MediaRecorder blobs carry no duration in the WebM header, which
+        // makes the seek bar useless. Nudging currentTime forces Chrome/Safari
+        // to compute it, then we jump back to the start.
+        video.addEventListener('loadedmetadata', () => {
+            if (Number.isFinite(video.duration)) return;
+            video.currentTime = 1e101;
+            const reset = () => {
+                video.removeEventListener('timeupdate', reset);
+                video.currentTime = 0;
+            };
+            video.addEventListener('timeupdate', reset);
+        });
+
+        const meta = document.createElement('p');
+        meta.className = 'rec-meta';
+        meta.textContent = `مدت ${clock(rec.duration / 1000)} · حجم ${fileSize(rec.size)} · `
+            + (rec.preset === 'hd' ? 'کیفیت بالا' : 'ضبط سبک')
+            + ' · فقط روی همین دستگاه';
+
+        const actions = document.createElement('div');
+        actions.className = 'rec-actions';
+        const save = document.createElement('a');
+        save.className = 'btn btn-primary';
+        save.href = rec.url;
+        const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
+        save.download = `classroom-${ROOM_CODE}-${stamp}.webm`;
+        save.textContent = 'ذخیره روی دستگاه';
+        const discard = document.createElement('button');
+        discard.type = 'button';
+        discard.className = 'btn btn-ghost';
+        discard.textContent = 'حذف';
+        discard.addEventListener('click', () => {
+            URL.revokeObjectURL(rec.url);
+            lastUrl = '';
+            video.removeAttribute('src');
+            video.load();
+            discard.closest('dialog')?.close('ok');
+            toast('ضبط حذف شد.', 'info');
+        });
+        actions.append(save, discard);
+
+        wrap.append(video, meta, actions);
+        infoDialog('ضبط جلسه آماده است', wrap, 'بستن');
+    };
+
+    if (!Recorder.supported) {
+        btn.classList.add('hidden');
+        return;
+    }
+
+    tray = buildTray();
+    Recorder.onChange = syncButton;
+
+    btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (Recorder.recording) {
+            hideTray();
+            stopRecording();
+        } else if (tray.classList.contains('hidden')) {
+            showTray();
+        } else {
+            hideTray();
+        }
     });
+
+    // A closed tab mid-recording must not lose the file silently.
+    window.addEventListener('beforeunload', (e) => {
+        if (!Recorder.recording) return;
+        e.preventDefault();
+        e.returnValue = '';
+    });
+    window.addEventListener('pagehide', () => Recorder.dispose());
 }
 
 function switchView(view) {
@@ -1352,9 +1520,9 @@ function initDevicesDialog() {
             if (!results.length) {
                 feedback.textContent = 'دستگاهی برای اعمال انتخاب نشده است.';
             } else if (failed.length) {
-                feedback.textContent = `⚠️ ${failed.join(' و ')} اعمال نشد — دستگاه در دسترس نیست.`;
+                feedback.textContent = `${failed.join(' و ')} اعمال نشد — دستگاه در دسترس نیست.`;
             } else {
-                feedback.textContent = '✅ دستگاه‌ها اعمال شد.';
+                feedback.textContent = 'دستگاه‌ها اعمال شد.';
                 setTimeout(() => dialog.close(), 700);
             }
         } catch (err) {
@@ -1416,15 +1584,7 @@ function initReactions() {
     // button's live rect every time it opens (and on resize while open).
     if (tray.parentElement !== document.body) document.body.appendChild(tray);
 
-    const place = () => {
-        const r = btn.getBoundingClientRect();
-        const half = (tray.offsetWidth || 210) / 2;
-        const margin = 8;
-        let left = r.left + r.width / 2;
-        left = Math.max(half + margin, Math.min(left, window.innerWidth - half - margin));
-        tray.style.left = `${Math.round(left)}px`;
-        tray.style.top = `${Math.round(r.top - 8)}px`;
-    };
+    const place = () => anchorPopover(btn, tray);
 
     const close = () => {
         tray.classList.add('hidden');
@@ -1445,7 +1605,7 @@ function initReactions() {
         if (!tray.classList.contains('hidden')) place();
     };
     window.addEventListener('resize', reposition);
-    window.addEventListener('scroll', close, true);
+    window.addEventListener('scroll', reposition, true);
 
     tray.querySelectorAll('[data-reaction]').forEach((item) => {
         item.addEventListener('click', () => {
@@ -1462,6 +1622,43 @@ function initReactions() {
     });
 }
 
+// ---------------------------------------------------------------------------
+// Live captions — speech-to-text in the speaker's browser, relayed over the
+// presence socket, rendered for everyone.  Opt-in: nothing runs until the
+// speaker presses the CC button.
+// ---------------------------------------------------------------------------
+function initCaptions() {
+    const btn = document.getElementById('btn-captions');
+    if (!btn) return;
+
+    Captions.init({
+        send: (payload) => presence.send(payload),
+        identity: IDENTITY,
+        displayName: root.dataset.participantName || '',
+        memberId: MEMBER_ID,
+    });
+
+    const sync = () => {
+        btn.classList.toggle('active', Captions.enabled);
+        btn.setAttribute('aria-pressed', String(Captions.enabled));
+        btn.title = Captions.enabled ? 'خاموش کردن زیرنویس' : 'زیرنویس زنده';
+    };
+
+    btn.addEventListener('click', () => {
+        if (!Captions.supported) {
+            Captions.start(); // shows the honest "not supported" message
+            return;
+        }
+        Captions.toggle();
+        sync();
+    });
+
+    // Speech recognition can stop itself (permission lost, service hiccup) —
+    // the module reports state changes instead of us polling.
+    Captions.onChange = sync;
+    sync();
+}
+
 function initShortcuts() {
     document.addEventListener('keydown', (e) => {
         if (e.ctrlKey || e.metaKey || e.altKey) return;
@@ -1474,6 +1671,7 @@ function initShortcuts() {
         else if (key === 'p') { e.preventDefault(); document.getElementById('btn-people')?.click(); }
         else if (key === 's') { e.preventDefault(); Media.toggleScreenShare(); }
         else if (key === 'r') { e.preventDefault(); presence.send({ action: 'reaction', reaction: 'heart' }); }
+        else if (key === 'd' && e.shiftKey) { e.preventDefault(); document.getElementById('btn-captions')?.click(); }
     });
 }
 
@@ -1773,7 +1971,10 @@ function addFileItem(file) {
         del.dataset.delete = String(file.id);
         del.title = 'حذف فایل';
         del.setAttribute('aria-label', `حذف ${file.name}`);
-        del.textContent = '🗑 حذف';
+        del.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true">'
+            + '<path d="M4.5 7h15"/><path d="M9.5 7V5.6A1.6 1.6 0 0 1 11.1 4h1.8a1.6 1.6 0 0 1 1.6 1.6V7"/>'
+            + '<path d="M6.6 7l.8 11.4A1.7 1.7 0 0 0 9.1 20h5.8a1.7 1.7 0 0 0 1.7-1.6L17.4 7"/></svg>'
+            + '<span>حذف</span>';
         li.querySelector('.file-actions').appendChild(del);
     }
     list.prepend(li);
@@ -1867,6 +2068,7 @@ initMoreMenu();
 initDevicesDialog();
 initShortcuts();
 initReactions();
+initCaptions();
 initFiles();
 initRosterTools();
 initPermsDialog();

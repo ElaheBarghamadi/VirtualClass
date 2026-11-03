@@ -617,7 +617,14 @@ code {
     display: flex; gap: .35rem; align-items: center;
     -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
 }
+#cam-state-icon { display: inline-flex; flex: none; }
+#cam-state-icon svg { width: 15px; height: 15px; }
+#cam-state-icon[data-state="ok"] { color: var(--success); }
+#cam-state-icon[data-state="warn"] { color: var(--warning); }
+#cam-state-icon[data-state="error"] { color: var(--danger); }
 .device-tests { display: flex; gap: .4rem; flex-wrap: wrap; }
+.device-tests .btn svg { width: 15px; height: 15px; fill: none; stroke: currentColor;
+    stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; margin-inline-end: .3rem; }
 .device-actions { display: flex; gap: .6rem; justify-content: space-between; align-items: center; margin-top: 1rem; }
 .device-actions .btn:last-child { flex: 1; }
 .lobby-devices { display: grid; gap: .55rem; text-align: right; }
