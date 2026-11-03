@@ -111,27 +111,91 @@ class PresenceClient {
     }
 
     connect() {
+        // Never stack sockets: a duplicate connect would leave two open and
+        // double every roster event.
+        if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) return;
         this.setStatus(this.ws ? 'reconnecting' : 'connecting');
         const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-        this.ws = new WebSocket(`${proto}://${location.host}/ws/classroom/${ROOM_CODE}/`);
-        this.ws.onopen = () => {
+        const url = `${proto}://${location.host}/ws/classroom/${ROOM_CODE}/`;
+        this.url = url;
+        let ws;
+        try {
+            ws = new WebSocket(url);
+        } catch (err) {
+            console.error('[presence] could not create socket', url, err);
+            this.setStatus('lost');
+            this._scheduleRetry();
+            return;
+        }
+        this.ws = ws;
+        // A blocked proxy/firewall can leave the handshake pending forever,
+        // which used to show «در حال اتصال…» indefinitely.  Fail loudly and
+        // retry instead of hanging.
+        clearTimeout(this._handshakeTimer);
+        this._handshakeTimer = setTimeout(() => {
+            if (ws.readyState !== WebSocket.OPEN) {
+                console.error('[presence] handshake timed out (no answer from the server) —', url);
+                this.setStatus('lost');
+                try { ws.close(); } catch (err) { /* already closed */ }
+            }
+        }, 12_000);
+        ws.onopen = () => {
+            clearTimeout(this._handshakeTimer);
             this.retryDelay = 1000;
             this.setStatus('connected');
             // real round-trip measurement, repeated every 10s
             this._measureRtt();
             this._rttTimer = setInterval(() => this._measureRtt(), 10_000);
         };
-        this.ws.onmessage = (evt) => handleEvent(JSON.parse(evt.data));
-        this.ws.onclose = (evt) => {
+        ws.onmessage = (evt) => {
+            clearTimeout(this._handshakeTimer);
+            let data;
+            try {
+                data = JSON.parse(evt.data);
+            } catch (err) {
+                console.error('[presence] bad frame', err);
+                return;
+            }
+            handleEvent(data);
+        };
+        ws.onerror = () => {
+            // The browser gives no detail here on purpose; the close code just
+            // after it is the useful signal.  Log the URL so a failed route is
+            // obvious in the console.
+            console.error('[presence] socket error —', url);
+        };
+        ws.onclose = (evt) => {
+            clearTimeout(this._handshakeTimer);
             clearInterval(this._rttTimer);
             if (evt.code === 4401 || evt.code === 4403) {
                 toast('دسترسی شما به کلاس قطع شده است.', 'error');
                 setTimeout(() => { location.href = `/class/${ROOM_CODE}/lobby/`; }, 1800);
                 return;
             }
+            if (evt.code === 1000 && this._closing) { this._closing = false; return; }
+            console.warn('[presence] socket closed', evt.code, evt.reason || '(no reason)');
             this.setStatus('reconnecting');
-            setTimeout(() => this.connect(), this.retryDelay = Math.min(this.retryDelay * 2, 15000));
+            this._scheduleRetry();
         };
+    }
+
+    _scheduleRetry() {
+        clearTimeout(this._retryTimer);
+        const delay = this.retryDelay = Math.min(this.retryDelay * 2, 15000);
+        this._retryTimer = setTimeout(() => this.connect(), delay);
+    }
+
+    /** Manual retry: drop whatever is pending and try again right now. */
+    reconnect() {
+        clearTimeout(this._retryTimer);
+        clearTimeout(this._handshakeTimer);
+        this.retryDelay = 1000;
+        if (this.ws) {
+            this._closing = true;
+            try { this.ws.close(); } catch (err) { /* ignore */ }
+        }
+        this.ws = null;
+        this.connect();
     }
 
     _measureRtt() {
@@ -149,7 +213,7 @@ class PresenceClient {
             connected: ['connected', 'متصل'],
             connecting: ['', 'در حال اتصال…'],
             reconnecting: ['reconnecting', 'در حال اتصال مجدد…'],
-            lost: ['lost', 'قطع شده'],
+            lost: ['lost', 'قطع شد — برای تلاش دوباره کلیک کنید'],
         };
         const [cls, text] = map[state] || map.connecting;
         this.el.className = `conn-pill ${cls}`;
@@ -159,6 +223,7 @@ class PresenceClient {
 
     _updateTitle() {
         const bits = [`وضعیت: ${this.el.querySelector('.conn-text').textContent}`];
+        if (this.url && this.state !== 'connected') bits.push(this.url);
         if (this.rtt !== null) bits.push(`تأخیر سیگنالینگ: ${this.rtt}ms`);
         if (Media.quality && Media.quality !== 'unknown') bits.push(`کیفیت رسانه: ${qualityLabel(Media.quality)}`);
         this.el.title = bits.join(' · ');
@@ -598,6 +663,29 @@ function initPermsDialog() {
 
 
 const presence = new PresenceClient();
+
+// ---------------------------------------------------------------------------
+// Boot diagnostics
+//
+// If any subsystem fails to initialise the room keeps working, the failure is
+// logged with its name, and it is collected on window.__vcBoot so a support
+// report can just paste it.  Silence was the real bug: a dead init used to
+// leave «در حال اتصال…» spinning with nothing in the console.
+// ---------------------------------------------------------------------------
+window.__vcBoot = { errors: [], bootedAt: new Date().toISOString() };
+const _reportedBootErrors = new Set();
+function reportBootError(label, err) {
+    const message = String((err && (err.message || err)) || 'unknown error');
+    window.__vcBoot.errors.push({ label, message });
+    if (_reportedBootErrors.has(label)) return;
+    _reportedBootErrors.add(label);
+    try {
+        toast(`بخشی از صفحه («${label}») بالا نیامد. برای جزئیات کنسول مرورگر را ببینید.`, 'error', 7000);
+    } catch (toastErr) {
+        /* toast is itself optional */
+    }
+}
+window.__vcBoot.report = reportBootError;
 
 function qualityLabel(q) {
     return { excellent: 'عالی', good: 'خوب', poor: 'ضعیف', lost: 'قطع', unknown: 'نامشخص' }[q] || q;
@@ -2259,68 +2347,94 @@ function syncBarSpace() {
 // optional subsystem (media libs, whiteboard canvas, sockets) can never
 // leave the page with dead controls.  Each risky init is isolated.
 // ---------------------------------------------------------------------------
-initTabs();
-initDrawer();
-trackControlBarHeight();
-initLayouts();
-initControls();
-syncBarSpace();
-window.addEventListener('resize', syncBarSpace);
-window.addEventListener('load', syncBarSpace);
-setTimeout(syncBarSpace, 400); // re-measure after webfonts settle
-initFullscreen();
-initMoreMenu();
-initDevicesDialog();
-initShortcuts();
-initReactions();
-initCaptions();
-initFiles();
-initRosterTools();
-initPermsDialog();
-initClock();
-refreshControlStates();
-if (!PERMISSIONS.can_send_messages) {
-    ChatClient.setSendEnabled(false, 'شما اجازهٔ ارسال پیام ندارید.');
-}
-if (SHOW_CHAT) {
-    activateTab('chat');
+/**
+ * Run one boot step in isolation: a failure in any single subsystem must never
+ * leave the room dead (no socket, frozen clock, empty roster).  Every failure
+ * is logged with its label so it is obvious in the console.
+ */
+function safe(label, fn) {
+    try {
+        return fn();
+    } catch (err) {
+        console.error(`[room] init failed: ${label}`, err);
+        reportBootError(label, err);
+        return undefined;
+    }
 }
 
-presence.connect();
-try {
-    ChatClient.connect(ROOM_CODE, IDENTITY, PRIVILEGED);
-} catch (err) {
-    console.warn('[chat] init failed:', err);
+safe('tabs', initTabs);
+safe('drawer', initDrawer);
+safe('controls', initControls);
+safe('bar-space', () => {
+    trackControlBarHeight();
+    syncBarSpace();
+    window.addEventListener('resize', syncBarSpace);
+    window.addEventListener('load', syncBarSpace);
+    setTimeout(syncBarSpace, 400); // re-measure after webfonts settle
+});
+safe('layouts', initLayouts);
+safe('fullscreen', initFullscreen);
+safe('more-menu', initMoreMenu);
+safe('devices-dialog', initDevicesDialog);
+safe('shortcuts', initShortcuts);
+safe('reactions', initReactions);
+safe('captions', initCaptions);
+safe('files', initFiles);
+safe('roster-tools', initRosterTools);
+safe('perms-dialog', initPermsDialog);
+safe('clock', initClock);
+safe('control-states', refreshControlStates);
+if (!PERMISSIONS.can_send_messages) {
+    safe('chat-send-state', () => ChatClient.setSendEnabled(false, 'شما اجازهٔ ارسال پیام ندارید.'));
 }
-try {
-    initDeviceTest({ roomCode: ROOM_CODE });
-    Whiteboard.init({ roomCode: ROOM_CODE, identity: IDENTITY, canDraw: PERMISSIONS.can_use_whiteboard });
-    Presentation.init({
-        roomCode: ROOM_CODE,
-        identity: IDENTITY,
-        canAnnotate: PERMISSIONS.can_use_whiteboard,
-        canPresent: PERMISSIONS.can_present,
-        api,
-    });
-    QuizClient.init({ api, identity: IDENTITY, privileged: PRIVILEGED });
-} catch (err) {
-    console.warn('[whiteboard] init failed:', err);
-    Whiteboard.unavailable = true;
+if (SHOW_CHAT) {
+    safe('chat-tab', () => activateTab('chat'));
 }
-try {
-    await Media.init({
-        roomCode: ROOM_CODE,
-        currentIdentity: IDENTITY,
-        permissions: PERMISSIONS,
-        mediaUrl: MEDIA_URL,
-        mediaEnabled: MEDIA_ENABLED,
-        meshEnabled: MESH_ENABLED,
-        iceServers: ICE_SERVERS,
-        self: { identity: IDENTITY, memberId: MEMBER_ID, name: root.dataset.participantName },
-        signal: (payload) => presence.send(payload),
-        onStateChange: (state) => presence.send({ action: 'media_state', ...state }),
-        onQualityChange,
+
+// Sockets come before anything optional: the roster, the participant count and
+// the media signal channel all depend on the presence socket.  Nothing below
+// is allowed to keep it from connecting.
+safe('chat', () => ChatClient.connect(ROOM_CODE, IDENTITY, PRIVILEGED));
+safe('presence', () => presence.connect());
+// Clicking the connection pill retries by hand (useful when a network switch
+// killed the socket and the backoff has grown long).
+safe('conn-pill-retry', () => {
+    presence.el?.addEventListener('click', () => {
+        if (presence.state !== 'connected') presence.reconnect();
     });
+});
+
+// Optional subsystems — each isolated, each optional.
+safe('device-test', () => initDeviceTest({ roomCode: ROOM_CODE }));
+safe('whiteboard', () => Whiteboard.init({
+    roomCode: ROOM_CODE,
+    identity: IDENTITY,
+    canDraw: PERMISSIONS.can_use_whiteboard,
+}));
+safe('presentation', () => Presentation.init({
+    roomCode: ROOM_CODE,
+    identity: IDENTITY,
+    canAnnotate: PERMISSIONS.can_use_whiteboard,
+    canPresent: PERMISSIONS.can_present,
+    api,
+}));
+safe('quiz', () => QuizClient.init({ api, identity: IDENTITY, privileged: PRIVILEGED }));
+
+// Media last, and never awaited by the boot path: it opens devices and may be
+// slow (or refused).  The room must never wait on it to become interactive.
+Media.init({
+    roomCode: ROOM_CODE,
+    currentIdentity: IDENTITY,
+    permissions: PERMISSIONS,
+    mediaUrl: MEDIA_URL,
+    mediaEnabled: MEDIA_ENABLED,
+    meshEnabled: MESH_ENABLED,
+    iceServers: ICE_SERVERS,
+    self: { identity: IDENTITY, memberId: MEMBER_ID, name: root.dataset.participantName },
+    signal: (payload) => presence.send(payload),
+    onStateChange: (state) => presence.send({ action: 'media_state', ...state }),
+    onQualityChange,
+}).then(() => {
     // re-sync the mesh once media is up (the first snapshot may predate it)
     Media.syncPeers(Array.from(presence.participants.values())
         .filter((p) => !p.in_waiting_room)
@@ -2329,9 +2443,10 @@ try {
             permissions: p.permissions || {}, muted: Boolean(p.muted),
             camera_disabled: Boolean(p.camera_disabled), screen_sharing: p.screen_sharing,
         })));
-} catch (err) {
-    console.warn('[media] init failed:', err);
-}
+}).catch((err) => {
+    console.error('[room] init failed: media', err);
+    reportBootError('media', err);
+});
 
 // Periodic keepalive so idle proxies don't drop the presence socket.
 setInterval(() => presence.send({ action: 'ping' }), 25_000);

@@ -12,9 +12,12 @@ The value is cached for a couple of seconds (several templates render per page).
 """
 from __future__ import annotations
 
+import json
 import time
+from pathlib import Path
 
 from django.conf import settings
+from django.templatetags.static import static
 
 _cache: dict[str, object] = {"at": 0.0, "value": ""}
 TTL = 2.0
@@ -50,5 +53,31 @@ def asset_version() -> str:
     return value
 
 
-def asset_version_context(request=None) -> dict[str, str]:
-    return {"ASSET_V": asset_version()}
+def asset_import_map() -> str:
+    """A JSON import map that pins every ``static/js`` module to ``ASSET_V``.
+
+    ``?v=`` on the entry script only busts that one file — the ES modules it
+    imports (``./presentation.js``, ``./media.js`` …) keep their old URLs and
+    can therefore still be served from the browser cache after a pull.  This
+    map rewrites those specifiers too, so one version token covers the whole
+    module graph.  Browsers without import-map support simply ignore it.
+    """
+    version = asset_version()
+    if not version:
+        return "{}"
+    roots = [Path(root) / "js" for root in getattr(settings, "STATICFILES_DIRS", [])]
+    imports: dict[str, str] = {}
+    for root in roots:
+        try:
+            names = sorted(p.name for p in root.glob("*.js") if p.is_file())
+        except OSError:  # pragma: no cover - unreadable dir
+            continue
+        for name in names:
+            url = static(f"js/{name}")
+            imports[url] = f"{url}?v={version}"
+    return json.dumps({"imports": imports}, ensure_ascii=False, separators=(",", ":"))
+
+
+def asset_context(request=None) -> dict[str, str]:
+    """Template context: the version token plus the matching import map."""
+    return {"ASSET_V": asset_version(), "ASSET_IMPORT_MAP": asset_import_map()}

@@ -676,15 +676,35 @@
     </div>
 </dialog>
 
+    {# Shown only if the module graph never boots (a stale/broken file): the
+       room would otherwise look alive but do nothing at all. #}
+    <div class="boot-fallback" id="boot-fallback" hidden role="alert">
+        <span class="boot-fallback-text">
+            کد صفحه به‌درستی بارگذاری نشد. یک‌بار صفحه را با
+            <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd> تازه کنید.
+        </span>
+        <button type="button" class="btn btn-sm btn-primary" id="boot-fallback-reload">بارگذاری مجدد</button>
+    </div>
 {% endblock %}
 
 {% block extra_js %}
+{# Pins every ES-module import to the current asset version, so a reload after
+   an update never mixes new entry code with stale sub-modules. #}
+<script type="importmap">{{ ASSET_IMPORT_MAP|safe }}</script>
 {# Vendored locally — no CDN dependency, works offline/blocked networks. #}
 <script src="{% static 'vendor/livekit-client.umd.min.js' %}"></script>
 <script src="{% static 'vendor/fabric.min.js' %}"></script>
 <script src="{% static 'vendor/pdf.min.js' %}"></script>
 <script>window.PDF_WORKER_URL = "{% static 'vendor/pdf.worker.min.js' %}";</script>
 <script>
+    // A failed module graph is silent by design; surface it instead of leaving
+    // a room that looks ready but does nothing.
+    setTimeout(() => {
+        if (window.__vcBoot) return;
+        const bar = document.getElementById('boot-fallback');
+        if (bar) bar.hidden = false;
+    }, 8000);
+    document.getElementById('boot-fallback-reload')?.addEventListener('click', () => location.reload());
     const s = document.createElement('script');
     s.type = 'module';
     s.src = "{% static 'js/room.js' %}?v={{ ASSET_V }}";

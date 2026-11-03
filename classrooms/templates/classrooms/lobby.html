@@ -192,5 +192,6 @@
 
 {% endblock %}
 {% block extra_js %}
+<script type="importmap">{{ ASSET_IMPORT_MAP|safe }}</script>
 <script type="module" src="{% static 'js/lobby.js' %}?v={{ ASSET_V }}"></script>
 {% endblock %}

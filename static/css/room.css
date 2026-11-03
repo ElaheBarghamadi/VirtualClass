@@ -1760,3 +1760,57 @@ body.class-is-over .room-body { filter: grayscale(.55) blur(1px); pointer-events
     .dt-card { inset-inline: .6rem; width: auto; inset-block-end: 5.2rem; }
 }
 @media (prefers-reduced-motion: reduce) { .dt-card.is-in { animation: none; } }
+
+/* ---------------------------------------------------------------------------
+   Boot fallback
+   The room is a module graph: if it never boots, the shell still looks
+   interactive while nothing works. This strip says so plainly and offers the
+   one action that fixes it (a hard reload).
+--------------------------------------------------------------------------- */
+.boot-fallback {
+    position: fixed;
+    bottom: calc(var(--bar-space, 96px) + 18px);
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 90;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    width: max-content;
+    max-width: min(640px, calc(100vw - 32px));
+    padding: 12px 16px;
+    border-radius: 14px;
+    background: var(--surface, #1b1f2a);
+    color: var(--text, #eef1f7);
+    border: 1px solid color-mix(in srgb, var(--danger, #e5484d) 45%, transparent);
+    box-shadow: 0 18px 40px rgb(0 0 0 / 0.35);
+    font-size: 0.9rem;
+    line-height: 1.8;
+}
+
+.boot-fallback[hidden] { display: none; }
+
+.boot-fallback-text { flex: 1 1 auto; min-width: 0; }
+
+.boot-fallback .btn { flex: 0 0 auto; }
+
+.boot-fallback kbd {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 6px;
+    border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+    background: color-mix(in srgb, currentColor 10%, transparent);
+    font: inherit;
+    font-size: 0.8em;
+    direction: ltr;
+    unicode-bidi: isolate;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+    .boot-fallback:not([hidden]) { animation: boot-fallback-in 260ms ease-out both; }
+}
+
+@keyframes boot-fallback-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
