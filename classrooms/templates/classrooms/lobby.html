@@ -192,5 +192,5 @@
 
 {% endblock %}
 {% block extra_js %}
-<script type="module" src="{% static 'js/lobby.js' %}"></script>
+<script type="module" src="{% static 'js/lobby.js' %}?v={{ ASSET_V }}"></script>
 {% endblock %}

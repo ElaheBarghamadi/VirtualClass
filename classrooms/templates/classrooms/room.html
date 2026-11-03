@@ -2,7 +2,7 @@
 {% load static %}
 {% block title %}{{ classroom.title }}{% endblock %}
 {% block extra_css %}
-<link rel="stylesheet" href="{% static 'css/room.css' %}">
+<link rel="stylesheet" href="{% static 'css/room.css' %}?v={{ ASSET_V }}">
 <style>
   {% if classroom.accent_color %}
   #classroom-root {
@@ -687,7 +687,7 @@
 <script>
     const s = document.createElement('script');
     s.type = 'module';
-    s.src = "{% static 'js/room.js' %}";
+    s.src = "{% static 'js/room.js' %}?v={{ ASSET_V }}";
     document.body.appendChild(s);
 </script>
 {% endblock %}
