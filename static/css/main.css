@@ -1855,3 +1855,269 @@ a.join-role-btn { text-decoration: none; }
 @media (prefers-reduced-motion: reduce) {
     .join-card, .join-password, .join-devices-panel { animation: none; }
 }
+
+/* ---------------------------------------------------------------- */
+/* App dialogs                                                        */
+/*                                                                    */
+/* Every modal in the product (confirm prompts from modal.js, device  */
+/* settings, class settings, per-member permissions, the quiz) is a   */
+/* <dialog class="app-dialog">. None of them had a single rule, so    */
+/* they rendered as the browser's default white box: 2px black border,*/
+/* square corners, no backdrop, an oversized close button and a body  */
+/* that ran off the screen. This block makes them one coherent surface*/
+/* with a fixed head, a scrolling body and a sticky action bar.       */
+/* ---------------------------------------------------------------- */
+dialog.app-dialog {
+    width: min(540px, calc(100vw - 1.4rem));
+    max-width: none;
+    max-height: min(calc(100dvh - 2.2rem), 880px);
+    margin: auto;
+    padding: 0;
+    border: 0;
+    border-radius: 20px;
+    background: var(--surface);
+    color: var(--text);
+    box-shadow:
+        0 0 0 1px color-mix(in srgb, var(--border) 85%, transparent),
+        0 34px 80px -36px rgb(11 15 32 / .55);
+    overflow: hidden;
+}
+dialog.app-dialog:not([open]) { display: none; }
+dialog.app-dialog[open] { display: flex; flex-direction: column; }
+dialog.app-dialog > form {
+    display: flex; flex-direction: column;
+    flex: 1 1 auto; min-height: 0;
+}
+dialog.app-dialog::backdrop {
+    background: color-mix(in srgb, #0b1020 48%, transparent);
+    -webkit-backdrop-filter: blur(5px) saturate(120%);
+    backdrop-filter: blur(5px) saturate(120%);
+}
+
+.app-dialog-head {
+    display: flex; align-items: center; gap: .75rem;
+    flex: none;
+    padding: 1.05rem 1.2rem .75rem;
+}
+.app-dialog-title {
+    margin: 0;
+    font-size: 1.04rem; font-weight: 800;
+    letter-spacing: -.01em; line-height: 1.5;
+}
+.app-dialog-x {
+    margin-inline-start: auto;
+    width: 34px; height: 34px; flex: none;
+    display: grid; place-items: center;
+    padding: 0;
+    border-radius: 11px;
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--muted);
+    cursor: pointer;
+    transition: background .16s var(--ease, ease), color .16s var(--ease, ease), transform .16s var(--ease, ease);
+}
+.app-dialog-x:hover { background: color-mix(in srgb, var(--danger) 10%, var(--surface-2)); color: var(--danger); }
+.app-dialog-x:active { transform: scale(.94); }
+/* the generated dialogs ship a bare <svg><path d="M6 6l12 12…"/></svg>:
+   without stroke it filled as a nearly invisible bow-tie */
+.app-dialog-x svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.app-dialog-x .ic { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+
+.app-dialog-body {
+    flex: 1 1 auto; min-height: 0;
+    padding: 0 1.2rem .8rem;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+}
+.app-dialog-body > :first-child { margin-top: 0; }
+.app-dialog-body p { line-height: 1.85; }
+
+.app-dialog-actions {
+    flex: none;
+    display: flex; align-items: center; gap: .55rem;
+    padding: .8rem 1.2rem calc(.8rem + env(safe-area-inset-bottom, 0px));
+    border-top: 1px solid var(--border);
+    background: color-mix(in srgb, var(--surface-2) 55%, var(--surface));
+}
+.app-dialog-actions .btn { flex: none; }
+
+/* -- switch rows inside a dialog: a real toggle, not a raw checkbox -- */
+dialog.app-dialog .switch-row {
+    display: flex; align-items: center; gap: .8rem;
+    padding: .6rem 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
+    font-size: .9rem; line-height: 1.6; cursor: pointer;
+}
+dialog.app-dialog .switch-row:last-of-type { border-bottom: 0; }
+dialog.app-dialog .switch-row input[type="checkbox"] {
+    order: 2;
+    appearance: none; -webkit-appearance: none;
+    width: 38px; height: 22px; flex: none;
+    /* the zero-specificity base input rule still hands a checkbox its
+       padding and min-height — reset them or the pill renders as a circle */
+    padding: 0; min-width: 0; min-height: 0;
+    margin: 0; margin-inline-start: auto;
+    position: relative; cursor: pointer;
+    border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
+    background: var(--surface-3);
+    accent-color: var(--primary);
+    transition: background .18s var(--ease, ease), border-color .18s var(--ease, ease);
+}
+dialog.app-dialog .switch-row input[type="checkbox"]::after {
+    content: "";
+    position: absolute; top: 2px; inset-inline-start: 2px;
+    width: 16px; height: 16px; border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 1px 3px rgb(9 12 28 / .3);
+    transition: transform .2s cubic-bezier(.16, 1, .3, 1);
+}
+dialog.app-dialog .switch-row input[type="checkbox"]:checked {
+    background: var(--primary);
+    border-color: color-mix(in srgb, var(--primary) 80%, #000);
+}
+dialog.app-dialog .switch-row input[type="checkbox"]:checked::after { transform: translateX(-15px); }
+:dir(ltr) dialog.app-dialog .switch-row input[type="checkbox"]:checked::after { transform: translateX(15px); }
+dialog.app-dialog .switch-row input[type="checkbox"]:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+}
+dialog.app-dialog .switch-row .switch-text,
+dialog.app-dialog .switch-row > span { flex: 1 1 auto; text-align: start; }
+dialog.app-dialog .switch-row:has(input:checked) { color: var(--text); }
+dialog.app-dialog .switch-row:has(input:not(:checked)) { color: var(--muted); }
+
+/* -- simple lists inside a dialog (shortcuts, help) -- */
+dialog.app-dialog ul,
+dialog.app-dialog ol {
+    margin: .35rem 0 .2rem;
+    padding-inline-start: .2rem;
+    text-align: start;
+    display: grid;
+    gap: .3rem;
+    /* markers hug the text instead of floating at the far edge of the row */
+    list-style-position: inside;
+}
+dialog.app-dialog li { line-height: 1.9; }
+dialog.app-dialog li::marker { color: var(--muted); }
+dialog.app-dialog kbd {
+    display: inline-block;
+    min-width: 1.5em;
+    margin-inline-end: .5em;
+    padding: .08em .4em;
+    border-radius: 7px;
+    border: 1px solid var(--border);
+    border-bottom-width: 2px;
+    background: var(--surface-2);
+    color: var(--text);
+    font: inherit; font-size: .78em; font-weight: 700;
+    line-height: 1.6;
+    text-align: center;
+}
+
+/* -- form fields (device settings) -- */
+dialog.app-dialog .field { margin: 0 0 .85rem; }
+dialog.app-dialog .field > label {
+    display: block; margin-bottom: .35rem;
+    font-size: .82rem; font-weight: 700; color: var(--muted);
+}
+dialog.app-dialog .field select,
+dialog.app-dialog .field input { width: 100%; }
+dialog.app-dialog .field-help { margin: .2rem 0 0; font-size: .82rem; color: var(--muted); min-height: 1.4em; }
+
+/* -- per-member permissions -- */
+.perms-hint { margin: 0 0 .55rem; font-size: .84rem; line-height: 1.8; }
+.perms-policy-note {
+    padding: .55rem .75rem;
+    border-radius: 12px;
+    border: 1px solid color-mix(in srgb, var(--primary) 22%, transparent);
+    background: color-mix(in srgb, var(--primary) 7%, var(--surface));
+    color: var(--text);
+    font-size: .82rem;
+}
+.perms-list { display: grid; }
+.perms-role { display: grid; gap: .35rem; margin-top: .9rem; font-size: .84rem; font-weight: 700; color: var(--muted); }
+.perms-role select { width: 100%; }
+.perms-actions {
+    display: flex; flex-wrap: wrap; align-items: center; gap: .5rem;
+    margin-top: 1rem; padding-top: .85rem;
+    border-top: 1px dashed color-mix(in srgb, var(--border) 90%, transparent);
+}
+.perms-actions .btn-danger { margin-inline-start: auto; }
+
+/* -- quiz dialog -- */
+.quiz-progress-line {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: .6rem; margin: 0 0 .45rem;
+    font-size: .84rem; font-weight: 700; color: var(--muted);
+}
+.quiz-progress-track {
+    height: 6px; border-radius: 999px;
+    background: var(--surface-3); overflow: hidden;
+}
+.quiz-progress-fill {
+    height: 100%; width: 0; border-radius: inherit;
+    background: var(--gradient-brand, var(--primary));
+    transition: width .35s var(--ease, ease);
+}
+.quiz-question-text {
+    margin: 1.05rem 0 .75rem;
+    font-size: 1.02rem; font-weight: 700; line-height: 1.9;
+}
+.quiz-options { display: grid; gap: .5rem; }
+.quiz-option {
+    width: 100%;
+    padding: .8rem .9rem;
+    text-align: start;
+    font: inherit; font-size: .92rem; line-height: 1.7;
+    color: var(--text);
+    background: var(--surface-2);
+    border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
+    border-radius: 13px;
+    cursor: pointer;
+    transition: background .16s var(--ease, ease), border-color .16s var(--ease, ease), transform .16s var(--ease, ease);
+}
+.quiz-option:hover { background: color-mix(in srgb, var(--primary) 8%, var(--surface-2)); border-color: color-mix(in srgb, var(--primary) 35%, transparent); }
+.quiz-option:active { transform: scale(.99); }
+.quiz-option.selected {
+    background: color-mix(in srgb, var(--primary) 14%, var(--surface));
+    border-color: var(--primary);
+    color: color-mix(in srgb, var(--primary) 85%, var(--text));
+    font-weight: 700;
+}
+.quiz-nav { display: flex; gap: .5rem; margin-top: .9rem; }
+.quiz-nav .btn { flex: 1 1 0; justify-content: center; }
+.quiz-hint { margin: .7rem 0 0; font-size: .8rem; }
+.quiz-results { margin-top: .9rem; padding: .8rem .9rem; border-radius: 14px; background: var(--surface-2); }
+.quiz-results ol, .quiz-results ul { margin: 0; padding: 0; list-style: none; display: grid; gap: .4rem; }
+.quiz-results li {
+    display: flex; align-items: center; gap: .55rem;
+    padding: .4rem .55rem; border-radius: 10px;
+    background: var(--surface); font-size: .88rem;
+}
+.quiz-results li strong { margin-inline-start: auto; color: var(--primary); }
+.quiz-rank { color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* -- phones: dialogs become bottom-anchored sheets -- */
+@media (max-width: 560px) {
+    dialog.app-dialog {
+        width: 100vw;
+        max-width: 100vw;
+        max-height: 88dvh;
+        margin: auto auto 0;
+        border-end-start-radius: 0;
+        border-end-end-radius: 0;
+        border-start-start-radius: 20px;
+        border-start-end-radius: 20px;
+    }
+    .app-dialog-head { padding: .95rem 1rem .6rem; }
+    .app-dialog-body { padding: 0 1rem .7rem; }
+    .app-dialog-actions { padding: .75rem 1rem calc(.75rem + env(safe-area-inset-bottom, 0px)); }
+    .app-dialog-actions .btn { flex: 1 1 0; justify-content: center; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    dialog.app-dialog .switch-row input[type="checkbox"]::after,
+    .quiz-progress-fill { transition: none; }
+}
