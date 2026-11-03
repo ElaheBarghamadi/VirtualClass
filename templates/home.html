@@ -14,6 +14,11 @@
         <symbol id="f-quiz" viewBox="0 0 24 24"><path d="M8 3.6h8a1.8 1.8 0 0 1 1.8 1.8v14.4a1.4 1.4 0 0 1-1.4 1.4H7.6a1.4 1.4 0 0 1-1.4-1.4V5.4A1.8 1.8 0 0 1 8 3.6z"/><path d="m8.8 12.2 2 2 4-4.2"/></symbol>
         <symbol id="f-file" viewBox="0 0 24 24"><path d="M13.4 2.8H7a2 2 0 0 0-2 2v14.4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8.4z"/><path d="M13.4 2.8v5.6h5.6"/><path d="M8.4 13.4h7.2M8.4 17h4.6"/></symbol>
         <symbol id="f-check" viewBox="0 0 24 24"><path d="M4.5 12.5 9.5 17.5 19.5 6.5"/></symbol>
+        <symbol id="f-heart" viewBox="0 0 24 24"><path d="M12 20.3s-7.6-4.5-7.6-9.6A4.4 4.4 0 0 1 12 7.9a4.4 4.4 0 0 1 7.6 2.8c0 5.1-7.6 9.6-7.6 9.6z"/></symbol>
+        <symbol id="f-report" viewBox="0 0 24 24"><rect x="4" y="3.2" width="16" height="17.6" rx="2.2"/><path d="M8.2 8.6h7.6M8.2 12.4h7.6M8.2 16.2h4.4"/></symbol>
+        <symbol id="c-yes" viewBox="0 0 24 24"><path d="M4.5 12.8 9.6 17.8 19.6 6.2"/></symbol>
+        <symbol id="c-no" viewBox="0 0 24 24"><path d="M6.4 6.4l11.2 11.2M17.6 6.4L6.4 17.6"/></symbol>
+        <symbol id="c-part" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
         <symbol id="f-shield" viewBox="0 0 24 24"><path d="M12 2.8 4.6 6v5.8c0 4.4 3 8.1 7.4 9.4 4.4-1.3 7.4-5 7.4-9.4V6z"/><path d="m9 12 2.2 2.2L15.4 10"/></symbol>
     </defs>
 </svg>
@@ -149,7 +154,116 @@
             <strong>نقش و دسترسی دقیق</strong>
             <span>میکروفون، دوربین، گفتگو و تخته را برای هر نفر جدا روشن یا خاموش کنید.</span>
         </div>
+        <div class="feature">
+            <span class="feature-icon"><svg><use href="#f-heart"/></svg></span>
+            <strong>واکنش برق‌آسا</strong>
+            <span>دست بلند کردن، تأیید و «متوجه نشدم» با یک کلیک — بی‌صدا و بدون وقفه در تدریس.</span>
+        </div>
+        <div class="feature">
+            <span class="feature-icon"><svg><use href="#f-report"/></svg></span>
+            <strong>گزارش حضور با خروجی CSV</strong>
+            <span>ورود و خروج هر نفر خودکار ثبت می‌شود؛ گزارش هر جلسه را در اکسل باز کنید.</span>
+        </div>
     </div>
+</section>
+
+<section class="landing-sec" aria-labelledby="cmp-title">
+    <div class="sec-head">
+        <span class="sec-eyebrow">مقایسه</span>
+        <h2 id="cmp-title">چرا کلاس آنلاین، جای بقیه را می‌گیرد</h2>
+        <p class="sec-lead">امکاناتی که در ابزارهای بزرگ، پشتِ پلن پولی یا نصب نرم‌افزار قفل شده‌اند — اینجا از روز اول باز است.</p>
+    </div>
+    <div class="cmp-wrap">
+        <table class="cmp-table">
+            <caption class="sr-only">مقایسهٔ امکانات کلاس آنلاین با زوم، گوگل میت و بیگ‌بلوباتن</caption>
+            <thead>
+                <tr>
+                    <th scope="col">امکانات</th>
+                    <th scope="col" class="cmp-us">کلاس آنلاین</th>
+                    <th scope="col">Zoom</th>
+                    <th scope="col">Google Meet</th>
+                    <th scope="col">BigBlueButton</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <th scope="row">لینک دائمی کلاس (بدون جلسهٔ جدید هر بار)</th>
+                    <td class="cmp-us"><span class="cmp-yes" title="دارد"><svg><use href="#c-yes"/></svg><span class="sr-only">دارد</span></span></td>
+                    <td><span class="cmp-no" title="نیاز به ساخت جلسهٔ جدید"><svg><use href="#c-no"/></svg><span class="sr-only">ندارد</span></span></td>
+                    <td><span class="cmp-no" title="به‌صورت پیش‌فرض ندارد"><svg><use href="#c-no"/></svg><span class="sr-only">ندارد</span></span></td>
+                    <td><span class="cmp-part" title="بستگی به نصب شما دارد"><svg><use href="#c-part"/></svg><span class="sr-only">بخشی</span></span></td>
+                </tr>
+                <tr>
+                    <th scope="row">بدون محدودیت زمانی جلسه در پلن رایگان</th>
+                    <td class="cmp-us"><span class="cmp-yes"><svg><use href="#c-yes"/></svg><span class="sr-only">دارد</span></span></td>
+                    <td><span class="cmp-no" title="پلن رایگان ۴۰ دقیقه"><svg><use href="#c-no"/></svg><span class="sr-only">ندارد</span></span></td>
+                    <td><span class="cmp-no" title="پلن رایگان ۶۰ دقیقه"><svg><use href="#c-no"/></svg><span class="sr-only">ندارد</span></span></td>
+                    <td><span class="cmp-part"><svg><use href="#c-part"/></svg><span class="sr-only">بخشی</span></span></td>
+                </tr>
+                <tr>
+                    <th scope="row">ورود مهمان بدون حساب کاربری</th>
+                    <td class="cmp-us"><span class="cmp-yes"><svg><use href="#c-yes"/></svg><span class="sr-only">دارد</span></span></td>
+                    <td><span class="cmp-yes"><svg><use href="#c-yes"/></svg><span class="sr-only">دارد</span></span></td>
+                    <td><span class="cmp-part"><svg><use href="#c-part"/></svg><span class="sr-only">بخشی</span></span></td>
+                    <td><span class="cmp-yes"><svg><use href="#c-yes"/></svg><span class="sr-only">دارد</span></span></td>
+                </tr>
+                <tr>
+                    <th scope="row">اتاق انتظار و تأیید تک‌تک افراد</th>
+                    <td class="cmp-us"><span class="cmp-yes"><svg><use href="#c-yes"/></svg><span class="sr-only">دارد</span></span></td>
+                    <td><span class="cmp-yes"><svg><use href="#c-yes"/></svg><span class="sr-only">دارد</span></span></td>
+                    <td><span class="cmp-no"><svg><use href="#c-no"/></svg><span class="sr-only">ندارد</span></span></td>
+                    <td><span class="cmp-yes"><svg><use href="#c-yes"/></svg><span class="sr-only">دارد</span></span></td>
+                </tr>
+                <tr>
+                    <th scope="row">مجوز جدا برای میکروفون، دوربین، گفتگو و تختهٔ هر دانش‌آموز</th>
+                    <td class="cmp-us"><span class="cmp-yes"><svg><use href="#c-yes"/></svg><span class="sr-only">دارد</span></span></td>
+                    <td><span class="cmp-part"><svg><use href="#c-part"/></svg><span class="sr-only">بخشی</span></span></td>
+                    <td><span class="cmp-part"><svg><use href="#c-part"/></svg><span class="sr-only">بخشی</span></span></td>
+                    <td><span class="cmp-yes"><svg><use href="#c-yes"/></svg><span class="sr-only">دارد</span></span></td>
+                </tr>
+                <tr>
+                    <th scope="row">واکنش لحظه‌ای (قلب، دست، «متوجه نشدم»)</th>
+                    <td class="cmp-us"><span class="cmp-yes"><svg><use href="#c-yes"/></svg><span class="sr-only">دارد</span></span></td>
+                    <td><span class="cmp-yes"><svg><use href="#c-yes"/></svg><span class="sr-only">دارد</span></span></td>
+                    <td><span class="cmp-yes"><svg><use href="#c-yes"/></svg><span class="sr-only">دارد</span></span></td>
+                    <td><span class="cmp-part"><svg><use href="#c-part"/></svg><span class="sr-only">بخشی</span></span></td>
+                </tr>
+                <tr>
+                    <th scope="row">آزمون و تکلیف داخل همان اتاق درس</th>
+                    <td class="cmp-us"><span class="cmp-yes"><svg><use href="#c-yes"/></svg><span class="sr-only">دارد</span></span></td>
+                    <td><span class="cmp-no"><svg><use href="#c-no"/></svg><span class="sr-only">ندارد</span></span></td>
+                    <td><span class="cmp-no"><svg><use href="#c-no"/></svg><span class="sr-only">ندارد</span></span></td>
+                    <td><span class="cmp-part"><svg><use href="#c-part"/></svg><span class="sr-only">بخشی</span></span></td>
+                </tr>
+                <tr>
+                    <th scope="row">گزارش حضور هر جلسه با خروجی CSV</th>
+                    <td class="cmp-us"><span class="cmp-yes"><svg><use href="#c-yes"/></svg><span class="sr-only">دارد</span></span></td>
+                    <td><span class="cmp-part"><svg><use href="#c-part"/></svg><span class="sr-only">بخشی</span></span></td>
+                    <td><span class="cmp-no"><svg><use href="#c-no"/></svg><span class="sr-only">ندارد</span></span></td>
+                    <td><span class="cmp-yes"><svg><use href="#c-yes"/></svg><span class="sr-only">دارد</span></span></td>
+                </tr>
+                <tr>
+                    <th scope="row">رابط فارسی راست‌به‌چپ و تم روشن/تاریک</th>
+                    <td class="cmp-us"><span class="cmp-yes"><svg><use href="#c-yes"/></svg><span class="sr-only">دارد</span></span></td>
+                    <td><span class="cmp-part"><svg><use href="#c-part"/></svg><span class="sr-only">بخشی</span></span></td>
+                    <td><span class="cmp-part"><svg><use href="#c-part"/></svg><span class="sr-only">بخشی</span></span></td>
+                    <td><span class="cmp-part"><svg><use href="#c-part"/></svg><span class="sr-only">بخشی</span></span></td>
+                </tr>
+                <tr>
+                    <th scope="row">بدون نصب نرم‌افزار، مستقیم در مرورگر</th>
+                    <td class="cmp-us"><span class="cmp-yes"><svg><use href="#c-yes"/></svg><span class="sr-only">دارد</span></span></td>
+                    <td><span class="cmp-part"><svg><use href="#c-part"/></svg><span class="sr-only">بخشی</span></span></td>
+                    <td><span class="cmp-yes"><svg><use href="#c-yes"/></svg><span class="sr-only">دارد</span></span></td>
+                    <td><span class="cmp-yes"><svg><use href="#c-yes"/></svg><span class="sr-only">دارد</span></span></td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+    <p class="cmp-hint">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h16"/><path d="m8 8-4 4 4 4"/><path d="m16 8 4 4-4 4"/></svg>
+        برای دیدن همهٔ ستون‌ها جدول را کنار بکشید.
+    </p>
+    <p class="cmp-note">مقایسه بر پایهٔ امکانات پلن‌های رایگان و عمومی این سرویس‌ها در زمان نگارش است و ممکن است با تغییرات آن‌ها متفاوت شود.</p>
 </section>
 
 <section class="landing-sec" aria-labelledby="roles-title">

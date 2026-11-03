@@ -534,7 +534,7 @@ function handleEvent(data) {
         case 'lower_hand':
             presence.upsert(data.participant);
             if (data.type === 'raise_hand' && data.participant.identity !== IDENTITY) {
-                toast(`✋ ${data.participant.name} دست خود را بالا برد.`, 'info', 2500);
+                toast(`${data.participant.name} دست خود را بالا برد.`, 'info', 2500);
             }
             break;
         case 'media_state':
@@ -733,6 +733,9 @@ function handleEvent(data) {
             break;
         case 'rtc_signal':
             Media.handleSignal(data);
+            break;
+        case 'reaction':
+            showReaction(data.reaction, data.name);
             break;
         case 'pong':
             if (presence._pingAt) {
@@ -1230,6 +1233,8 @@ function showShortcuts() {
             <li><kbd>C</kbd> باز/بستن گفتگو</li>
             <li><kbd>P</kbd> باز/بستن شرکت‌کنندگان</li>
             <li><kbd>S</kbd> شروع/پایان اشتراک صفحه</li>
+            <li><kbd>R</kbd> ارسال واکنش سریع (قلب)</li>
+            <li><kbd>Esc</kbd> بستن سینی واکنش‌ها و پنجره‌ها</li>
         </ul>
         <p class="muted small">هنگام تایپ در فیلدهای متنی، میان‌برها غیرفعال‌اند.</p>`);
 }
@@ -1238,8 +1243,8 @@ function showHelp() {
     infoDialog('راهنمای کلاس', `
         <ul class="shortcut-list">
             <li>از نوار پایین میکروفون و دوربین را کنترل کنید.</li>
-            <li>✋ با «دست بالا» از میزبان اجازهٔ صحبت بگیرید.</li>
-            <li>▦ چیدمان صحنه را از دکمه‌های بالای ویدیوها تغییر دهید؛ انتخاب شما ذخیره می‌شود.</li>
+            <li>با دکمهٔ «دست بالا» از میزبان اجازهٔ صحبت بگیرید؛ برای واکنش سریع، دکمهٔ قلب کنار آن را بزنید.</li>
+            <li>چیدمان صحنه را از دکمه‌های بالای ویدیوها تغییر دهید؛ انتخاب شما ذخیره می‌شود.</li>
             <li>⋯ منوی «بیشتر»: دستگاه‌ها، پوسته، تنظیمات و گزارش مشکل.</li>
             <li>دسترسی‌ها (میکروفون، دوربین، تخته، گفتگو) توسط میزبان مدیریت می‌شود.</li>
         </ul>`);
@@ -1368,6 +1373,95 @@ function initDevicesDialog() {
 // ---------------------------------------------------------------------------
 // Keyboard shortcuts — disabled while typing
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Quick reactions — ephemeral, never stored, animated for everyone
+// ---------------------------------------------------------------------------
+const REACTION_ICONS = {
+    heart: '#i-heart', clap: '#i-clap', thumbs: '#i-thumbs',
+    star: '#i-star', question: '#i-question',
+};
+
+function showReaction(key, name) {
+    const icon = REACTION_ICONS[key];
+    const layer = document.getElementById('reaction-layer');
+    if (!icon || !layer) return;
+    if (document.documentElement.getAttribute('data-motion') === 'reduced') return;
+
+    const bubble = document.createElement('span');
+    bubble.className = `reaction-bubble reaction-${key}`;
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+    use.setAttribute('href', icon);
+    svg.appendChild(use);
+    bubble.appendChild(svg);
+
+    // spread the bubbles across the stage instead of stacking on one spot
+    bubble.style.setProperty('--rx', `${8 + Math.random() * 84}%`);
+    bubble.style.setProperty('--rd', `${2.2 + Math.random() * 1.1}s`);
+    bubble.style.setProperty('--rs', `${.85 + Math.random() * .5}`);
+    if (name) bubble.title = name;
+
+    layer.appendChild(bubble);
+    bubble.addEventListener('animationend', () => bubble.remove(), { once: true });
+}
+
+function initReactions() {
+    const btn = document.getElementById('btn-reactions');
+    const tray = document.getElementById('reaction-tray');
+    if (!btn || !tray) return;
+
+    // The control bar scrolls its own overflow, which would clip an anchored
+    // popover — so the tray lives on <body> and is positioned against the
+    // button's live rect every time it opens (and on resize while open).
+    if (tray.parentElement !== document.body) document.body.appendChild(tray);
+
+    const place = () => {
+        const r = btn.getBoundingClientRect();
+        const half = (tray.offsetWidth || 210) / 2;
+        const margin = 8;
+        let left = r.left + r.width / 2;
+        left = Math.max(half + margin, Math.min(left, window.innerWidth - half - margin));
+        tray.style.left = `${Math.round(left)}px`;
+        tray.style.top = `${Math.round(r.top - 8)}px`;
+    };
+
+    const close = () => {
+        tray.classList.add('hidden');
+        btn.setAttribute('aria-expanded', 'false');
+    };
+    const open = () => {
+        tray.classList.remove('hidden');
+        btn.setAttribute('aria-expanded', 'true');
+        place();
+    };
+
+    btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        tray.classList.contains('hidden') ? open() : close();
+    });
+
+    const reposition = () => {
+        if (!tray.classList.contains('hidden')) place();
+    };
+    window.addEventListener('resize', reposition);
+    window.addEventListener('scroll', close, true);
+
+    tray.querySelectorAll('[data-reaction]').forEach((item) => {
+        item.addEventListener('click', () => {
+            presence.send({ action: 'reaction', reaction: item.dataset.reaction });
+            close();
+        });
+    });
+
+    document.addEventListener('click', (e) => {
+        if (!tray.classList.contains('hidden') && !tray.contains(e.target) && e.target !== btn) close();
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') close();
+    });
+}
+
 function initShortcuts() {
     document.addEventListener('keydown', (e) => {
         if (e.ctrlKey || e.metaKey || e.altKey) return;
@@ -1379,6 +1473,7 @@ function initShortcuts() {
         else if (key === 'c') { e.preventDefault(); document.getElementById('btn-chat')?.click(); }
         else if (key === 'p') { e.preventDefault(); document.getElementById('btn-people')?.click(); }
         else if (key === 's') { e.preventDefault(); Media.toggleScreenShare(); }
+        else if (key === 'r') { e.preventDefault(); presence.send({ action: 'reaction', reaction: 'heart' }); }
     });
 }
 
@@ -1771,6 +1866,7 @@ initFullscreen();
 initMoreMenu();
 initDevicesDialog();
 initShortcuts();
+initReactions();
 initFiles();
 initRosterTools();
 initPermsDialog();

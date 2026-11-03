@@ -34,6 +34,9 @@ import logging
 from django.conf import settings
 from channels.db import database_sync_to_async
 from .models import Classroom, ClassroomMember
+
+#: The only reactions a client may broadcast (validated server-side).
+REACTION_KEYS = frozenset({"heart", "clap", "thumbs", "star", "question"})
 from .ws_security import RateLimiter, SafeJsonWebsocketConsumer, ws_origin_allowed
 
 RTC_SIGNAL_MAX_BYTES = 16 * 1024  # hard cap on relayed SDP/ICE envelopes
@@ -145,10 +148,27 @@ class ClassroomConsumer(SafeJsonWebsocketConsumer):
                 await self.send_json({"type": "pong"})
             return
 
-        if action in ("raise_hand", "media_state", "rtc_signal", "whiteboard_state"):
+        if action in ("raise_hand", "media_state", "rtc_signal", "whiteboard_state", "reaction"):
             if not await self._member_active_now():
                 await self.close(code=4403)
                 return
+
+        if action == "reaction":
+            # Ephemeral by design: reactions are never stored, they only
+            # animate everyone's screen for a couple of seconds.
+            key = content.get("reaction")
+            if key not in REACTION_KEYS:
+                return
+            await self.channel_layer.group_send(
+                self.group_name,
+                {
+                    "type": "presence.reaction",
+                    "reaction": key,
+                    "member_id": self.member.id,
+                    "name": getattr(self.member, "participant_name", ""),
+                },
+            )
+            return
 
         if action == "raise_hand":
             perms = await self._effective_permissions()
@@ -227,6 +247,14 @@ class ClassroomConsumer(SafeJsonWebsocketConsumer):
 
     async def presence_user_left(self, event: dict) -> None:
         await self.send_json({"type": "user_left", "participant": event["participant"]})
+
+    async def presence_reaction(self, event: dict) -> None:
+        await self.send_json({
+            "type": "reaction",
+            "reaction": event["reaction"],
+            "member_id": event["member_id"],
+            "name": event.get("name", ""),
+        })
 
     async def presence_media_state(self, event: dict) -> None:
         await self.send_json({"type": "media_state", "participant": event["participant"]})

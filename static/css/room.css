@@ -1319,3 +1319,80 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
     .stage-empty .se-ring { width: 100px; height: 100px; }
     .se-hints li { font-size: .7rem; padding: .24rem .6rem; }
 }
+
+/* ==========================================================================
+   Quick reactions — tray above the dock + floating bubbles
+   ========================================================================== */
+.reaction-holder { position: relative; display: inline-flex; }
+
+/* Rendered fixed + detached from the dock (see initReactions): the control
+   bar clips its overflow for horizontal scrolling, so a popover anchored
+   inside it would be cut off. `translate` (not `transform`) is used for the
+   anchor offset so the entrance keyframes stay free to animate transform. */
+.reaction-tray {
+    position: fixed; top: 0; left: 0;
+    translate: -50% -100%;
+    display: flex; align-items: center; gap: .15rem;
+    padding: .3rem;
+    background: color-mix(in srgb, var(--room-surface) 82%, transparent);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    backdrop-filter: blur(20px) saturate(180%);
+    border: 1px solid var(--glass-line);
+    border-radius: var(--radius-pill);
+    box-shadow: var(--shadow);
+    z-index: 70;
+    animation: reaction-tray-in .22s var(--ease-spring) both;
+}
+.reaction-tray.hidden { display: none; }
+@keyframes reaction-tray-in {
+    from { opacity: 0; transform: translateY(6px) scale(.94); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.reaction-tray button {
+    width: 38px; height: 38px; border-radius: 50%;
+    display: inline-flex; align-items: center; justify-content: center;
+    border: 0; background: transparent; color: var(--room-muted); cursor: pointer;
+    transition: transform var(--speed) var(--ease-spring), background var(--speed) var(--ease),
+                color var(--speed) var(--ease);
+}
+.reaction-tray button svg {
+    width: 20px; height: 20px; fill: none; stroke: currentColor;
+    stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
+}
+.reaction-tray button:hover { transform: translateY(-3px) scale(1.12); background: var(--primary-soft); }
+.reaction-tray button[data-reaction="heart"]:hover { color: #e11d48; }
+.reaction-tray button[data-reaction="clap"]:hover { color: #f59e0b; }
+.reaction-tray button[data-reaction="thumbs"]:hover { color: #0ea5e9; }
+.reaction-tray button[data-reaction="star"]:hover { color: #eab308; }
+.reaction-tray button[data-reaction="question"]:hover { color: var(--primary); }
+
+.reaction-layer {
+    position: fixed; inset: auto 0 var(--bar-h, 84px) 0; height: 55vh;
+    pointer-events: none; z-index: 45; overflow: hidden;
+}
+.reaction-bubble {
+    position: absolute; bottom: 0; left: var(--rx, 50%);
+    width: 44px; height: 44px; border-radius: 50%;
+    display: grid; place-items: center;
+    background: color-mix(in srgb, var(--room-surface) 84%, transparent);
+    -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+    border: 1px solid var(--glass-line);
+    box-shadow: var(--shadow);
+    color: var(--primary);
+    animation: reaction-float var(--rd, 2.6s) var(--ease) forwards;
+    will-change: transform, opacity;
+}
+.reaction-bubble svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.reaction-heart { color: #e11d48; }
+.reaction-clap { color: #f59e0b; }
+.reaction-thumbs { color: #0ea5e9; }
+.reaction-star { color: #eab308; }
+.reaction-question { color: var(--primary); }
+@keyframes reaction-float {
+    0%   { opacity: 0; transform: translate(-50%, 0) scale(.6); }
+    12%  { opacity: 1; transform: translate(-50%, -14px) scale(var(--rs, 1)); }
+    100% { opacity: 0; transform: translate(-50%, -46vh) scale(calc(var(--rs, 1) * 1.15)); }
+}
+@media (prefers-reduced-motion: reduce) {
+    .reaction-bubble { animation: none; display: none; }
+}

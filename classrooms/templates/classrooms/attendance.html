@@ -10,7 +10,13 @@
             {% if session.ended_at %}· پایان: {{ session.ended_at|date:"Y/m/d H:i" }}{% endif %})
         </p>
     </div>
-    <a class="btn btn-ghost" href="{% url 'classrooms:detail' classroom.room_code %}">بازگشت</a>
+    <div class="page-head-actions">
+        <a class="btn btn-primary" href="?format=csv">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5v11M7.5 10.5 12 15l4.5-4.5"/><path d="M4.5 17.5v1.6a1.4 1.4 0 0 0 1.4 1.4h12.2a1.4 1.4 0 0 0 1.4-1.4v-1.6"/></svg>
+            خروجی CSV
+        </a>
+        <a class="btn btn-ghost" href="{% url 'classrooms:detail' classroom.room_code %}">بازگشت</a>
+    </div>
 </div>
 
 <div class="card">

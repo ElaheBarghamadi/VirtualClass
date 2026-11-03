@@ -144,6 +144,63 @@ class RaiseHandTests(TransactionTestCase):
         self.assertIsNone(member.hand_raised_at)
 
 
+class ReactionTests(TransactionTestCase):
+    """Quick reactions are ephemeral: validated, broadcast, never stored."""
+
+    def test_reaction_broadcast_to_room(self):
+        owner = User.objects.create_user(username="rx_owner", password="x")
+        student = User.objects.create_user(username="rx_student", password="x")
+        classroom = create_classroom(owner, title="Reactions")
+        join_classroom(classroom, student)
+        student_member_id = classroom.members.get(user=student).id
+
+        async def scenario():
+            owner_ws = WebsocketCommunicator(
+                app_with_user(owner, classroom_routes), f"/ws/classroom/{classroom.room_code}/"
+            )
+            await owner_ws.connect()
+            await owner_ws.receive_json_from()  # snapshot
+            await owner_ws.receive_json_from()  # own join
+
+            student_ws = WebsocketCommunicator(
+                app_with_user(student, classroom_routes), f"/ws/classroom/{classroom.room_code}/"
+            )
+            await student_ws.connect()
+            await owner_ws.receive_json_from()  # student joined
+
+            await student_ws.send_json_to({"action": "reaction", "reaction": "heart"})
+            msg = await owner_ws.receive_json_from()
+            assert msg["type"] == "reaction"
+            assert msg["reaction"] == "heart"
+            assert msg["member_id"] == student_member_id
+
+            # An unknown key must be silently dropped, not broadcast: the next
+            # thing the owner sees is the following valid reaction.
+            await student_ws.send_json_to({"action": "reaction", "reaction": "banana"})
+            await student_ws.send_json_to({"action": "reaction", "reaction": "star"})
+            msg = await owner_ws.receive_json_from()
+            assert msg["type"] == "reaction" and msg["reaction"] == "star", msg
+
+            await student_ws.disconnect()
+            await owner_ws.disconnect()
+
+        async_to_sync(scenario)()
+
+    def test_reaction_requires_membership(self):
+        owner = User.objects.create_user(username="rx_owner2", password="x")
+        stranger = User.objects.create_user(username="rx_stranger", password="x")
+        classroom = create_classroom(owner, title="NoReact")
+
+        async def scenario():
+            ws = WebsocketCommunicator(
+                app_with_user(stranger, classroom_routes), f"/ws/classroom/{classroom.room_code}/"
+            )
+            connected, _ = await ws.connect()
+            assert not connected
+
+        async_to_sync(scenario)()
+
+
 class ChatConsumerTests(TransactionTestCase):
     def test_send_message_persists_and_broadcasts(self):
         owner = User.objects.create_user(username="c_owner", password="x")

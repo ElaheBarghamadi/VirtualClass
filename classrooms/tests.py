@@ -1,10 +1,20 @@
 """Tests for classrooms: HTTP flows, models, permissions and API."""
+from datetime import timedelta
+from urllib.parse import urlencode
+
 from django.contrib.auth import get_user_model
 from django.test import TestCase
+from django.utils import timezone
 from django.urls import reverse
 from rest_framework.test import APIClient
 
-from .models import Classroom, ClassroomMember, SharedFile
+from .models import (
+    AttendanceRecord,
+    Classroom,
+    ClassroomMember,
+    ClassroomSession,
+    SharedFile,
+)
 from .permissions import Role, defaults_for_role
 from .services import ClassroomFull, create_classroom, join_classroom, WrongClassroomPassword
 
@@ -668,3 +678,49 @@ class ClassroomCreateSettingsTests(TestCase):
         )
         self.assertEqual(response.status_code, 200)  # form re-rendered
         self.assertFalse(Classroom.objects.filter(title="رنگ بد").exists())
+
+
+class AttendanceExportTests(TestCase):
+    """The post-session report is available as a spreadsheet-friendly CSV."""
+
+    def setUp(self):
+        self.owner = make_user("att_owner")
+        self.student = make_user("att_student")
+        self.classroom = create_classroom(self.owner, title="Export")
+        self.member = join_classroom(self.classroom, self.student)
+        self.session = ClassroomSession.objects.create(
+            classroom=self.classroom, host=self.owner, title="S1"
+        )
+        now = timezone.now()
+        AttendanceRecord.objects.create(
+            session=self.session, member=self.member, user=self.student,
+            joined_at=now - timedelta(minutes=12), left_at=now,
+        )
+
+    def _url(self, **params):
+        url = reverse(
+            "room:attendance",
+            kwargs={"room_code": self.classroom.room_code, "session_id": self.session.id},
+        )
+        return url + ("?" + urlencode(params) if params else "")
+
+    def test_csv_export(self):
+        self.client.force_login(self.owner)
+        response = self.client.get(self._url(format="csv"))
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("text/csv", response["Content-Type"])
+        self.assertIn("attachment;", response["Content-Disposition"])
+        body = response.content.decode("utf-8-sig")
+        self.assertIn("تعداد ورود", body)
+        self.assertIn("att_student", body)
+
+    def test_html_report_still_renders(self):
+        self.client.force_login(self.owner)
+        response = self.client.get(self._url())
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "گزارش حضور")
+
+    def test_student_cannot_export(self):
+        self.client.force_login(self.student)
+        response = self.client.get(self._url(format="csv"))
+        self.assertEqual(response.status_code, 404)

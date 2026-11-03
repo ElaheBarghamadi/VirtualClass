@@ -62,6 +62,11 @@
         <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3.5v11"/><path d="m7.5 10 4.5 4.5L16.5 10"/><path d="M4 20.5h16"/></symbol>
         <symbol id="i-maximize" viewBox="0 0 24 24"><path d="M8 3.5H5.5a2 2 0 0 0-2 2V8M16 3.5h2.5a2 2 0 0 1 2 2V8M20.5 16v2.5a2 2 0 0 1-2 2H16M3.5 16v2.5a2 2 0 0 0 2 2H8"/></symbol>
         <symbol id="i-back" viewBox="0 0 24 24"><path d="M4 12h15"/><path d="m8.5 6.5-5.5 5.5 5.5 5.5"/></symbol>
+        <symbol id="i-heart" viewBox="0 0 24 24"><path d="M12 20.4S4.6 15.7 4.6 10.4a4.4 4.4 0 0 1 7.4-3.2 4.4 4.4 0 0 1 7.4 3.2c0 5.3-7.4 10-7.4 10z"/></symbol>
+        <symbol id="i-clap" viewBox="0 0 24 24"><path d="M7.6 12.6 5.2 10a1.7 1.7 0 0 1 2.4-2.4l2.6 2.6"/><path d="M10.4 10.4 8.2 8.2a1.7 1.7 0 0 1 2.4-2.4l3 3"/><path d="M13.4 9.4 11.8 7.8a1.7 1.7 0 0 1 2.4-2.4l4 4a6.6 6.6 0 0 1-2 10.6 6.6 6.6 0 0 1-8-.9L5 16"/></symbol>
+        <symbol id="i-thumbs" viewBox="0 0 24 24"><path d="M7 10.4 11.2 3a2.6 2.6 0 0 1 2.4 2.6v3.2h4.8a2.2 2.2 0 0 1 2.1 2.8l-1.6 6.2A2.2 2.2 0 0 1 16.8 20H7z"/><path d="M7 10.4H3.8v9.6H7z"/></symbol>
+        <symbol id="i-star" viewBox="0 0 24 24"><path d="m12 3.4 2.7 5.6 6.1.9-4.4 4.3 1 6.1-5.4-2.9-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/></symbol>
+        <symbol id="i-question" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.4 9.4a2.7 2.7 0 1 1 3.6 2.6c-.7.3-1 .9-1 1.6v.4"/><path d="M12 17.2h.01"/></symbol>
         <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13.5a4 4 0 0 0 5.7 0l2.6-2.6a4 4 0 0 0-5.7-5.7L11.4 6.4"/><path d="M14 10.5a4 4 0 0 0-5.7 0l-2.6 2.6a4 4 0 0 0 5.7 5.7l1.2-1.2"/></symbol>
         <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3.2 5 6v6c0 4.2 2.9 7.4 7 8.8 4.1-1.4 7-4.6 7-8.8V6Z"/></symbol>
         <symbol id="i-zap" viewBox="0 0 24 24"><path d="M13 2.5 4.5 13.5H11l-1 8 8.5-11H12Z"/></symbol>
@@ -390,6 +395,8 @@
         <button type="button" id="cam-pip-fs" class="cam-pip-fs" title="نمایش تمام‌صفحه" aria-label="نمایش تمام‌صفحهٔ دوربین"><svg class="ic" aria-hidden="true"><use href="#i-maximize"/></svg></button>
     </div>
 
+    <div class="reaction-layer" id="reaction-layer" aria-hidden="true"></div>
+
     <footer class="room-controls">
         {% comment %} One row on every screen: the rail scrolls sideways instead of
            wrapping into a stack of rows. {% endcomment %}
@@ -411,6 +418,19 @@
         <button type="button" class="ctrl-btn" id="btn-hand" title="بالا بردن دست" aria-label="بالا بردن دست" aria-pressed="false">
             <svg class="ic" viewBox="0 0 24 24"><use href="#i-hand"/></svg>
         </button>
+        <span class="reaction-holder">
+            <button type="button" class="ctrl-btn" id="btn-reactions" title="واکنش سریع (R)"
+                    aria-label="واکنش" aria-haspopup="true" aria-expanded="false">
+                <svg class="ic" viewBox="0 0 24 24"><use href="#i-heart"/></svg>
+            </button>
+            <div class="reaction-tray hidden" id="reaction-tray" role="menu" aria-label="واکنش‌ها">
+                <button type="button" role="menuitem" data-reaction="heart" aria-label="دوست دارم"><svg viewBox="0 0 24 24"><use href="#i-heart"/></svg></button>
+                <button type="button" role="menuitem" data-reaction="clap" aria-label="تشویق"><svg viewBox="0 0 24 24"><use href="#i-clap"/></svg></button>
+                <button type="button" role="menuitem" data-reaction="thumbs" aria-label="موافقم"><svg viewBox="0 0 24 24"><use href="#i-thumbs"/></svg></button>
+                <button type="button" role="menuitem" data-reaction="star" aria-label="عالی بود"><svg viewBox="0 0 24 24"><use href="#i-star"/></svg></button>
+                <button type="button" role="menuitem" data-reaction="question" aria-label="سؤال دارم"><svg viewBox="0 0 24 24"><use href="#i-question"/></svg></button>
+            </div>
+        </span>
         <span class="ctrl-sep" aria-hidden="true"></span>
         <button type="button" class="ctrl-btn side-toggle" id="btn-chat" title="گفتگو (C)" aria-label="گفتگو">
             <svg class="ic" viewBox="0 0 24 24"><use href="#i-chat"/></svg>

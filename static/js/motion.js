@@ -27,7 +27,7 @@
         '.page-head', '.hero > *', '.hero-features > *',
         '.card', '.stat-card', '.feature', '.classroom-card',
         '.section-title', '.table-wrap', '.auth-card', '.lobby-card', '.status-page',
-        '.sec-head', '.step', '.role-card', '.faq-item', '.cta-band',
+        '.sec-head', '.step', '.role-card', '.faq-item', '.cta-band', '.cmp-wrap',
     ];
 
     function tagReveals() {

@@ -7,6 +7,7 @@ connected clients over the classroom WebSocket.
 """
 from __future__ import annotations
 
+import csv
 import json
 import logging
 
@@ -15,7 +16,7 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import ValidationError
 from django.db.models import Count, Q
-from django.http import Http404, JsonResponse
+from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_http_methods, require_POST
 from django.views.decorators.cache import never_cache
@@ -652,10 +653,29 @@ def attendance_view(request, room_code: str, session_id: int):
     if not is_privileged(member):
         raise Http404
     session = get_object_or_404(ClassroomSession, id=session_id, classroom=classroom)
+    summary = attendance_summary(session)
+
+    if request.GET.get("format") == "csv":
+        # Excel-friendly: UTF-8 BOM so Persian headers open correctly.
+        response = HttpResponse(content_type="text/csv; charset=utf-8")
+        filename = f"attendance-{classroom.room_code}-{session.id}.csv"
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        response.write("\ufeff")
+        writer = csv.writer(response)
+        writer.writerow(["کلاس", classroom.title])
+        writer.writerow(["جلسه", session.id])
+        writer.writerow(["کاربر", "تعداد ورود", "مجموع حضور (ثانیه)", "مجموع حضور (دقیقه)"])
+        for row in summary:
+            writer.writerow([
+                row["username"], row["joins"], row["total_seconds"],
+                round(row["total_seconds"] / 60, 1),
+            ])
+        return response
+
     return render(
         request,
         "classrooms/attendance.html",
-        {"classroom": classroom, "session": session, "summary": attendance_summary(session)},
+        {"classroom": classroom, "session": session, "summary": summary},
     )
 
 
