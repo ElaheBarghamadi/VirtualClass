@@ -1,50 +1,323 @@
 {% extends "base.html" %}
 {% block title %}ایجاد کلاس{% endblock %}
 {% block content %}
-<div class="page-head">
-    <h1>ایجاد کلاس جدید</h1>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+        <symbol id="b-chat" viewBox="0 0 24 24"><path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 8 8z"/></symbol>
+        <symbol id="b-mic" viewBox="0 0 24 24"><rect x="8.6" y="2.4" width="6.8" height="11.2" rx="3.4"/><path d="M6 11.6v.9a6 6 0 0 0 12 0v-.9M12 18.9v2.7M8.8 21.6h6.4"/></symbol>
+        <symbol id="b-camera" viewBox="0 0 24 24"><rect x="2.6" y="6" width="12.6" height="12" rx="2.6"/><path d="m15.2 12.6 5.1 3.1a.6.6 0 0 0 .9-.5V8.8a.6.6 0 0 0-.9-.5l-5.1 3.1z"/></symbol>
+        <symbol id="b-screen" viewBox="0 0 24 24"><rect x="2.6" y="4" width="18.8" height="12.4" rx="2.2"/><path d="M8.4 20.4h7.2M12 16.4v4"/><path d="M12 7.6v6M9.4 10.2 12 7.6l2.6 2.6"/></symbol>
+        <symbol id="b-board" viewBox="0 0 24 24"><rect x="2.6" y="4" width="18.8" height="11.2" rx="1.8"/><path d="M12 15.2v4.2M8.5 20.6h7"/><path d="m10.4 10.6 3.6 2.1-3.6 2.1z" fill="currentColor" stroke="none"/></symbol>
+        <symbol id="b-file" viewBox="0 0 24 24"><path d="M13.4 2.8H7a2 2 0 0 0-2 2v14.4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8.4z"/><path d="M13.4 2.8v5.6h5.6"/><path d="M8.4 13.4h7.2M8.4 17h4.6"/></symbol>
+        <symbol id="b-lock" viewBox="0 0 24 24"><rect x="4" y="10.5" width="16" height="10.5" rx="2.4"/><path d="M8 10.5V7.8a4 4 0 0 1 8 0v2.7"/></symbol>
+        <symbol id="b-shield" viewBox="0 0 24 24"><path d="M12 2.8 4.6 6v5.8c0 4.4 3 8.1 7.4 9.4 4.4-1.3 7.4-5 7.4-9.4V6z"/><path d="m9 12 2.2 2.2L15.4 10"/></symbol>
+        <symbol id="b-users" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7.5" r="3.6"/><path d="M22 21v-2a4 4 0 0 0-3-3.9"/><path d="M16.5 4.2a3.6 3.6 0 0 1 0 6.6"/></symbol>
+        <symbol id="b-link" viewBox="0 0 24 24"><path d="M10 13.5a4 4 0 0 0 5.7 0l2.6-2.6a4 4 0 0 0-5.7-5.7l-1.2 1.2"/><path d="M14 10.5a4 4 0 0 0-5.7 0l-2.6 2.6a4 4 0 0 0 5.7 5.7l1.2-1.2"/></symbol>
+    </defs>
+</svg>
+
+<div class="builder-head">
+    <div>
+        <h1>ایجاد کلاس جدید</h1>
+        <p class="muted">همه‌چیز را از همین‌جا تنظیم کنید؛ بعداً هم از پنل مدیریت کلاس قابل تغییر است.</p>
+    </div>
     <a class="btn btn-ghost" href="{% url 'dashboard' %}">بازگشت</a>
 </div>
-<div class="card form-card">
-    <form method="post" novalidate>
-        {% csrf_token %}
-        <div class="field">
-            <label for="{{ form.title.id_for_label }}">عنوان کلاس</label>
-            {{ form.title }}
-            {% if form.title.errors %}<p class="field-error">{{ form.title.errors.0 }}</p>{% endif %}
-        </div>
-        <div class="field">
-            <label for="{{ form.description.id_for_label }}">توضیحات</label>
-            {{ form.description }}
-        </div>
-        <div class="field switch-field">
-            <label class="switch">
-                {{ form.is_password_protected }}
-                <span class="switch-slider" aria-hidden="true"></span>
+
+{% if form.non_field_errors %}
+    <div class="alert alert-error">{{ form.non_field_errors.0 }}</div>
+{% endif %}
+
+<form method="post" novalidate class="builder" id="class-builder">
+    {% csrf_token %}
+
+    <div class="builder-main">
+        <section class="card builder-card">
+            <header class="builder-card-head">
+                <span class="builder-step">۱</span>
+                <div>
+                    <h2>اطلاعات کلاس</h2>
+                    <p>اسمی که دانش‌آموزان می‌بینند و یک توضیح کوتاه.</p>
+                </div>
+            </header>
+            <div class="field">
+                <label for="{{ form.title.id_for_label }}">{{ form.title.label }}</label>
+                {{ form.title }}
+                {% if form.title.errors %}<p class="field-error">{{ form.title.errors.0 }}</p>{% endif %}
+            </div>
+            <div class="field">
+                <label for="{{ form.description.id_for_label }}">{{ form.description.label }}</label>
+                {{ form.description }}
+                <small class="field-help">{{ form.description.help_text }}</small>
+                {% if form.description.errors %}<p class="field-error">{{ form.description.errors.0 }}</p>{% endif %}
+            </div>
+        </section>
+
+        <section class="card builder-card">
+            <header class="builder-card-head">
+                <span class="builder-step">۲</span>
+                <div>
+                    <h2>دسترسی و ظرفیت</h2>
+                    <p>چه کسی وارد شود، با چه شرطی و چند نفر.</p>
+                </div>
+            </header>
+
+            <div class="access-list">
+                <label class="access-row" for="{{ form.is_password_protected.id_for_label }}">
+                    <span class="access-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#b-lock"/></svg></span>
+                    <span class="access-text">
+                        <strong>{{ form.is_password_protected.label }}</strong>
+                        <small>بدون رمز، هر کسی که لینک را دارد وارد می‌شود.</small>
+                    </span>
+                    <span class="switch">{{ form.is_password_protected }}<span class="switch-slider" aria-hidden="true"></span></span>
+                </label>
+                <div class="field access-password" id="password-field" hidden>
+                    <label for="{{ form.password.id_for_label }}">{{ form.password.label }}</label>
+                    {{ form.password }}
+                    <small class="field-help">{{ form.password.help_text }}</small>
+                    {% if form.password.errors %}<p class="field-error">{{ form.password.errors.0 }}</p>{% endif %}
+                </div>
+
+                <label class="access-row" for="{{ form.enable_waiting_room.id_for_label }}">
+                    <span class="access-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#b-shield"/></svg></span>
+                    <span class="access-text">
+                        <strong>{{ form.enable_waiting_room.label }}</strong>
+                        <small>{{ form.enable_waiting_room.help_text }}</small>
+                    </span>
+                    <span class="switch">{{ form.enable_waiting_room }}<span class="switch-slider" aria-hidden="true"></span></span>
+                </label>
+
+                <label class="access-row" for="{{ form.allow_guests.id_for_label }}">
+                    <span class="access-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#b-link"/></svg></span>
+                    <span class="access-text">
+                        <strong>{{ form.allow_guests.label }}</strong>
+                        <small>اگر خاموش باشد، فقط کاربران ثبت‌نام‌شده وارد می‌شوند.</small>
+                    </span>
+                    <span class="switch">{{ form.allow_guests }}<span class="switch-slider" aria-hidden="true"></span></span>
+                </label>
+            </div>
+
+            <div class="capacity">
+                <label for="{{ form.max_participants.id_for_label }}">{{ form.max_participants.label }}</label>
+                <div class="capacity-row">
+                    {{ form.max_participants }}
+                    <div class="capacity-chips" role="group" aria-label="ظرفیت‌های پیشنهادی">
+                        <button type="button" class="chip" data-capacity="0">بی‌نهایت</button>
+                        <button type="button" class="chip" data-capacity="10">۱۰</button>
+                        <button type="button" class="chip" data-capacity="20">۲۰</button>
+                        <button type="button" class="chip" data-capacity="50">۵۰</button>
+                    </div>
+                </div>
+                <small class="field-help">{{ form.max_participants.help_text }}</small>
+                {% if form.max_participants.errors %}<p class="field-error">{{ form.max_participants.errors.0 }}</p>{% endif %}
+            </div>
+        </section>
+
+        <section class="card builder-card">
+            <header class="builder-card-head">
+                <span class="builder-step">۳</span>
+                <div>
+                    <h2>امکانات دانش‌آموز</h2>
+                    <p>هر کدام را که لازم نیست همان اول خاموش کنید؛ در کلاس هم قابل تغییر است.</p>
+                </div>
+            </header>
+            <div class="feature-toggles">
+                {% for field in form %}
+                    {% if field.name == "allow_student_chat" or field.name == "allow_student_mic" or field.name == "allow_student_camera" or field.name == "allow_student_screen_share" or field.name == "allow_student_whiteboard" or field.name == "allow_file_upload" %}
+                        <label class="feature-toggle" for="{{ field.id_for_label }}">
+                            {{ field }}
+                            <span class="ft-icon">
+                                {% if field.name == "allow_student_chat" %}<svg viewBox="0 0 24 24" aria-hidden="true"><use href="#b-chat"/></svg>
+                                {% elif field.name == "allow_student_mic" %}<svg viewBox="0 0 24 24" aria-hidden="true"><use href="#b-mic"/></svg>
+                                {% elif field.name == "allow_student_camera" %}<svg viewBox="0 0 24 24" aria-hidden="true"><use href="#b-camera"/></svg>
+                                {% elif field.name == "allow_student_screen_share" %}<svg viewBox="0 0 24 24" aria-hidden="true"><use href="#b-screen"/></svg>
+                                {% elif field.name == "allow_student_whiteboard" %}<svg viewBox="0 0 24 24" aria-hidden="true"><use href="#b-board"/></svg>
+                                {% else %}<svg viewBox="0 0 24 24" aria-hidden="true"><use href="#b-file"/></svg>{% endif %}
+                            </span>
+                            <span class="ft-text">
+                                <span class="ft-title">{{ field.label }}</span>
+                                <span class="ft-state" aria-hidden="true"></span>
+                            </span>
+                        </label>
+                    {% endif %}
+                {% endfor %}
+            </div>
+            <label class="access-row access-row--plain" for="{{ form.show_chat_default.id_for_label }}">
+                <span class="access-text">
+                    <strong>{{ form.show_chat_default.label }}</strong>
+                    <small>اگر خاموش باشد، پنل گفتگو بسته شروع می‌شود.</small>
+                </span>
+                <span class="switch">{{ form.show_chat_default }}<span class="switch-slider" aria-hidden="true"></span></span>
             </label>
-            <span>محافظت با رمز عبور</span>
-            {% if form.is_password_protected.errors %}<p class="field-error">{{ form.is_password_protected.errors.0 }}</p>{% endif %}
+        </section>
+
+        <section class="card builder-card">
+            <header class="builder-card-head">
+                <span class="builder-step">۴</span>
+                <div>
+                    <h2>ظاهر و خوش‌آمد</h2>
+                    <p>رنگ اتاق و پیامی که دانش‌آموز در بدو ورود می‌بیند.</p>
+                </div>
+            </header>
+            <div class="field color-field">
+                <label for="{{ form.accent_color.id_for_label }}">{{ form.accent_color.label }}</label>
+                <div class="color-row">
+                    {{ form.accent_color }}
+                    <div class="color-swatches" role="group" aria-label="رنگ‌های پیشنهادی">
+                        <button type="button" class="swatch-dot" data-color="#6366f1" style="--c:#6366f1" aria-label="بنفش"></button>
+                        <button type="button" class="swatch-dot" data-color="#0ea5e9" style="--c:#0ea5e9" aria-label="آبی"></button>
+                        <button type="button" class="swatch-dot" data-color="#10b981" style="--c:#10b981" aria-label="سبز"></button>
+                        <button type="button" class="swatch-dot" data-color="#f59e0b" style="--c:#f59e0b" aria-label="نارنجی"></button>
+                        <button type="button" class="swatch-dot" data-color="#ec4899" style="--c:#ec4899" aria-label="صورتی"></button>
+                    </div>
+                </div>
+                {% if form.accent_color.errors %}<p class="field-error">{{ form.accent_color.errors.0 }}</p>{% endif %}
+            </div>
+            <div class="field">
+                <label for="{{ form.welcome_message.id_for_label }}">{{ form.welcome_message.label }}</label>
+                {{ form.welcome_message }}
+                <small class="field-help">{{ form.welcome_message.help_text }}</small>
+                {% if form.welcome_message.errors %}<p class="field-error">{{ form.welcome_message.errors.0 }}</p>{% endif %}
+            </div>
+        </section>
+    </div>
+
+    <aside class="builder-side">
+        <div class="preview-sticky">
+            <div class="class-preview" id="class-preview" style="--cp-accent:#6366f1">
+                <div class="cp-cover">
+                    <span class="cp-badge">کلاس آنلاین</span>
+                    <span class="cp-live"><i></i> آمادهٔ شروع</span>
+                </div>
+                <div class="cp-body">
+                    <h3 class="cp-title" id="cp-title">عنوان کلاس شما</h3>
+                    <p class="cp-desc" id="cp-desc">توضیح کوتاه کلاس اینجا نمایش داده می‌شود.</p>
+                    <ul class="cp-badges" id="cp-badges">
+                        <li data-badge="password" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#b-lock"/></svg> با رمز</li>
+                        <li data-badge="approval" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#b-shield"/></svg> تأیید ورود</li>
+                        <li data-badge="guests" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#b-link"/></svg> مهمان آزاد</li>
+                        <li data-badge="capacity"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#b-users"/></svg> <span id="cp-capacity">بی‌نهایت</span></li>
+                    </ul>
+                    <ul class="cp-features" id="cp-features" aria-hidden="true"></ul>
+                </div>
+            </div>
+            <div class="card builder-submit">
+                <button type="submit" class="btn btn-primary btn-lg btn-block">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5.5v13M5.5 12h13"/></svg>
+                    ایجاد کلاس
+                </button>
+                <p class="field-help">بعد از ساخت مستقیم وارد کلاس می‌شوید و می‌توانید لینک را بردارید.</p>
+            </div>
         </div>
-        <div class="field" id="password-field">
-            <label for="{{ form.password.id_for_label }}">رمز کلاس</label>
-            {{ form.password }}
-            <small class="field-help">{{ form.password.help_text }}</small>
-            {% if form.password.errors %}<p class="field-error">{{ form.password.errors.0 }}</p>{% endif %}
-        </div>
-        <button type="submit" class="btn btn-primary">ایجاد کلاس</button>
-    </form>
-</div>
+    </aside>
+</form>
 {% endblock %}
+
 {% block extra_js %}
 <script>
-    // Toggle password field visibility based on the protection switch.
-    const toggle = document.getElementById('id_is_password_protected');
-    const passwordField = document.getElementById('password-field');
-    function syncPasswordField() {
-        passwordField.style.display = toggle.checked ? '' : 'none';
-        document.getElementById('id_password').disabled = !toggle.checked;
+(function () {
+    'use strict';
+    const form = document.getElementById('class-builder');
+    if (!form) return;
+
+    const $ = (id) => document.getElementById(id);
+    const preview = $('class-preview');
+    const titleInput = $('id_title');
+    const descInput = $('id_description');
+    const capacityInput = $('id_max_participants');
+    const colorInput = $('id_accent_color');
+    const passwordToggle = $('id_is_password_protected');
+    const passwordField = $('password-field');
+    const passwordInput = $('id_password');
+
+    // ---- live preview --------------------------------------------------
+    function syncPreview() {
+        $('cp-title').textContent = (titleInput.value || '').trim() || 'عنوان کلاس شما';
+        $('cp-desc').textContent = (descInput.value || '').trim() || 'توضیح کوتاه کلاس اینجا نمایش داده می‌شود.';
+
+        const cap = parseInt(capacityInput.value, 10);
+        $('cp-capacity').textContent = (!cap || cap < 1) ? 'بی‌نهایت' : `${cap} نفر`;
+
+        const badges = {
+            password: passwordToggle.checked,
+            approval: $('id_enable_waiting_room').checked,
+            guests: $('id_allow_guests').checked,
+        };
+        Object.keys(badges).forEach((key) => {
+            const el = preview.querySelector(`[data-badge="${key}"]`);
+            if (el) el.hidden = !badges[key];
+        });
+
+        const featureMap = [
+            ['id_allow_student_chat', 'گفتگو'],
+            ['id_allow_student_mic', 'میکروفون'],
+            ['id_allow_student_camera', 'دوربین'],
+            ['id_allow_student_screen_share', 'اشتراک صفحه'],
+            ['id_allow_student_whiteboard', 'تخته سفید'],
+            ['id_allow_file_upload', 'فایل'],
+        ];
+        const list = $('cp-features');
+        list.textContent = '';
+        featureMap.forEach(([id, label]) => {
+            const input = $(id);
+            if (!input || !input.checked) return;
+            const li = document.createElement('li');
+            li.textContent = label;
+            list.appendChild(li);
+        });
+
+        preview.style.setProperty('--cp-accent', colorInput.value || '#6366f1');
     }
-    toggle.addEventListener('change', syncPasswordField);
-    syncPasswordField();
+
+    // ---- password gate -------------------------------------------------
+    function syncPassword() {
+        const on = passwordToggle.checked;
+        passwordField.hidden = !on;
+        passwordInput.disabled = !on;
+        if (on) passwordInput.focus({ preventScroll: true });
+    }
+
+    // ---- capacity chips & colour swatches -------------------------------
+    form.querySelectorAll('[data-capacity]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            capacityInput.value = btn.dataset.capacity;
+            form.querySelectorAll('[data-capacity]').forEach((b) => b.classList.toggle('active', b === btn));
+            syncPreview();
+        });
+    });
+    form.querySelectorAll('[data-color]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            colorInput.value = btn.dataset.color;
+            syncPreview();
+        });
+    });
+
+    // feature tiles show an explicit on/off label
+    form.querySelectorAll('.feature-toggle input[type=checkbox]').forEach((input) => {
+        const label = input.closest('.feature-toggle');
+        const state = label.querySelector('.ft-state');
+        const sync = () => {
+            label.classList.toggle('is-on', input.checked);
+            if (state) state.textContent = input.checked ? 'فعال' : 'خاموش';
+        };
+        input.addEventListener('change', () => { sync(); syncPreview(); });
+        sync();
+    });
+
+    ['input', 'change'].forEach((evt) => {
+        titleInput.addEventListener(evt, syncPreview);
+        descInput.addEventListener(evt, syncPreview);
+        capacityInput.addEventListener(evt, syncPreview);
+        colorInput.addEventListener(evt, syncPreview);
+    });
+    ['is_password_protected', 'enable_waiting_room', 'allow_guests'].forEach((name) => {
+        const el = $('id_' + name);
+        if (el) el.addEventListener('change', syncPreview);
+    });
+    passwordToggle.addEventListener('change', syncPassword);
+
+    syncPassword();
+    syncPreview();
+})();
 </script>
 {% endblock %}

@@ -192,6 +192,10 @@
         const sync = () => nav.classList.toggle('can-scroll', nav.scrollWidth - nav.clientWidth > 4);
         sync();
         window.addEventListener('resize', sync, { passive: true });
+        // Web fonts land after first paint and can push the row into overflow,
+        // so re-measure once they are ready (and once the window has loaded).
+        window.addEventListener('load', sync);
+        if (document.fonts && document.fonts.ready) document.fonts.ready.then(sync).catch(() => {});
         if ('ResizeObserver' in window) new ResizeObserver(sync).observe(nav);
     }
 

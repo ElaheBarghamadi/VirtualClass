@@ -128,6 +128,7 @@ def classroom_create_view(request):
             description=form.cleaned_data.get("description", ""),
             password=form.cleaned_data.get("password"),
             is_password_protected=form.cleaned_data.get("is_password_protected", False),
+            settings=form.settings_dict(),
         )
         messages.success(request, "کلاس با موفقیت ساخته شد.")
         return redirect("room:lobby", room_code=classroom.room_code)

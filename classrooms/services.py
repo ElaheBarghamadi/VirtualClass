@@ -51,6 +51,10 @@ class WrongClassroomPassword(ClassroomAccessError):
     """Raised when the supplied classroom password is incorrect."""
 
 
+class ClassroomFull(ClassroomAccessError):
+    """Raised when the classroom reached its participant limit."""
+
+
 class ClassroomLocked(ClassroomAccessError):
     """Raised when the classroom is locked by its owner."""
 
@@ -122,6 +126,23 @@ def password_attempts_blocked_ip(classroom: Classroom, ip: str) -> bool:
 # ---------------------------------------------------------------------------
 # Classroom lifecycle
 # ---------------------------------------------------------------------------
+#: Fields a host may pre-set while creating a classroom (all server-enforced).
+CREATE_SETTING_FIELDS = (
+    "enable_waiting_room",
+    "allow_student_chat",
+    "allow_student_mic",
+    "allow_student_camera",
+    "allow_student_screen_share",
+    "allow_student_whiteboard",
+    "allow_file_upload",
+    "allow_guests",
+    "show_chat_default",
+    "accent_color",
+    "welcome_message",
+    "max_participants",
+)
+
+
 @transaction.atomic
 def create_classroom(
     owner: User,
@@ -129,14 +150,38 @@ def create_classroom(
     description: str = "",
     password: str | None = None,
     is_password_protected: bool = False,
+    settings: dict | None = None,
 ) -> Classroom:
-    """Create a classroom and register the owner with the OWNER role."""
+    """Create a classroom and register the owner with the OWNER role.
+
+    ``settings`` may only contain :data:`CREATE_SETTING_FIELDS`; anything else
+    is ignored so a hostile payload can never flip internal state.
+    """
     classroom = Classroom(owner=owner, title=title, description=description)
+    for field, value in (settings or {}).items():
+        if field in CREATE_SETTING_FIELDS:
+            setattr(classroom, field, value)
     classroom.set_password(password if is_password_protected else None)
     classroom.save()
     ClassroomMember.objects.create(classroom=classroom, user=owner, role=Role.OWNER, is_active=True)
     logger.info("classroom_created", extra={"room_code": classroom.room_code, "owner_id": owner.id})
     return classroom
+
+
+def active_participant_count(classroom: Classroom) -> int:
+    """People actually inside the room (the host included, queued ones not)."""
+    return ClassroomMember.objects.filter(
+        classroom=classroom, is_active=True, in_waiting_room=False
+    ).count()
+
+
+def ensure_capacity(classroom: Classroom) -> None:
+    """Raise :class:`ClassroomFull` when the room reached its limit."""
+    limit = classroom.max_participants or 0
+    if limit and active_participant_count(classroom) >= limit:
+        raise ClassroomFull(
+            f"ظرفیت این کلاس ({limit} نفر) پر شده است؛ کمی بعد دوباره تلاش کنید."
+        )
 
 
 def get_member(classroom: Classroom, user: User) -> ClassroomMember | None:
@@ -264,6 +309,8 @@ def join_classroom_guest(
             raise WrongClassroomPassword("رمز کلاس اشتباه است.")
         reset_password_attempts(classroom, name)  # type: ignore[arg-type]
 
+    ensure_capacity(classroom)
+
     member = ClassroomMember.objects.create(
         classroom=classroom,
         user=None,
@@ -321,6 +368,9 @@ def join_classroom(classroom: Classroom, user: User, raw_password: str = "") -> 
             register_failed_password(classroom, user)
             raise WrongClassroomPassword("رمز کلاس اشتباه است.")
         reset_password_attempts(classroom, user)
+
+    if existing is None or not existing.is_active:
+        ensure_capacity(classroom)
 
     if existing is None:
         waiting = classroom.enable_waiting_room

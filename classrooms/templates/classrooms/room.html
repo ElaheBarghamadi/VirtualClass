@@ -128,8 +128,17 @@
                     </div>
                     <div class="tiles" id="tiles" data-count="1"></div>
                     <div class="stage-empty" id="stage-empty">
-                        <div class="self-avatar">{{ member.participant_name|first }}</div>
+                        <div class="se-avatar">
+                            <span class="se-ring" aria-hidden="true"></span>
+                            <span class="self-avatar">{{ member.participant_name|first }}</span>
+                        </div>
+                        <h2 class="se-title">{{ classroom.title }}</h2>
                         <p id="stage-empty-text">در حال اتصال به سرور رسانه…</p>
+                        <ul class="se-hints" aria-hidden="true">
+                            <li><svg class="ic"><use href="#i-mic"/></svg> میکروفون</li>
+                            <li><svg class="ic"><use href="#i-cam"/></svg> دوربین</li>
+                            <li><svg class="ic"><use href="#i-link"/></svg> دعوت با لینک</li>
+                        </ul>
                     </div>
                 </div>
 

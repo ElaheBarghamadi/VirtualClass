@@ -1228,3 +1228,94 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
     .ctrl-btn .ic { width: 17px; height: 17px; }
     .ctrl-exit { width: 46px; }
 }
+
+/* ==========================================================================
+   Room polish — framed stage, richer empty state, chat empty state
+   ========================================================================== */
+/* the stage reads as a "screen" instead of a flat pane */
+.stage {
+    border-radius: var(--radius-lg);
+    background:
+        radial-gradient(120% 90% at 78% 0%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 62%),
+        radial-gradient(90% 80% at 12% 100%, color-mix(in srgb, var(--primary) 10%, transparent), transparent 60%),
+        var(--room-surface);
+    border: 1px solid var(--room-border);
+    overflow: hidden;
+    box-shadow: var(--shadow-sm);
+}
+/* keep the bled-out layout of fullscreen/preview inside the rounded frame */
+.stage:fullscreen { border-radius: 0; border: 0; }
+
+.stage-empty { gap: .7rem; }
+.stage-empty .se-avatar { position: relative; display: grid; place-items: center; }
+.stage-empty .se-ring {
+    position: absolute; width: 124px; height: 124px; border-radius: 50%;
+    border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent);
+    background: radial-gradient(closest-side, color-mix(in srgb, var(--accent) 16%, transparent), transparent);
+    animation: se-breathe 3.6s ease-in-out infinite;
+}
+@keyframes se-breathe {
+    0%, 100% { transform: scale(.92); opacity: .55; }
+    50%      { transform: scale(1.06); opacity: .95; }
+}
+.stage-empty .self-avatar {
+    position: relative;
+    width: 84px; height: 84px; font-size: 1.9rem;
+    box-shadow: 0 18px 40px -20px color-mix(in srgb, var(--accent) 85%, transparent);
+}
+.stage-empty .se-title {
+    margin: .2rem 0 0; font-size: 1.05rem; font-weight: 750;
+    color: var(--room-text); line-height: 1.5;
+}
+#stage-empty-text { margin: 0; max-width: 34ch; line-height: 1.85; }
+.se-hints {
+    list-style: none; display: flex; flex-wrap: wrap; justify-content: center;
+    gap: .4rem; margin: .5rem 0 0; padding: 0;
+}
+.se-hints li {
+    display: inline-flex; align-items: center; gap: .32rem;
+    font-size: .74rem; font-weight: 600; color: var(--room-muted);
+    background: color-mix(in srgb, var(--room-surface) 70%, transparent);
+    border: 1px solid var(--room-border);
+    border-radius: var(--radius-pill); padding: .28rem .7rem;
+    -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+}
+.se-hints .ic { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+
+/* ---------- side panel: tabs, empty chat, message bubbles ---------- */
+.side-tabs { gap: .25rem; }
+.side-tab { transition: background var(--speed) var(--ease), color var(--speed) var(--ease); }
+
+.chat-messages { gap: .55rem; }
+.chat-messages:empty::before {
+    content: "هنوز پیامی فرستاده نشده — اولین پیام را بنویسید";
+    margin: auto; text-align: center; max-width: 22ch;
+    color: var(--room-muted); font-size: .82rem; line-height: 1.9; opacity: .85;
+}
+.chat-msg {
+    max-width: 92%;
+    box-shadow: 0 1px 2px color-mix(in srgb, var(--text) 8%, transparent);
+}
+.chat-msg.own { align-self: flex-end; }
+
+.chat-form { gap: .45rem; }
+.chat-form input {
+    border-radius: var(--radius-pill);
+    padding-inline-start: .95rem;
+}
+.chat-form .btn { border-radius: var(--radius-pill); }
+
+/* ---------- header: compact chips ---------- */
+.room-clock {
+    font-size: .84rem; font-weight: 650; color: var(--room-muted);
+    background: color-mix(in srgb, var(--room-text) 6%, transparent);
+    border-radius: var(--radius-pill); padding: .22rem .6rem;
+}
+.conn-pill { font-size: .8rem; }
+
+@media (max-width: 760px) {
+    .stage { border-radius: var(--radius); }
+    .stage-empty .self-avatar { width: 68px; height: 68px; font-size: 1.55rem; }
+    .stage-empty .se-ring { width: 100px; height: 100px; }
+    .se-hints li { font-size: .7rem; padding: .24rem .6rem; }
+}

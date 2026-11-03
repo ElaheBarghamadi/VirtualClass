@@ -73,6 +73,11 @@ class Classroom(models.Model):
 
     # -- phase 3: customization & guest access ----------------------------------
     allow_guests = models.BooleanField(default=True, verbose_name="ورود مهمان با لینک")
+    max_participants = models.PositiveSmallIntegerField(
+        default=0,
+        verbose_name="حداکثر شرکت‌کننده",
+        help_text="۰ یعنی بدون محدودیت. میزبان هم در این تعداد حساب می‌شود.",
+    )
     accent_color = models.CharField(max_length=7, blank=True, verbose_name="رنگ اصلی کلاس")
     welcome_message = models.TextField(blank=True, verbose_name="پیام خوش‌آمدگویی")
     logo = models.ImageField(upload_to="classroom_logos/", blank=True, null=True, verbose_name="لوگوی کلاس")

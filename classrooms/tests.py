@@ -6,7 +6,7 @@ from rest_framework.test import APIClient
 
 from .models import Classroom, ClassroomMember, SharedFile
 from .permissions import Role, defaults_for_role
-from .services import create_classroom, join_classroom, WrongClassroomPassword
+from .services import ClassroomFull, create_classroom, join_classroom, WrongClassroomPassword
 
 User = get_user_model()
 
@@ -582,3 +582,89 @@ class GuestBanByIpTests(TestCase):
         guest.save(update_fields=["banned_until"])
         again = join_classroom_guest(self.classroom, "Ali", ip="203.0.113.9")
         self.assertTrue(again.is_active)
+
+
+class ClassroomCapacityTests(TestCase):
+    """The host can cap attendance when creating the class."""
+
+    def setUp(self):
+        self.owner = make_user("host")
+
+    def test_unlimited_by_default(self):
+        room = create_classroom(self.owner, title="open")
+        self.assertEqual(room.max_participants, 0)
+        for i in range(4):
+            join_classroom(room, make_user(f"stu{i}"))
+
+    def test_join_is_refused_once_the_room_is_full(self):
+        room = create_classroom(self.owner, title="small", settings={"max_participants": 2})
+        join_classroom(room, make_user("first"))  # host + first = 2
+        with self.assertRaises(ClassroomFull):
+            join_classroom(room, make_user("second"))
+
+    def test_leaving_frees_a_seat(self):
+        room = create_classroom(self.owner, title="small", settings={"max_participants": 2})
+        student = make_user("first")
+        join_classroom(room, student)
+        ClassroomMember.objects.filter(classroom=room, user=student).update(is_active=False)
+        join_classroom(room, make_user("second"))
+
+    def test_waiting_room_entries_do_not_count_against_capacity(self):
+        room = create_classroom(
+            self.owner, title="queued", settings={"max_participants": 2, "enable_waiting_room": True}
+        )
+        join_classroom(room, make_user("first"))  # waits in the lobby queue
+        join_classroom(room, make_user("second"))
+        self.assertEqual(
+            ClassroomMember.objects.filter(classroom=room, in_waiting_room=False, is_active=True).count(), 1
+        )
+
+
+class ClassroomCreateSettingsTests(TestCase):
+    """Creation form saves the access/appearance settings the host picked."""
+
+    def setUp(self):
+        self.owner = make_user("creator")
+        self.client.login(username="creator", password="testpass-123")
+
+    def test_form_persists_access_and_feature_settings(self):
+        response = self.client.post(
+            reverse("classrooms:create"),
+            {
+                "title": "کلاس تنظیم‌شده",
+                "description": "توضیح",
+                "max_participants": "20",
+                "enable_waiting_room": "on",
+                "allow_guests": "on",
+                "allow_student_chat": "on",
+                "allow_student_whiteboard": "on",
+                "show_chat_default": "on",
+                "accent_color": "#0ea5e9",
+                "welcome_message": "خوش آمدید",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        room = Classroom.objects.get(title="کلاس تنظیم‌شده")
+        self.assertEqual(room.max_participants, 20)
+        self.assertTrue(room.enable_waiting_room)
+        self.assertTrue(room.allow_guests)
+        self.assertTrue(room.allow_student_whiteboard)
+        self.assertFalse(room.allow_student_screen_share)  # unchecked → off
+        self.assertEqual(room.accent_color, "#0ea5e9")
+        self.assertEqual(room.welcome_message, "خوش آمدید")
+
+    def test_blank_capacity_means_unlimited(self):
+        self.client.post(
+            reverse("classrooms:create"),
+            {"title": "بی‌محدودیت", "description": "", "max_participants": ""},
+        )
+        room = Classroom.objects.get(title="بی‌محدودیت")
+        self.assertEqual(room.max_participants, 0)
+
+    def test_invalid_accent_colour_is_rejected(self):
+        response = self.client.post(
+            reverse("classrooms:create"),
+            {"title": "رنگ بد", "description": "", "accent_color": "javascript:alert(1)"},
+        )
+        self.assertEqual(response.status_code, 200)  # form re-rendered
+        self.assertFalse(Classroom.objects.filter(title="رنگ بد").exists())
