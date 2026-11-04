@@ -6,6 +6,7 @@ user injected into the scope the way ``AuthMiddlewareStack`` would.
 import asyncio
 
 from asgiref.sync import async_to_sync
+from channels.db import database_sync_to_async
 from channels.routing import URLRouter
 from channels.testing import WebsocketCommunicator
 from django.contrib.auth import get_user_model
@@ -173,6 +174,44 @@ class WhiteboardConsumerTests(TransactionTestCase):
         board = Whiteboard.objects.get(classroom=self.classroom)
         self.assertEqual(board.events.count(), 1)  # only the clear event
         self.assertEqual(board.events.first().operation["type"], "clear")
+
+    def test_ops_reuse_one_board_row_and_do_not_rewrite_its_timestamp(self):
+        """Write amplification guard.
+
+        Every stroke used to cost ``get_or_create(board)`` plus an extra
+        ``UPDATE whiteboard SET updated_at``.  The board is resolved once per
+        connection and the timestamp is refreshed on an interval instead.
+        """
+        read_stamp = database_sync_to_async(
+            lambda: Whiteboard.objects.get(classroom=self.classroom).updated_at
+        )
+
+        async def scenario():
+            ws = self._ws(self.owner)
+            await ws.connect()
+            await ws.receive_json_from()
+            op = lambda i: {  # noqa: E731 - tiny inline builder
+                "action": "op",
+                "op": {"type": "draw", "tool": "pen", "points": [[i, i], [i + 1, i + 1]], "color": "#000", "width": 1, "id": f"w-{i}"},
+            }
+            await ws.send_json_to(op(1))
+            await asyncio.sleep(0.2)
+            first = await read_stamp()
+            # Three more ops on the same connection must not re-stamp the board.
+            for i in range(2, 5):
+                await ws.send_json_to(op(i))
+            await asyncio.sleep(0.3)
+            second = await read_stamp()
+            await ws.disconnect()
+            return first, second
+
+        first, second = async_to_sync(scenario)()
+
+        self.assertEqual(Whiteboard.objects.count(), 1)
+        board = Whiteboard.objects.get(classroom=self.classroom)
+        self.assertEqual(board.events.count(), 4)
+        self.assertIsNotNone(board.updated_at)
+        self.assertEqual(first, second)
 
     def test_non_member_rejected(self):
         stranger = User.objects.create_user(username="wb_stranger", password="x")

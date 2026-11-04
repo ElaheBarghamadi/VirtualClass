@@ -28,7 +28,8 @@ import math
 import re
 
 from channels.db import database_sync_to_async
-from django.db import transaction
+from django.db import IntegrityError, transaction
+from django.utils import timezone
 
 from classrooms.models import ClassroomMember
 from classrooms.permissions import effective_permissions
@@ -41,6 +42,9 @@ logger = logging.getLogger(__name__)
 
 MAX_OP_BYTES = 64 * 1024
 OP_RATE_LIMIT = 40  # ops per second per connection (lasers included)
+# One extra UPDATE per op only to refresh ``Whiteboard.updated_at`` was pure
+# write amplification; the timestamp is refreshed at most this often instead.
+BOARD_TOUCH_INTERVAL = 15
 HISTORY_LIMIT = 2000
 VALID_OP_TYPES = {"draw", "text", "remove", "clear", "page_add", "page_setup", "page_go", "laser"}
 # Laser pointers are ephemeral: relayed to the group, never persisted.
@@ -403,26 +407,57 @@ class WhiteboardConsumer(SafeJsonWebsocketConsumer):
             if member is None or not self._may_write(member, op):
                 return None
 
-            board, _ = Whiteboard.objects.get_or_create(classroom=member.classroom)
+            board_id = self._board_id(member.classroom)
             page = self._normalise_page(op)
             op = {**op, "page": page}
             if op.get("type") == "clear":
                 # Compaction: a clear invalidates prior ops on THIS page and
                 # file scope only. Page markers remain replayable.
-                qs = board.events.filter(page=page)
+                qs = WhiteboardEvent.objects.filter(whiteboard_id=board_id, page=page)
                 if op.get("file_id"):
                     qs = qs.filter(operation__file_id=op["file_id"])
                 else:
                     qs = qs.filter(operation__file_id__isnull=True)
                 qs.exclude(operation__type__in=["page_add", "page_setup"]).delete()
-            event = WhiteboardEvent.objects.create(
-                whiteboard=board,
-                actor=member.user if member.user_id else None,
-                actor_identity=member.identity[:48],
-                operation=op,
-                page=page,
-            )
-            board.save(update_fields=["updated_at"])
+            try:
+                # Savepoint: a stale cached board id must not poison the
+                # surrounding transaction, it is simply re-resolved below.
+                with transaction.atomic():
+                    event = self._create_event(board_id, member, op, page)
+            except IntegrityError:
+                self._board_id_cache = None
+                event = self._create_event(self._board_id(member.classroom), member, op, page)
+            self._touch_board(board_id)
             op = dict(op)
             op["event_id"] = event.id
             return op, event.id
+
+    def _create_event(self, board_id, member, op, page):
+        return WhiteboardEvent.objects.create(
+            whiteboard_id=board_id,
+            actor=member.user if member.user_id else None,
+            actor_identity=member.identity[:48],
+            operation=op,
+            page=page,
+        )
+
+    def _board_id(self, classroom) -> int:
+        """Resolve the board once per connection instead of once per op.
+
+        Every stroke used to cost an extra ``get_or_create`` round trip even
+        though a classroom only ever has one board.
+        """
+        cached = getattr(self, "_board_id_cache", None)
+        if cached is None:
+            board, _ = Whiteboard.objects.get_or_create(classroom=classroom)
+            self._board_id_cache = cached = board.id
+        return cached
+
+    def _touch_board(self, board_id: int) -> None:
+        """Keep ``updated_at`` roughly truthful without a write per stroke."""
+        now = timezone.now()
+        last = getattr(self, "_board_touched", None)
+        if last is not None and (now - last).total_seconds() < BOARD_TOUCH_INTERVAL:
+            return
+        Whiteboard.objects.filter(id=board_id).update(updated_at=now)
+        self._board_touched = now

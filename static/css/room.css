@@ -177,8 +177,8 @@ body.full-page .messages {
        the stage instead of over the stage + chat panel */
     position: relative;
 }
-.stage { flex: 1; display: flex; flex-direction: column; min-height: 0; position: relative; }
-.stage-view { flex: 1; display: flex; flex-direction: column; min-height: 0; gap: .6rem; }
+.stage { flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; position: relative; }
+.stage-view { flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; gap: .6rem; }
 .hidden { display: none !important; }
 
 /* ---------- stage toolbar / layouts (floating pill over the stage) ---------- */
@@ -594,6 +594,7 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
    keep the dock to one comfortable row on a laptop. */
 .wb-toolbar {
     display: flex; align-items: center; gap: .3rem; flex-wrap: wrap;
+    min-width: 0; /* a nowrap dock must scroll, not widen the stage */
     background: color-mix(in srgb, var(--room-surface) 96%, transparent);
     backdrop-filter: blur(6px);
     -webkit-backdrop-filter: blur(6px);
@@ -696,7 +697,7 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
     font-size: .78rem; font-weight: 600; white-space: nowrap;
     padding: 0 .35rem; color: var(--room-text); direction: rtl;
 }
-.wb-canvas-wrap { flex: 1; min-height: 0; position: relative; background: var(--surface); border-radius: var(--radius); }
+.wb-canvas-wrap { flex: 1; min-height: 0; min-width: 0; position: relative; overflow: hidden; background: var(--surface); border-radius: var(--radius); }
 /* Fabric.js stacks TWO canvases: .lower-canvas (the painted artwork) and
    .upper-canvas (a transparent interaction layer on top).  A `background`
    on both — as this rule used to do — paints an opaque sheet over the
@@ -704,9 +705,57 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
    not work").  Only the lower canvas may have a background, and the
    upper canvas must stay fully transparent. */
 .wb-canvas-wrap canvas { border-radius: var(--radius); cursor: crosshair; touch-action: none; }
-.wb-canvas-wrap .lower-canvas { background: var(--surface); }
+/* The page colour and the grid/dots pattern are painted by this layer and the
+   canvas above it is fully transparent.  Consequences that matter:
+     * the grid is never covered or "erased" together with the ink;
+     * the eraser (destination-out) really removes strokes — it reveals this
+       layer instead of drawing a fake stroke in the page colour;
+     * changing the colour/grid is one CSS write, not a canvas repaint. */
+.wb-bg {
+    position: absolute; inset: 0; border-radius: var(--radius);
+    pointer-events: none; background-color: #fff; background-repeat: repeat;
+    background-size: 28px 28px; --wb-line: #d9dee7;
+}
+.wb-bg.grid {
+    background-image:
+        linear-gradient(to right, var(--wb-line) 1px, transparent 1px),
+        linear-gradient(to bottom, var(--wb-line) 1px, transparent 1px);
+}
+.wb-bg.dots {
+    background-image: radial-gradient(circle, var(--wb-line) 1.4px, transparent 1.6px);
+}
+.wb-canvas-wrap .canvas-container { position: absolute; inset: 0; z-index: 1; }
+.wb-canvas-wrap .lower-canvas { background: transparent; }
 .wb-canvas-wrap .upper-canvas { background: transparent !important; }
-.wb-canvas-wrap canvas[aria-label] { background: var(--surface); } /* pre-fabric paint, removed on init */
+.wb-canvas-wrap canvas[aria-label] { background: transparent; } /* pre-fabric paint, removed on init */
+/* Inline text entry (the text tool used to call window.prompt()) */
+.wb-text-edit {
+    position: absolute; z-index: 6; min-width: 140px; max-width: min(420px, 80%);
+    direction: rtl;
+}
+.wb-text-edit input {
+    width: 100%; box-sizing: border-box;
+    padding: .12em .25em; border: 0; border-radius: 4px;
+    background: color-mix(in srgb, #fff 88%, transparent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--wb-text-color, #2563eb) 55%, transparent);
+    color: var(--wb-text-color, #2563eb); font: inherit; line-height: 1.2; outline: none;
+}
+.wb-text-edit input::placeholder { color: color-mix(in srgb, currentColor 55%, transparent); font-size: .78em; }
+.wb-toolbar .wb-action:disabled { opacity: .3; cursor: default; }
+.wb-toolbar .wb-action:disabled:hover { background: transparent; }
+.wb-toolbar .wb-action[aria-disabled="true"] { opacity: .3; cursor: default; }
+/* Read-only members keep the dock, but only the controls that still do
+   something for them: watch, flip pages, save a PNG, fullscreen.  Drawing
+   tools used to stay visible and merely flash a toast. */
+.wb-toolbar.no-draw .wb-tool,
+.wb-toolbar.no-draw .wb-ink,
+.wb-toolbar.no-draw .wb-sep,
+.wb-toolbar.no-draw #wb-bg,
+.wb-toolbar.no-draw #wb-grid,
+.wb-toolbar.no-draw .wb-action[data-action="undo"],
+.wb-toolbar.no-draw .wb-action[data-action="redo"],
+.wb-toolbar.no-draw .wb-action[data-action="clear"] { display: none; }
+.shortcut-sep { margin-top: .55rem; list-style: none; font-weight: 600; }
 .wb-action.active { background: var(--accent); color: var(--accent-contrast); }
 
 /* laser pointer dot (remote + local) */
@@ -1197,6 +1246,11 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
         -webkit-mask-image: linear-gradient(to left, #000 calc(100% - 22px), transparent);
         mask-image: linear-gradient(to left, #000 calc(100% - 22px), transparent);
     }
+    /* `min-width: 0` is load-bearing: without it the toolbar's min-content
+       width (all buttons in one nowrap row) stretched the whole stage to
+       ~960px on a 390px phone, cutting the board off the right edge. */
+    .wb-toolbar { min-width: 0; }
+    .stage-view { min-width: 0; }
     .wb-toolbar::-webkit-scrollbar { display: none; }
     .wb-toolbar > * { flex: 0 0 auto; }
     .wb-group { flex-wrap: nowrap; }

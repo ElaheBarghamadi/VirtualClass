@@ -268,10 +268,10 @@
                             <svg class="ic" aria-hidden="true"><use href="#i-lock"/></svg> فقط نمایش
                         </span>
                         <div class="wb-group" role="group" aria-label="ابزار قلم">
-                            <button type="button" class="wb-tool active" data-tool="pen" title="قلم" aria-label="قلم" aria-pressed="true"><svg class="ic"><use href="#i-pen"/></svg></button>
-                            <button type="button" class="wb-tool" data-tool="highlighter" title="هایلایت" aria-label="هایلایت" aria-pressed="false"><svg class="ic"><use href="#i-marker"/></svg></button>
-                            <button type="button" class="wb-tool" data-tool="eraser" title="پاک‌کن" aria-label="پاک‌کن" aria-pressed="false"><svg class="ic"><use href="#i-eraser"/></svg></button>
-                            <button type="button" class="wb-tool" data-tool="laser" title="نشانگر لیزری" aria-label="نشانگر لیزری" aria-pressed="false"><svg class="ic"><use href="#i-laser"/></svg></button>
+                            <button type="button" class="wb-tool active" data-tool="pen" title="قلم (P)" aria-label="قلم" aria-pressed="true"><svg class="ic"><use href="#i-pen"/></svg></button>
+                            <button type="button" class="wb-tool" data-tool="highlighter" title="هایلایت (H)" aria-label="هایلایت" aria-pressed="false"><svg class="ic"><use href="#i-marker"/></svg></button>
+                            <button type="button" class="wb-tool" data-tool="eraser" title="پاک‌کن (E)" aria-label="پاک‌کن" aria-pressed="false"><svg class="ic"><use href="#i-eraser"/></svg></button>
+                            <button type="button" class="wb-tool" data-tool="laser" title="نشانگر لیزری (L)" aria-label="نشانگر لیزری" aria-pressed="false"><svg class="ic"><use href="#i-laser"/></svg></button>
                         </div>
                         <span class="wb-sep" aria-hidden="true"></span>
                         <div class="wb-group" role="group" aria-label="شکل‌ها">
@@ -279,7 +279,7 @@
                             <button type="button" class="wb-tool" data-tool="arrow" title="فلش" aria-label="فلش" aria-pressed="false"><svg class="ic"><use href="#i-arrow"/></svg></button>
                             <button type="button" class="wb-tool" data-tool="rectangle" title="مستطیل" aria-label="مستطیل" aria-pressed="false"><svg class="ic"><use href="#i-square"/></svg></button>
                             <button type="button" class="wb-tool" data-tool="circle" title="دایره" aria-label="دایره" aria-pressed="false"><svg class="ic"><use href="#i-circle"/></svg></button>
-                            <button type="button" class="wb-tool" data-tool="text" title="متن" aria-label="متن" aria-pressed="false"><svg class="ic"><use href="#i-text"/></svg></button>
+                            <button type="button" class="wb-tool" data-tool="text" title="متن (T)" aria-label="متن" aria-pressed="false"><svg class="ic"><use href="#i-text"/></svg></button>
                         </div>
                         <span class="wb-sep" aria-hidden="true"></span>
                         <div class="wb-group wb-ink" role="group" aria-label="رنگ و ضخامت قلم">
@@ -293,9 +293,9 @@
                         </div>
                         <span class="wb-sep" aria-hidden="true"></span>
                         <div class="wb-group" role="group" aria-label="ویرایش">
-                            <button type="button" class="wb-action" data-action="undo" title="بازگشت (Ctrl+Z)" aria-label="بازگشت"><svg class="ic"><use href="#i-undo"/></svg></button>
-                            <button type="button" class="wb-action" data-action="redo" title="جلو (Ctrl+Shift+Z)" aria-label="جلو"><svg class="ic"><use href="#i-redo"/></svg></button>
-                            <button type="button" class="wb-action wb-danger" data-action="clear" title="پاک کردن صفحه" aria-label="پاک کردن صفحه"><svg class="ic"><use href="#i-trash"/></svg></button>
+                            <button type="button" class="wb-action" id="wb-undo" data-action="undo" title="بازگشت (Ctrl+Z)" aria-label="بازگشت"><svg class="ic"><use href="#i-undo"/></svg></button>
+                            <button type="button" class="wb-action" id="wb-redo" data-action="redo" title="جلو (Ctrl+Shift+Z)" aria-label="جلو"><svg class="ic"><use href="#i-redo"/></svg></button>
+                            <button type="button" class="wb-action wb-danger" id="wb-clear" data-action="clear" title="پاک کردن صفحه" aria-label="پاک کردن صفحه"><svg class="ic"><use href="#i-trash"/></svg></button>
                         </div>
                         <span class="wb-sep" aria-hidden="true"></span>
                         <div class="wb-pages" role="group" aria-label="صفحه‌های تخته">
@@ -310,12 +310,21 @@
                                 <input type="color" id="wb-bg" value="#ffffff" aria-label="رنگ زمینهٔ صفحه">
                                 <span class="wb-swatch-dot" aria-hidden="true"></span>
                             </label>
-                            <button type="button" class="wb-action" id="wb-grid" title="پس‌زمینهٔ شطرنجی" aria-label="پس‌زمینهٔ شطرنجی" aria-pressed="false"><svg class="ic"><use href="#i-grid"/></svg></button>
-                            <button type="button" id="wb-save" class="wb-action" title="ذخیرهٔ این صفحه (PNG)" aria-label="ذخیرهٔ این صفحه"><svg class="ic"><use href="#i-download"/></svg></button>
+                            <button type="button" class="wb-action" id="wb-grid" title="پس‌زمینه: شطرنجی / نقطه‌ای / ساده" aria-label="پس‌زمینهٔ شطرنجی" aria-pressed="false"><svg class="ic"><use href="#i-grid"/></svg></button>
+                            <button type="button" id="wb-save" class="wb-action" title="ذخیرهٔ این صفحه به‌صورت تصویر (PNG)" aria-label="ذخیرهٔ این صفحه"><svg class="ic"><use href="#i-download"/></svg></button>
                             <button type="button" class="wb-action" data-action="fullscreen-stage" title="تمام‌صفحه" aria-label="تمام‌صفحه"><svg class="ic"><use href="#i-maximize"/></svg></button>
                         </div>
                     </div>
-                    <div class="wb-canvas-wrap"><canvas id="whiteboard-canvas" aria-label="تخته سفید"></canvas></div>
+                    <div class="wb-canvas-wrap">
+                        <!-- Page colour + grid live UNDER the (transparent) fabric
+                             canvas: the grid is never erased with the ink, and the
+                             eraser can really punch through to the page. -->
+                        <div class="wb-bg" id="wb-bg-layer" aria-hidden="true"></div>
+                        <canvas id="whiteboard-canvas" aria-label="تخته سفید"></canvas>
+                        <div class="wb-text-edit hidden" id="wb-text-edit">
+                            <input type="text" id="wb-text-input" maxlength="500" autocomplete="off" spellcheck="false" aria-label="متن روی تخته" placeholder="متن… (Enter برای ثبت، Esc برای لغو)">
+                        </div>
+                    </div>
                 </div>
         <section class="dt-card hidden" id="device-test-card" aria-hidden="true" aria-labelledby="dt-title">
             <div class="dt-lead">

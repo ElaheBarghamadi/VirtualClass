@@ -1946,6 +1946,10 @@ function showShortcuts() {
             <li><kbd>S</kbd> شروع/پایان اشتراک صفحه</li>
             <li><kbd>R</kbd> ارسال واکنش سریع (قلب)</li>
             <li><kbd>Esc</kbd> بستن سینی واکنش‌ها و پنجره‌ها</li>
+            <li class="shortcut-sep">در تختهٔ سفید:</li>
+            <li><kbd>P</kbd> قلم &nbsp;·&nbsp; <kbd>H</kbd> هایلایت &nbsp;·&nbsp; <kbd>E</kbd> پاک‌کن</li>
+            <li><kbd>L</kbd> نشانگر لیزری &nbsp;·&nbsp; <kbd>T</kbd> متن</li>
+            <li><kbd>Ctrl</kbd>+<kbd>Z</kbd> بازگشت &nbsp;·&nbsp; <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> جلو</li>
         </ul>
         <p class="muted small">هنگام تایپ در فیلدهای متنی، میان‌برها غیرفعال‌اند.</p>`);
 }
@@ -2208,10 +2212,13 @@ function initShortcuts() {
         const t = e.target;
         if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
         const key = e.key.toLowerCase();
+        // The whiteboard owns letter keys while it is on screen (P = pen),
+        // so keep the room shortcuts out of its way there.
+        const boardOpen = !document.getElementById('view-whiteboard')?.classList.contains('hidden');
         if (key === 'm') { e.preventDefault(); Media.toggleMicrophone(); }
         else if (key === 'v') { e.preventDefault(); Media.toggleCamera(); }
         else if (key === 'c') { e.preventDefault(); document.getElementById('btn-chat')?.click(); }
-        else if (key === 'p') { e.preventDefault(); document.getElementById('btn-people')?.click(); }
+        else if (key === 'p' && !boardOpen) { e.preventDefault(); document.getElementById('btn-people')?.click(); }
         else if (key === 's') { e.preventDefault(); Media.toggleScreenShare(); }
         else if (key === 'r') { e.preventDefault(); presence.send({ action: 'reaction', reaction: 'heart' }); }
         else if (key === 'd' && e.shiftKey) { e.preventDefault(); document.getElementById('btn-captions')?.click(); }
