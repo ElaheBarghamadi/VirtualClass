@@ -70,6 +70,7 @@ from .services import (
     set_member_muted,
     set_member_permission,
     set_member_role,
+    set_annotation_open,
     set_presentation,
     start_session,
     update_settings,
@@ -359,6 +360,7 @@ def _room_context(request, classroom: Classroom, member) -> dict:
         "allowed_extensions": sorted(ALLOWED_EXTENSIONS),
         "media": media_config_payload(),
         "waiting_room_count": classroom.members.filter(is_active=True, in_waiting_room=True).count(),
+        "annotation_open": classroom.annotation_open,
         # the room takes over the whole viewport — no header/footer/margins
         "full_page": True,
     }
@@ -639,6 +641,27 @@ def presentation_view(request, room_code: str):
     except ValueError:
         return JsonResponse({"detail": "page نامعتبر است."}, status=400)
     return JsonResponse({"ok": True})
+
+
+@login_required
+@require_POST
+def presentation_annotation_view(request, room_code: str):
+    """Open/lock annotation on the presented file (presenters only)."""
+    classroom = get_object_or_404(Classroom, room_code=room_code)
+    try:
+        body = _json_body(request)
+    except (TypeError, ValueError):
+        return JsonResponse({"detail": "درخواست نامعتبر است."}, status=400)
+    opened = body.get("open", True)
+    if not isinstance(opened, bool):
+        return JsonResponse({"detail": "مقدار open باید بولی باشد."}, status=400)
+    try:
+        set_annotation_open(classroom, request.user, opened)
+    except PermissionDenied as exc:
+        return _json_error(exc)
+    except ClassroomAccessError as exc:
+        return _json_error(exc, status=404)
+    return JsonResponse({"ok": True, "open": opened})
 
 
 # ---------------------------------------------------------------------------

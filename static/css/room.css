@@ -129,6 +129,21 @@ body.full-page .messages {
 .conn-pill.lost:hover { background: color-mix(in srgb, var(--danger) 9%, var(--surface-2)); }
 .conn-pill:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
+/* «the slide is live» chip — floats over the media/whiteboard views */
+.pres-return {
+    position: absolute; top: .8rem; inset-inline-start: .9rem; z-index: 8;
+    display: inline-flex; align-items: center; gap: .4rem;
+    padding: .38rem .8rem; border-radius: var(--radius-pill);
+    font: inherit; font-size: .78rem; font-weight: 700; cursor: pointer;
+    color: var(--accent-contrast); background: var(--accent);
+    border: none; box-shadow: 0 6px 20px -8px color-mix(in srgb, var(--accent) 80%, transparent);
+    transition: transform var(--speed) var(--ease), box-shadow var(--speed) var(--ease);
+}
+.pres-return .ic { width: 14px; height: 14px; flex: none; fill: currentColor; stroke: none; }
+.pres-return:hover { transform: translateY(-1px); box-shadow: 0 9px 24px -8px color-mix(in srgb, var(--accent) 85%, transparent); }
+.pres-return:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.pres-return.hidden { display: none; }
+
 /* ---------- body ---------- */
 .room-body {
     flex: 1; display: grid; grid-template-columns: 1fr 330px; min-height: 0;
@@ -564,6 +579,12 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
 .pres-tools .wb-swatch.denied,
 .pres-tools .wb-width.denied { display: none; }
 .pres-tools .wb-action[data-action="fullscreen-stage"] { display: inline-flex; }
+/* On a phone the presentation header already wraps to several rows; the width
+   slider is the one control that can go (colour + tool stay) so the ink row
+   keeps a single line — with the presenter's lock button included. */
+@media (max-width: 560px) {
+    .pres-tools .wb-width { display: none; }
+}
 .screen-header { gap: .6rem; flex-wrap: wrap; }
 
 /* ---------- whiteboard ---------- */
@@ -622,6 +643,15 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
 }
 .wb-mode-chip .ic { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .wb-mode-chip.hidden { display: none; }
+/* preview = «this is only on your screen», so it does not use the warning tone */
+#pres-preview-chip {
+    background: color-mix(in srgb, var(--accent) 13%, transparent);
+    color: color-mix(in srgb, var(--accent) 78%, var(--room-text));
+}
+/* presenter's shared ink switch: gold when open, muted + struck when locked */
+.pres-lock.is-locked { color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); }
+.pres-lock.is-locked .ic { opacity: .9; }
+.pres-lock:not(.is-locked) { color: color-mix(in srgb, var(--success) 70%, var(--room-text)); }
 
 /* ink controls: a colour swatch that shows the real value + a width slider */
 .wb-ink { padding-inline: .35rem; gap: .5rem; }
@@ -940,8 +970,15 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
 .file-icon[data-kind="zip"] { background: color-mix(in srgb, #d97706 15%, transparent); color: var(--warning); border-color: color-mix(in srgb, #d97706 28%, transparent); }
 .file-info { display: grid; min-width: 0; flex: 1; padding: .15rem .3rem; border-radius: var(--radius-sm); }
 .file-name { font-size: .84rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.file-info small { font-size: .68rem; }
-.file-actions { display: flex; gap: .3rem; flex: none; align-items: center; }
+.file-info small { font-size: .68rem; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.file-actions { display: flex; gap: .25rem; flex: none; align-items: center; }
+.file-actions .btn, .file-delete {
+    width: 30px; height: 30px; padding: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+}
+.file-actions .btn .ic { width: 15px; height: 15px; }
+/* the row being presented says so with its pill — the button would repeat it */
+.file-item.presenting .file-present { display: none; }
 .file-download { white-space: nowrap; }
 .file-delete {
     border: none; background: transparent; cursor: pointer;
@@ -961,10 +998,13 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
 }
 .file-item.presenting { border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
 .file-item.presenting .file-presenting-pill { display: inline-block; }
-/* presenters: the file row is the present trigger (primary button = download) */
-.file-list.can-present .file-info { cursor: pointer; }
-.file-list.can-present .file-info:hover { background: var(--surface-3); }
-.file-list.can-present .file-info:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+/* Every row opens: presenters present it, everybody else previews it locally
+   (streamed inline — the download button stays the only way to save a copy). */
+.file-list .file-info { cursor: pointer; }
+.file-list .file-info:hover { background: var(--surface-3); }
+.file-list .file-info:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.file-list .file-name { text-decoration: none; }
+.file-list .file-info:hover .file-name { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
 
 /* ---------- control bar (floating, minimal) ---------- */
 /* NOTE: left:50% + translateX(-50%) would cap the shrink-to-fit width at

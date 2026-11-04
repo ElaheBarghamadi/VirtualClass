@@ -557,6 +557,113 @@ class PresentationAnnotationTests(TransactionTestCase):
         assert not WhiteboardEvent.objects.filter(operation__id="bad").exists()
 
 
+class SharedSlideAnnotationTests(TransactionTestCase):
+    """Writing on the *presented* file is open to the room by default.
+
+    Board permission (``can_use_whiteboard``) still guards the free
+    whiteboard; a shared slide is meant to be written on by everybody, and
+    the presenter keeps a live switch to lock it.
+    """
+
+    def setUp(self):
+        from django.core.files.base import ContentFile
+
+        from classrooms.models import SharedFile
+
+        self.owner = User.objects.create_user(username="sa_owner", password="x")
+        self.viewer = User.objects.create_user(username="sa_viewer", password="x")
+        self.classroom = create_classroom(self.owner, title="Slides")
+        join_classroom(self.classroom, self.viewer)
+        self.shared = SharedFile.objects.create(
+            classroom=self.classroom, uploader=self.owner,
+            original_name="deck.pdf", size=12, content_type="application/pdf",
+        )
+        self.shared.file.save("deck.pdf", ContentFile(b"%PDF-1.4 test"), save=True)
+        # the room is presenting it
+        self.classroom.current_file = self.shared
+        self.classroom.save(update_fields=["current_file"])
+
+    def _ws(self, user):
+        return WebsocketCommunicator(
+            app_with_user(user, wb_routes), f"/ws/classroom/{self.classroom.room_code}/whiteboard/"
+        )
+
+    def _draw(self, fid, ident):
+        return {"action": "op", "op": {
+            "type": "draw", "tool": "pen", "points": [[1, 2], [3, 4]],
+            "color": "#000", "width": 2, "id": ident, "page": 1, "file_id": fid,
+        }}
+
+    def test_viewer_without_board_permission_can_annotate_the_slide(self):
+        async def scenario():
+            ow = self._ws(self.owner)
+            connected, _ = await ow.connect()
+            assert connected
+            await ow.receive_json_from()          # history
+            vw = self._ws(self.viewer)
+            connected, _ = await vw.connect()
+            assert connected
+            await vw.receive_json_from()
+
+            await vw.send_json_to(self._draw(self.shared.id, "note1"))
+            msg = await ow.receive_json_from()
+            assert msg["type"] == "whiteboard_operation", msg
+            assert msg["op"]["file_id"] == self.shared.id
+            assert msg["actor_identity"] == f"u:{self.viewer.id}"
+            await ow.disconnect()
+            await vw.disconnect()
+
+        async_to_sync(scenario)()
+        assert WhiteboardEvent.objects.filter(operation__id="note1").exists()
+
+    def test_locked_presentation_rejects_viewer_ink(self):
+        self.classroom.annotation_open = False
+        self.classroom.save(update_fields=["annotation_open"])
+
+        async def scenario():
+            vw = self._ws(self.viewer)
+            connected, _ = await vw.connect()
+            assert connected
+            await vw.receive_json_from()
+            await vw.send_json_to(self._draw(self.shared.id, "note2"))
+            msg = await vw.receive_json_from()
+            assert msg["type"] == "error", msg
+            await vw.disconnect()
+
+        async_to_sync(scenario)()
+        assert not WhiteboardEvent.objects.filter(operation__id="note2").exists()
+
+    def test_viewer_cannot_ink_a_file_that_is_not_on_screen(self):
+        async def scenario():
+            vw = self._ws(self.viewer)
+            connected, _ = await vw.connect()
+            assert connected
+            await vw.receive_json_from()
+            await vw.send_json_to(self._draw(self.shared.id + 999, "note3"))
+            msg = await vw.receive_json_from()
+            assert msg["type"] == "error", msg
+            await vw.disconnect()
+
+        async_to_sync(scenario)()
+        assert not WhiteboardEvent.objects.filter(operation__id="note3").exists()
+
+    def test_viewer_still_cannot_draw_the_free_whiteboard(self):
+        async def scenario():
+            vw = self._ws(self.viewer)
+            connected, _ = await vw.connect()
+            assert connected
+            await vw.receive_json_from()
+            await vw.send_json_to({"action": "op", "op": {
+                "type": "draw", "tool": "pen", "points": [[1, 2], [3, 4]],
+                "color": "#000", "width": 2, "id": "board9", "page": 1,
+            }})
+            msg = await vw.receive_json_from()
+            assert msg["type"] == "error", msg
+            await vw.disconnect()
+
+        assert not WhiteboardEvent.objects.filter(operation__id="board9").exists()
+
+
 class OpValidationTests(TransactionTestCase):
     """Unit tests for the consumer's op validator (pure function)."""
 

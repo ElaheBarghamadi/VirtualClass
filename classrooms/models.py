@@ -94,6 +94,10 @@ class Classroom(models.Model):
         verbose_name="فایل در حال ارائه",
     )
     current_page = models.PositiveIntegerField(default=1, verbose_name="صفحهٔ جاری")
+    # Shared material is meant to be written on together: while this is open
+    # every admitted member may annotate the file being presented, even
+    # without the whiteboard permission (the presenter can lock it live).
+    annotation_open = models.BooleanField(default=True, verbose_name="نوشتن روی ارائه برای همه")
 
     class Meta:
         verbose_name = "کلاس"

@@ -1112,7 +1112,26 @@ function handleEvent(data) {
             toast(`فایل «${data.name}» حذف شد.`, 'info', 2500);
             break;
         case 'presentation_changed':
+            if (typeof data.annotation_open === 'boolean') {
+                Presentation.applyAnnotationPolicy(data.annotation_open);
+                document.getElementById('view-presentation').dataset.annotationOpen =
+                    data.annotation_open ? '1' : '0';
+            }
             applyPresentation(data);
+            break;
+        case 'presentation_annotation':
+            Presentation.applyAnnotationPolicy(data.open);
+            document.getElementById('view-presentation').dataset.annotationOpen =
+                data.open ? '1' : '0';
+            // Everybody needs to know: otherwise a student keeps tapping a
+            // dead canvas — or never notices they may now write.
+            toast(
+                data.open
+                    ? 'نوشتن روی ارائه برای همه باز شد.'
+                    : 'نوشتن روی ارائه قفل شد؛ فقط ارائه‌دهنده می‌تواند بنویسد.',
+                'info',
+                data.open ? 2600 : 3200,
+            );
             break;
         case 'quiz_started':
             QuizClient.handleStarted(data);
@@ -1801,6 +1820,7 @@ function switchView(view) {
         document.getElementById(`view-${id}`).classList.toggle('hidden', id !== view);
     }
     if (view === 'whiteboard') setTimeout(() => Whiteboard.resize(), 60);
+    syncPresReturnChip();
     // picture-in-picture camera for the full-stage views (whiteboard/
     // presentation/screen) — the media engine decides what to show.
     Media.updatePip(view);
@@ -2251,21 +2271,25 @@ function initSettingsModal() {
 function applyFilePresentability() {
     const list = document.getElementById('file-list');
     if (!list) return;
-    list.classList.toggle('can-present', !!PERMISSIONS.can_present);
+    const canPresent = !!PERMISSIONS.can_present;
+    list.classList.toggle('can-present', canPresent);
     list.querySelectorAll('.file-item').forEach((li) => {
         const info = li.querySelector('.file-info');
         if (!info) return;
-        if (PERMISSIONS.can_present) {
-            info.dataset.present = li.dataset.fileId;
-            info.setAttribute('role', 'button');
-            info.setAttribute('tabindex', '0');
-            if (!info.title) info.title = 'کلیک: ارائهٔ این فایل';
+        const id = li.dataset.fileId;
+        // Presenters present (room-wide); everybody else opens a private
+        // preview.  Neither downloads anything — the download button does.
+        if (canPresent) {
+            info.dataset.present = id;
+            delete info.dataset.preview;
+            info.title = 'کلیک: ارائهٔ این فایل برای همه';
         } else {
+            info.dataset.preview = id;
             delete info.dataset.present;
-            info.removeAttribute('role');
-            info.removeAttribute('tabindex');
-            info.removeAttribute('title');
+            info.title = 'کلیک: مشاهدهٔ فایل بدون دانلود';
         }
+        info.setAttribute('role', 'button');
+        info.setAttribute('tabindex', '0');
     });
 }
 
@@ -2381,6 +2405,22 @@ function initFiles() {
         }
         api('/presentation/', { file_id: Number(trigger.dataset.present), page: 1 });
     };
+    /**
+     * Open a shared file on this screen only: streamed inline into the
+     * presentation canvas, nothing downloaded, nobody else switched to it.
+     */
+    const previewFile = (trigger) => {
+        const li = trigger.closest('.file-item');
+        if (!li) return;
+        switchView('presentation');
+        Presentation.preview({
+            file_id: Number(trigger.dataset.preview),
+            file_name: li.dataset.fileName || '',
+            page: 1,
+            has_pdf: li.dataset.hasPdf === '1',
+        });
+        if (window.matchMedia('(max-width: 900px)').matches) setSideOpen(false);
+    };
     const deleteFile = async (btn) => {
         const ok = await confirmDialog('حذف فایل', 'این فایل برای همهٔ شرکت‌کنندگان حذف شود؟',
             { danger: true, okLabel: 'حذف' });
@@ -2396,16 +2436,20 @@ function initFiles() {
     list.addEventListener('click', (e) => {
         const del = e.target.closest('.file-delete');
         if (del) { deleteFile(del); return; }
-        if (e.target.closest('a[download]')) return; // native download
-        const trigger = e.target.closest('[data-present]');
-        if (trigger) presentFile(trigger);
+        if (e.target.closest('a[download]')) return; // explicit download only
+        const present = e.target.closest('[data-present]');
+        if (present) { presentFile(present); return; }
+        const preview = e.target.closest('[data-preview]');
+        if (preview) previewFile(preview);
     });
     list.addEventListener('keydown', (e) => {
         if (e.key !== 'Enter' && e.key !== ' ') return;
-        const trigger = e.target.closest('[data-present]');
-        if (!trigger) return;
+        const present = e.target.closest('[data-present]');
+        const preview = e.target.closest('[data-preview]');
+        if (!present && !preview) return;
         e.preventDefault();
-        presentFile(trigger);
+        if (present) presentFile(present);
+        else previewFile(preview);
     });
 }
 
@@ -2436,6 +2480,15 @@ function syncPresentingBadge(fileId) {
     document.querySelectorAll('#file-list .file-item').forEach((li) => {
         li.classList.toggle('presenting', fileId != null && Number(li.dataset.fileId) === Number(fileId));
     });
+    syncPresReturnChip();
+}
+
+/** The chip only makes sense while the slide is NOT the visible view. */
+function syncPresReturnChip() {
+    const chip = document.getElementById('pres-return');
+    if (!chip) return;
+    const onPresentation = !document.getElementById('view-presentation')?.classList.contains('hidden');
+    chip.classList.toggle('hidden', !livePresentation || onPresentation);
 }
 
 function addFileItem(file) {
@@ -2444,12 +2497,15 @@ function addFileItem(file) {
     const li = document.createElement('li');
     li.className = 'file-item';
     li.dataset.fileId = String(file.id);
-    const presentAttrs = PERMISSIONS.can_present
-        ? ` data-present="${Number(file.id)}" role="button" tabindex="0" title="کلیک: ارائهٔ این فایل"`
-        : '';
+    li.dataset.fileName = file.name || '';
+    li.dataset.hasPdf = file.has_pdf ? '1' : '0';
+    // Presenters present it; everyone else opens it locally (no download).
+    const openAttrs = PERMISSIONS.can_present
+        ? ` data-present="${Number(file.id)}" role="button" tabindex="0" title="کلیک: ارائهٔ این فایل برای همه"`
+        : ` data-preview="${Number(file.id)}" role="button" tabindex="0" title="کلیک: مشاهدهٔ فایل بدون دانلود"`;
     li.innerHTML = `
         <span class="file-icon" aria-hidden="true"><svg class="ic" viewBox="0 0 24 24"><use href="#i-file"/></svg></span>
-        <div class="file-info"${presentAttrs}>
+        <div class="file-info"${openAttrs}>
             <span class="file-name"></span>
             <small class="muted"></small>
         </div>
@@ -2458,7 +2514,7 @@ function addFileItem(file) {
             ${PERMISSIONS.can_present
                 ? `<button type="button" class="btn btn-sm btn-primary file-present"
                            data-present="${Number(file.id)}"
-                           title="ارائهٔ این فایل برای همه" aria-label="ارائهٔ این فایل"><svg class="ic" aria-hidden="true"><use href="#i-play"/></svg> ارائه</button>`
+                           title="ارائهٔ این فایل برای همه" aria-label="ارائهٔ این فایل"><svg class="ic" aria-hidden="true"><use href="#i-play"/></svg></button>`
                 : ''}
             <a class="btn btn-sm btn-ghost file-download" href="${file.url}" download
                title="دانلود این فایل" aria-label="دانلود این فایل"><svg class="ic" aria-hidden="true"><use href="#i-download"/></svg></a>
@@ -2526,8 +2582,15 @@ function showClassEnded({ by = '', owner = false } = {}) {
     panel.querySelector('[data-ended-home]')?.focus?.();
 }
 
-function applyPresentation(data) {
+// Last `presentation_changed` payload (or the server-rendered one at boot):
+// the «back to the slide» chip and a page refresh both need it.
+let livePresentation = null;
+
+function applyPresentation(data, { open = true } = {}) {
+    livePresentation = data && data.file_id ? data : null;
     syncPresentingBadge(data?.file_id ?? null);
+    // Only the presented file accepts free ink (see Presentation._annotAllowed).
+    Presentation.setPresented(data?.file_id ?? null);
     if (!data || !data.file_id) {
         Presentation.hide();
         switchView('media');
@@ -2535,7 +2598,7 @@ function applyPresentation(data) {
     }
     // switch FIRST: the renderer measures its holder, and a hidden
     // holder measures 0×0 (which now aborts the render entirely).
-    switchView('presentation');
+    if (open) switchView('presentation');
     Presentation.show({
         file_id: data.file_id, file_name: data.file_name,
         page: data.page || 1, has_pdf: data.has_pdf,
@@ -2679,9 +2742,30 @@ safe('presentation', () => Presentation.init({
     identity: IDENTITY,
     canAnnotate: PERMISSIONS.can_use_whiteboard,
     canPresent: PERMISSIONS.can_present,
+    annotationOpen: document.getElementById('view-presentation')?.dataset.annotationOpen === '1',
+    presentedFileId: document.getElementById('view-presentation')?.dataset.currentFile || null,
     api,
 }));
 safe('quiz', () => QuizClient.init({ api, identity: IDENTITY, privileged: PRIVILEGED }));
+// A refresh during a live presentation must land on the slide, not on an
+// empty media grid — the server already told us what is on screen.
+safe('presentation-restore', () => {
+    const pv = document.getElementById('view-presentation');
+    const fileId = Number(pv?.dataset.currentFile || 0);
+    if (!fileId) return;
+    applyPresentation({
+        file_id: fileId,
+        file_name: pv.dataset.currentName || '',
+        has_pdf: pv.dataset.currentHasPdf === '1',
+        page: Number(pv.dataset.currentPage || 1) || 1,
+    });
+});
+// «ارائه در جریان است — بازگشت» on the media/whiteboard views.
+safe('presentation-return', () => {
+    document.getElementById('pres-return')?.addEventListener('click', () => {
+        if (livePresentation) applyPresentation(livePresentation);
+    });
+});
 
 // Media last, and never awaited by the boot path: it opens devices and may be
 // slow (or refused).  The room must never wait on it to become interactive.

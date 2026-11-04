@@ -901,6 +901,7 @@ def set_presentation(classroom: Classroom, operator: User, file_id: int | None, 
     # can_present field (stale default=False), e.g. owners of old classrooms.
     if actor is None or not effective_permissions(actor, classroom)["can_present"]:
         raise PermissionDenied("شما اجازهٔ ارائه ندارید.")
+    previous_file_id = classroom.current_file_id
     if file_id is not None:
         # strict int — a bool/str/float from JSON must not become "file 1"
         if isinstance(file_id, bool) or not isinstance(file_id, int):
@@ -913,13 +914,44 @@ def set_presentation(classroom: Classroom, operator: User, file_id: int | None, 
         classroom.current_file = None
     # clamp: unbounded values would overflow a PostgreSQL IntegerField
     classroom.current_page = max(1, min(9999, int(page or 1)))
-    classroom.save(update_fields=["current_file", "current_page", "updated_at"])
+    fields = ["current_file", "current_page", "updated_at"]
+    # A lock belongs to the slide on screen, not to the classroom forever:
+    # the next file opens for writing again (the presenter can re-lock).
+    if file_id is not None and previous_file_id != classroom.current_file_id:
+        classroom.annotation_open = True
+        fields.append("annotation_open")
+    classroom.save(update_fields=fields)
     broadcast(classroom.room_code, {
         "type": "presentation_changed",
         "file_id": classroom.current_file_id,
         "file_name": classroom.current_file.original_name if classroom.current_file else None,
         "has_pdf": bool(classroom.current_file and classroom.current_file.pdf_version),
         "page": classroom.current_page,
+        # Every viewer needs this to know whether their ink tools are live.
+        "annotation_open": classroom.annotation_open,
+    })
+
+
+def set_annotation_open(classroom: Classroom, operator: User, opened: bool) -> None:
+    """Open or lock *slide* annotation for everybody in the room.
+
+    Writing on the free whiteboard is a permission (``can_use_whiteboard``);
+    writing on shared material that is already on everybody's screen is not —
+    that is the point of a shared slide.  The presenter keeps the switch, and
+    it is broadcast so every client re-gates instantly.
+    """
+    actor = get_active_member(classroom, operator)
+    if actor is None or not effective_permissions(actor, classroom)["can_present"]:
+        raise PermissionDenied("شما اجازهٔ تغییر وضعیت نوشتن روی ارائه را ندارید.")
+    opened = bool(opened)
+    if classroom.annotation_open != opened:
+        classroom.annotation_open = opened
+        classroom.save(update_fields=["annotation_open", "updated_at"])
+    broadcast(classroom.room_code, {
+        "type": "presentation_annotation",
+        "open": opened,
+        "by": actor.participant_name,
+        "file_id": classroom.current_file_id,
     })
 
 

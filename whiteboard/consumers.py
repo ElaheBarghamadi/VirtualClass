@@ -114,8 +114,11 @@ class WhiteboardConsumer(SafeJsonWebsocketConsumer):
             return
 
         # Permission re-checked live — settings can change mid-session.
-        if not await self._can_draw_now():
-            await self.send_json({"type": "error", "message": "شما اجازهٔ استفاده از تخته را ندارید."})
+        if not await self._can_draw_now(op):
+            await self.send_json({
+                "type": "error",
+                "message": "شما اجازهٔ نوشتن روی این صفحه را ندارید.",
+            })
             return
 
         if op.get("type") in EPHEMERAL_OP_TYPES:
@@ -329,7 +332,7 @@ class WhiteboardConsumer(SafeJsonWebsocketConsumer):
         ).exists()
 
     @database_sync_to_async
-    def _can_draw_now(self) -> bool:
+    def _can_draw_now(self, op: dict | None = None) -> bool:
         # Single query: the member row + its classroom in one round trip.
         member = (
             ClassroomMember.objects.filter(
@@ -341,7 +344,27 @@ class WhiteboardConsumer(SafeJsonWebsocketConsumer):
         )
         if member is None:
             return False
-        return effective_permissions(member, member.classroom)["can_use_whiteboard"]
+        return self._may_write(member, op)
+
+    @staticmethod
+    def _may_write(member, op: dict | None) -> bool:
+        """Who may put ink on screen — board rules plus shared-slide rules."""
+        if effective_permissions(member, member.classroom)["can_use_whiteboard"]:
+            return True
+        # Shared material is a different capability from the free whiteboard:
+        # while the presenter leaves annotation open, anybody in the room may
+        # write on the file that is actually on screen.  Anything else (board
+        # ops, other files) still needs can_use_whiteboard.
+        if not op:
+            return False
+        classroom = member.classroom
+        file_id = op.get("file_id")
+        if not classroom.annotation_open or not classroom.current_file_id:
+            return False
+        if isinstance(file_id, bool) or not isinstance(file_id, int):
+            return False
+        # Only the file being presented — not any file id a client makes up.
+        return file_id == classroom.current_file_id
 
     @database_sync_to_async
     def _load_history(self) -> tuple[list[dict], int]:
@@ -377,7 +400,7 @@ class WhiteboardConsumer(SafeJsonWebsocketConsumer):
                 .select_related("classroom", "user")
                 .first()
             )
-            if member is None or not effective_permissions(member, member.classroom)["can_use_whiteboard"]:
+            if member is None or not self._may_write(member, op):
                 return None
 
             board, _ = Whiteboard.objects.get_or_create(classroom=member.classroom)

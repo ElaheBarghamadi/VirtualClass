@@ -215,3 +215,78 @@ class ParticipantNamingTests(TestCase):
         classroom = create_classroom(make_user("n_owner"), title="Names")
         member = join_classroom(classroom, user)
         self.assertEqual(member.participant_name, "bare_user")
+
+
+class PresentationAnnotationPolicyTests(TestCase):
+    """The presenter opens/locks writing on the presented file."""
+
+    def setUp(self):
+        self.owner = make_user("an_owner")
+        self.student = make_user("an_stu")
+        self.classroom = create_classroom(self.owner, title="Annot policy")
+        join_classroom(self.classroom, self.student)
+        self.url = reverse(
+            "room:presentation_annotation", args=[self.classroom.room_code]
+        )
+
+    def _post(self, user, payload):
+        self.client.force_login(user)
+        return self.client.post(self.url, data=payload, content_type="application/json")
+
+    def test_presenter_can_lock_and_unlock(self):
+        resp = self._post(self.owner, '{"open": false}')
+        self.assertEqual(resp.status_code, 200)
+        self.classroom.refresh_from_db()
+        self.assertFalse(self.classroom.annotation_open)
+
+        resp = self._post(self.owner, '{"open": true}')
+        self.assertEqual(resp.status_code, 200)
+        self.classroom.refresh_from_db()
+        self.assertTrue(self.classroom.annotation_open)
+
+    def test_student_cannot_change_the_policy(self):
+        resp = self._post(self.student, '{"open": false}')
+        self.assertEqual(resp.status_code, 403)
+        self.classroom.refresh_from_db()
+        self.assertTrue(self.classroom.annotation_open)
+
+    def test_non_boolean_value_is_rejected(self):
+        resp = self._post(self.owner, '{"open": "false"}')
+        self.assertEqual(resp.status_code, 400)
+        self.classroom.refresh_from_db()
+        self.assertTrue(self.classroom.annotation_open)
+
+    def test_a_new_slide_opens_for_writing_again(self):
+        from django.core.files.base import ContentFile
+
+        from .models import SharedFile
+        from .services import set_presentation
+
+        def share(name):
+            sf = SharedFile.objects.create(
+                classroom=self.classroom, uploader=self.owner,
+                original_name=name, size=10, content_type="application/pdf",
+            )
+            sf.file.save(name, ContentFile(b"%PDF-1.4 test"), save=True)
+            return sf
+
+        first, second = share("one.pdf"), share("two.pdf")
+        set_presentation(self.classroom, self.owner, first.id, 1)
+        self.assertTrue(self.classroom.annotation_open)
+
+        # the presenter locks the current slide …
+        self.classroom.annotation_open = False
+        self.classroom.save(update_fields=["annotation_open"])
+        # … and the next slide is shared again
+        set_presentation(self.classroom, self.owner, second.id, 1)
+        self.classroom.refresh_from_db()
+        self.assertTrue(self.classroom.annotation_open)
+
+    def test_room_page_carries_the_policy_for_the_client(self):
+        self.classroom.annotation_open = False
+        self.classroom.save(update_fields=["annotation_open"])
+        self.client.force_login(self.student)
+        resp = self.client.get(reverse("room:room", args=[self.classroom.room_code]))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, 'data-annotation-open="0"')
+        self.assertFalse(resp.context["annotation_open"])

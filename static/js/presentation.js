@@ -18,8 +18,13 @@ class PresentationImpl {
         this.ws = null;
         this.roomCode = null;
         this.identity = null;
-        this.canAnnotate = false;
+        this.canAnnotate = false;      // whiteboard permission (board drawing)
         this.canPresent = false;
+        // The presenter's shared switch: while open, *everybody* may annotate
+        // the file on screen — that is what makes a shared slide shared.
+        this.annotationOpen = true;
+        this.previewing = false;       // local preview, not a room presentation
+        this.presentedFileId = null;   // what the ROOM is showing (id or null)
         this.api = null;             // JSON POST helper from room.js
         this.fileId = null;
         this.fileName = '';
@@ -46,11 +51,13 @@ class PresentationImpl {
         this._ready = false;
     }
 
-    init({ roomCode, identity, canAnnotate, canPresent, api }) {
+    init({ roomCode, identity, canAnnotate, canPresent, api, annotationOpen, presentedFileId }) {
         this.roomCode = roomCode;
         this.identity = identity;
         this.canAnnotate = canAnnotate;
         this.canPresent = canPresent;
+        this.annotationOpen = annotationOpen !== false;
+        this.presentedFileId = presentedFileId ? Number(presentedFileId) : null;
         this.api = api;
         this._bindToolbar();
         this._bindNav();
@@ -73,16 +80,57 @@ class PresentationImpl {
         this._syncAnnotGate();
     }
 
+    /** Live update of the shared «everybody can write» switch. */
+    applyAnnotationPolicy(open) {
+        this.annotationOpen = open !== false;
+        this._syncAnnotGate();
+    }
+
+    /**
+     * May this client draw right now?
+     *
+     * Board permission OR (writing on the shared slide is open AND a file is
+     * on screen).  The server enforces the same rule per operation, so this
+     * only decides what the UI offers.
+     */
+    _annotAllowed() {
+        if (this.canAnnotate) return true;
+        // Free ink only ever targets the file the whole room is watching — a
+        // private preview of some other file stays read-only (the server
+        // rejects those ops anyway, so the UI must not offer them).
+        return Boolean(
+            this.annotationOpen && this.fileId && this.presentedFileId === this.fileId
+        );
+    }
+
+    /** What the room is presenting; null when nothing is on the big screen. */
+    setPresented(fileId) {
+        this.presentedFileId = fileId ? Number(fileId) : null;
+        this._syncAnnotGate();
+    }
+
     _syncAnnotGate() {
+        const allowed = this._annotAllowed();
         const wrap = document.getElementById('pres-annot');
-        if (wrap) wrap.style.pointerEvents = this.canAnnotate ? 'auto' : 'none';
+        if (wrap) wrap.style.pointerEvents = allowed ? 'auto' : 'none';
         // Annotation is a *writing* capability: without it the ink tools are
         // removed (not just dimmed going by the class name) so the header shows
         // only navigation/zoom + fullscreen.
         document.querySelectorAll(
             '.pres-tools .wb-tool, .pres-tools [data-paction], .pres-tools .wb-swatch, .pres-tools .wb-width'
-        ).forEach((b) => b.classList.toggle('denied', !this.canAnnotate));
-        document.getElementById('pres-viewonly-chip')?.classList.toggle('hidden', this.canAnnotate);
+        ).forEach((b) => b.classList.toggle('denied', !allowed));
+        document.getElementById('pres-viewonly-chip')?.classList.toggle('hidden', allowed);
+        // The lock shows the ROOM's state (not our own permission), so a
+        // presenter always sees what everyone else is allowed to do.
+        const lock = document.getElementById('pres-lock');
+        if (lock) {
+            lock.classList.toggle('is-locked', !this.annotationOpen);
+            lock.setAttribute('aria-pressed', String(this.annotationOpen));
+            lock.title = this.annotationOpen
+                ? 'قفل نوشتن روی ارائه برای همه'
+                : 'باز کردن نوشتن روی ارائه برای همه';
+            lock.setAttribute('aria-label', lock.title);
+        }
     }
 
     // ------------------------------------------------------------ transport
@@ -136,7 +184,25 @@ class PresentationImpl {
     }
 
     // ------------------------------------------------------------ show / navigate
+    /** What the room is presenting (driven by ``presentation_changed``). */
     show({ file_id, file_name, page, has_pdf = false }) {
+        this.previewing = false;
+        this._open({ file_id, file_name, page, has_pdf });
+    }
+
+    /**
+     * Open a file for THIS browser only — nothing is broadcast and nobody else
+     * is switched to it.  This is how a participant reads shared material
+     * without downloading it: the bytes are streamed inline into the canvas,
+     * and the download button stays the only way to save a copy.
+     */
+    preview({ file_id, file_name, page = 1, has_pdf = false }) {
+        if (!file_id) return;
+        this.previewing = true;
+        this._open({ file_id, file_name, page, has_pdf });
+    }
+
+    _open({ file_id, file_name, page, has_pdf = false }) {
         if (!file_id) { this.hide(); return; }
         const sameFile = file_id === this.fileId;
         this.fileId = file_id;
@@ -144,17 +210,27 @@ class PresentationImpl {
         // server-converted PDF copy exists (Office uploads) → present that
         this.hasPdf = !!has_pdf;
         this.page = Math.max(1, page || 1);
-        document.getElementById('presentation-title').textContent =
-            `ارائه: ${this.fileName}`;
+        this._syncChrome();
         const dl = document.getElementById('pres-download');
         if (dl) dl.href = `/class/${this.roomCode}/files/${this.fileId}/download/`;
         if (!sameFile) this._myUndo = [];
         this.renderCurrent();
     }
 
+    /** Title, preview chip, and the ink gate for whatever is on screen. */
+    _syncChrome() {
+        const title = document.getElementById('presentation-title');
+        if (title) {
+            title.textContent = `${this.previewing ? 'پیش‌نمایش' : 'ارائه'}: ${this.fileName}`;
+        }
+        document.getElementById('pres-preview-chip')?.classList.toggle('hidden', !this.previewing);
+        this._syncAnnotGate();
+    }
+
     hide() {
         this._cancelRenderTask();
         this.fileId = null;
+        this.previewing = false;
     }
 
     /** Local-only page flip (no broadcast) — for non-presenters. */
@@ -416,14 +492,17 @@ class PresentationImpl {
 
     _deny() {
         if (this._warned) return false;
-        import('./toast.js').then(({ toast }) => toast('شما اجازهٔ نوشتن روی ارائه را ندارید.', 'warning'));
+        const msg = this.fileId && !this.annotationOpen && !this.canAnnotate
+            ? 'نوشتن روی این ارائه توسط ارائه‌دهنده قفل شده است.'
+            : 'شما اجازهٔ نوشتن روی ارائه را ندارید.';
+        import('./toast.js').then(({ toast }) => toast(msg, 'warning'));
         this._warned = true;
         setTimeout(() => { this._warned = false; }, 4000);
         return false;
     }
 
     _down(opt) {
-        if (!this.canAnnotate) return this._deny();
+        if (!this._annotAllowed()) return this._deny();
         const p = { x: opt.pointer.x / this._scale, y: opt.pointer.y / this._scale };
         this._drawing = true;
         this._start = p;
@@ -506,7 +585,7 @@ class PresentationImpl {
     _bindToolbar() {
         document.querySelectorAll('.pres-tools .wb-tool').forEach((btn) => {
             btn.addEventListener('click', () => {
-                if (!this.canAnnotate) return this._deny();
+                if (!this._annotAllowed()) return this._deny();
                 document.querySelectorAll('.pres-tools .wb-tool').forEach((b) => b.classList.remove('active'));
                 btn.classList.add('active');
                 this.tool = btn.dataset.ptool;
@@ -515,19 +594,25 @@ class PresentationImpl {
         document.querySelectorAll('.pres-tools .wb-action').forEach((btn) => {
             btn.addEventListener('click', () => this._action(btn.dataset.paction));
         });
+        // Presenter's shared switch: lock/unlock ink for the whole room.
+        document.getElementById('pres-lock')?.addEventListener('click', () => {
+            if (!this.canPresent) return this._deny();
+            this.api?.('/presentation/annotation/', { open: !this.annotationOpen })
+                .catch(() => { /* api() already toasted the reason */ });
+        });
         document.getElementById('pres-color')?.addEventListener('input', (e) => { this.color = e.target.value; });
         document.getElementById('pres-width')?.addEventListener('input', (e) => { this.width = Number(e.target.value); });
     }
 
     _action(action) {
         if (action === 'undo') {
-            if (!this.canAnnotate) return this._deny();
+            if (!this._annotAllowed()) return this._deny();
             const op = this._myUndo.pop();
             if (!op) return;
             this._receiveOp({ type: 'remove', id: op.id, file_id: this.fileId, page: this.page });
             this._sendOp({ type: 'remove', id: op.id, file_id: this.fileId, page: this.page });
         } else if (action === 'clear') {
-            if (!this.canAnnotate) return this._deny();
+            if (!this._annotAllowed()) return this._deny();
             if (!confirm('حاشیه‌نویسی این صفحه برای همه پاک شود؟')) return;
             const op = { type: 'clear', id: this._id(), file_id: this.fileId, page: this.page };
             this._receiveOp(op);

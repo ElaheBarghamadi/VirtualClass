@@ -154,6 +154,12 @@
         <main class="room-main">
             <!-- ===== stage: media grid / screen share / whiteboard / presentation ===== -->
             <div class="stage" id="stage">
+                {# A slide can be live while you read the chat: this is the way back. #}
+                <button type="button" class="pres-return hidden" id="pres-return"
+                        title="ارائه در جریان است — بازگشت به اسلاید">
+                    <svg class="ic" aria-hidden="true"><use href="#i-play"/></svg>
+                    <span>ارائه در جریان است — بازگشت</span>
+                </button>
                 <div class="stage-view" id="view-media">
                     <div class="stage-toolbar" role="group" aria-label="چیدمان نمایش">
                         <button type="button" class="layout-btn active" data-layout="grid" aria-pressed="true" title="چیدمان شبکه‌ای"><svg class="ic" aria-hidden="true"><use href="#i-layout-grid"/></svg> <span class="lb-label">شبکه</span></button>
@@ -193,9 +199,17 @@
                     <div class="screen-holder" id="screen-holder"></div>
                 </div>
 
-                <div class="stage-view hidden" id="view-presentation">
+                <div class="stage-view hidden" id="view-presentation"
+                     data-annotation-open="{% if annotation_open %}1{% else %}0{% endif %}"
+                     data-current-file="{{ classroom.current_file_id|default_if_none:'' }}"
+                     data-current-name="{% if classroom.current_file %}{{ classroom.current_file.original_name }}{% endif %}"
+                     data-current-has-pdf="{% if classroom.current_file.pdf_version %}1{% else %}0{% endif %}"
+                     data-current-page="{{ classroom.current_page|default_if_none:1 }}">
                     <div class="screen-header">
                         <span id="presentation-title">ارائه</span>
+                        <span class="wb-mode-chip hidden" id="pres-preview-chip" title="این فایل فقط روی صفحهٔ شما باز شده است">
+                            <svg class="ic" aria-hidden="true"><use href="#i-play"/></svg> پیش‌نمایش
+                        </span>
                         <span class="wb-mode-chip hidden" id="pres-viewonly-chip">
                             <svg class="ic" aria-hidden="true"><use href="#i-lock"/></svg> فقط نمایش
                         </span>
@@ -215,6 +229,10 @@
                                 <input type="range" id="pres-width" min="1" max="24" value="4" aria-label="ضخامت">
                             </label>
                             <span class="wb-sep" aria-hidden="true"></span>
+                            {% if permissions.can_present %}
+                            <button type="button" class="wb-action pres-lock" id="pres-lock" aria-pressed="true"
+                                    title="قفل نوشتن روی ارائه برای همه" aria-label="قفل نوشتن روی ارائه برای همه"><svg class="ic"><use href="#i-lock"/></svg></button>
+                            {% endif %}
                             <button type="button" class="wb-action" data-action="fullscreen-stage" title="تمام‌صفحه" aria-label="تمام‌صفحه"><svg class="ic"><use href="#i-maximize"/></svg></button>
                         </div>
                         <div class="presentation-nav" id="presentation-nav">
@@ -544,13 +562,15 @@
                     </li>
                     {% for f in files %}
                         <li class="file-item{% if classroom.current_file_id == f.id %} presenting{% endif %}"
-                            data-file-id="{{ f.id }}">
+                            data-file-id="{{ f.id }}" data-file-name="{{ f.original_name }}"
+                            data-has-pdf="{% if f.pdf_version %}1{% else %}0{% endif %}"
+                            data-kind="{{ f.type_kind }}">
                             <span class="file-icon" data-kind="{{ f.type_kind }}" aria-hidden="true">
                                 <svg class="ic" viewBox="0 0 24 24"><use href="{% if f.type_kind == 'pdf' %}#i-file-pdf{% elif f.type_kind == 'img' %}#i-file-img{% elif f.type_kind == 'office' %}#i-file-office{% elif f.type_kind == 'zip' %}#i-file-zip{% else %}#i-file{% endif %}"/></svg>
                             </span>
                             {# File row presents for presenters; download is the row's primary action; delete is management-only. #}
                             <div class="file-info"
-                                 {% if permissions.can_present %}data-present="{{ f.id }}" role="button" tabindex="0" title="کلیک: ارائهٔ این فایل"{% endif %}>
+                                 {% if permissions.can_present %}data-present="{{ f.id }}" role="button" tabindex="0" title="کلیک: ارائهٔ این فایل"{% else %}data-preview="{{ f.id }}" role="button" tabindex="0" title="کلیک: مشاهدهٔ فایل بدون دانلود"{% endif %}>
                                 <span class="file-name">{{ f.original_name }}
                                     {% if f.pdf_version %}<span class="pdf-ready-pill" title="نسخهٔ PDF آمادهٔ ارائه است">PDF</span>{% endif %}
                                 </span>
@@ -561,7 +581,7 @@
                                 {% if permissions.can_present %}
                                     <button type="button" class="btn btn-sm btn-primary file-present"
                                             data-present="{{ f.id }}"
-                                            title="ارائهٔ این فایل برای همه" aria-label="ارائهٔ {{ f.original_name }}"><svg class="ic" aria-hidden="true"><use href="#i-play"/></svg> ارائه</button>
+                                            title="ارائهٔ این فایل برای همه" aria-label="ارائهٔ {{ f.original_name }}"><svg class="ic" aria-hidden="true"><use href="#i-play"/></svg></button>
                                 {% endif %}
                                 <a class="btn btn-sm btn-ghost file-download"
                                    href="{% url 'room:file_download' classroom.room_code f.id %}"
