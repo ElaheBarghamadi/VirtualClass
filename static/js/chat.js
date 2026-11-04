@@ -28,15 +28,21 @@ class ChatClientImpl {
         this.roomCode = roomCode;
         this.identity = identity;
         this.privileged = privileged;
+        // Never stack sockets: two open chat sockets would double every message.
+        if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) return;
         const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-        this.ws = new WebSocket(`${proto}://${location.host}/ws/classroom/${roomCode}/chat/`);
+        const sock = new WebSocket(`${proto}://${location.host}/ws/classroom/${roomCode}/chat/`);
+        this.ws = sock;
+        this._openedAt = Date.now();
 
         this.ws.onopen = () => {
+            if (this.ws !== sock) return;
             this.retryDelay = 1000;
             this.statusEl?.classList.add('connected');
             this.onStatusChange('connected');
         };
         this.ws.onclose = (evt) => {
+            if (this.ws !== sock) return;   // replaced by a reconnect: ignore
             this.statusEl?.classList.remove('connected');
             if (evt.code === 4401 || evt.code === 4403) {
                 // The room/presence socket handles the user-facing redirect.
@@ -45,9 +51,24 @@ class ChatClientImpl {
                 return;
             }
             this.onStatusChange('reconnecting');
-            setTimeout(() => this.connect(roomCode, identity, privileged), this.retryDelay = Math.min(this.retryDelay * 2, 15000));
+            // Current delay first, double afterwards: 1s before the 2s step.
+            const delay = this.retryDelay;
+            this.retryDelay = Math.min(this.retryDelay * 2, 15000);
+            setTimeout(() => this.connect(roomCode, identity, privileged), delay);
         };
-        this.ws.onmessage = (evt) => this.handle(JSON.parse(evt.data));
+        this.ws.onmessage = (evt) => {
+            if (this.ws !== sock) return;
+            // A single malformed frame must not kill the handler for every
+            // message that follows it.
+            let data;
+            try {
+                data = JSON.parse(evt.data);
+            } catch (err) {
+                console.error('[chat] bad frame', err);
+                return;
+            }
+            this.handle(data);
+        };
 
         if (!this._formBound) {
             this.formEl?.addEventListener('submit', (e) => {
@@ -60,9 +81,46 @@ class ChatClientImpl {
 
     send(text) {
         const message = (text || '').trim();
-        if (!message || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+        if (!message) return;
+        // Checked first: an offline socket can still claim to be OPEN, and a
+        // message written into it disappears without a trace.
+        if (navigator.onLine === false) {
+            toast('اینترنت قطع است؛ پیام ارسال نشد.', 'warning');
+            return;
+        }
+        if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+            // Swallowing the message silently is the worst option: the text
+            // stays in the box so nothing is lost, and the user is told why.
+            toast(
+                navigator.onLine === false
+                    ? 'اینترنت قطع است؛ پیام ارسال نشد.'
+                    : 'اتصال گفتگو برقرار نیست؛ پیام ارسال نشد.',
+                'warning',
+            );
+            return;
+        }
         this.ws.send(JSON.stringify({ action: 'send_message', message }));
         this.inputEl.value = '';
+    }
+
+    /**
+     * Reconnect now if the socket is not healthy.  Called when the network
+     * comes back or the tab is shown again — no reason to sit out a backoff
+     * that can be 15s long.
+     */
+    nudge(force = false) {
+        if (!this.roomCode || !this.identity) return;
+        const ready = this.ws?.readyState;
+        if (!force) {
+            // Chat is quiet by nature (no pings), so only the handshake window
+            // is protected here — silence proves nothing on this socket.
+            if (ready === WebSocket.OPEN) return;
+            if (ready === WebSocket.CONNECTING && Date.now() - this._openedAt < 4000) return;
+        }
+        this.retryDelay = 1000;
+        try { this.ws?.close(); } catch (err) { /* already gone */ }
+        this.ws = null;
+        this.connect(this.roomCode, this.identity, this.privileged);
     }
 
     deleteMessage(messageId) {

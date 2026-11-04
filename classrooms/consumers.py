@@ -63,6 +63,26 @@ _MAX_SUMMARY_ROOMS = 200  # hard cap on buffered rooms (memory guard)
 #: room_code → {"members": {key: set(member_id)}, "task": asyncio.Task | None}
 _reaction_windows: dict[str, dict] = {}
 
+#: (room_code, member_id) → the channel names currently open for that member.
+#: One person can legitimately hold several sockets (a second tab, a phone, or
+#: the new socket of a reconnect arriving before the old one is reaped).  The
+#: roster must stay truthful across all of them: «joined» belongs to the first
+#: socket and «left» to the last, otherwise closing a spare tab makes a student
+#: vanish from everyone's stage while they are still in the room (and splits
+#: their attendance into two visits).
+_member_channels: dict[tuple[str, int], set[str]] = {}
+
+#: (room_code, member_id) → last media flags that member announced.
+#: Media state only ever existed as a live broadcast, so anybody joining later
+#: (or reconnecting after a network blip) got a roster without a single
+#: ``mic_on``/``camera_on`` flag and — with idle participants hidden from the
+#: stage — saw an empty room while the class was in full swing.  Keeping the
+#: last announcement makes the snapshot tell the truth; it is dropped as soon
+#: as the member's last socket closes, so «camera on» never outlives them.
+_media_states: dict[tuple[str, int], dict[str, bool]] = {}
+
+MEDIA_FLAGS = ("mic_on", "camera_on", "screen_sharing")
+
 RTC_SIGNAL_MAX_BYTES = 16 * 1024  # hard cap on relayed SDP/ICE envelopes
 RECEIVE_RATE_LIMIT = 20  # client messages per second per connection
 from .services import (
@@ -121,7 +141,9 @@ class ClassroomConsumer(SafeJsonWebsocketConsumer):
         await self.channel_layer.group_add(member_group(self.room_code, self.member.id), self.channel_name)
         await self.accept()
 
-        await self._start_attendance()
+        first_socket = self._register_socket()
+        if first_socket:
+            await self._start_attendance()
 
         # Cache the public payload once: identity/name never change during a
         # connection, so join and leave broadcasts need no extra queries.
@@ -135,10 +157,14 @@ class ClassroomConsumer(SafeJsonWebsocketConsumer):
             "participants": participants,
             "classroom": classroom_state,
         })
-        await self.channel_layer.group_send(
-            self.group_name,
-            {"type": "presence.user_joined", "participant": self._payload_cache},
-        )
+        # A second tab (or a reconnect that beat the old socket's teardown)
+        # is the same person: they are already in everybody's roster, and a
+        # duplicate «joined» line in chat would be wrong.
+        if first_socket:
+            await self.channel_layer.group_send(
+                self.group_name,
+                {"type": "presence.user_joined", "participant": self._payload_cache},
+            )
 
     async def disconnect(self, code: int) -> None:
         if getattr(self, "member", None) is None:
@@ -147,14 +173,38 @@ class ClassroomConsumer(SafeJsonWebsocketConsumer):
             # Restricted waiting-room connection: personal group only.
             await self.channel_layer.group_discard(member_group(self.room_code, self.member.id), self.channel_name)
             return
-        await self._stop_attendance()
-        await self.channel_layer.group_send(
-            self.group_name,
-            {"type": "presence.user_left",
-             "participant": getattr(self, "_payload_cache", None) or await self._self_payload()},
-        )
+        last_socket = self._unregister_socket()
+        if last_socket:
+            await self._stop_attendance()
+            await self.channel_layer.group_send(
+                self.group_name,
+                {"type": "presence.user_left",
+                 "participant": getattr(self, "_payload_cache", None) or await self._self_payload()},
+            )
         await self.channel_layer.group_discard(self.group_name, self.channel_name)
         await self.channel_layer.group_discard(member_group(self.room_code, self.member.id), self.channel_name)
+
+    # ------------------------------------------------------------------
+    # Multi-socket bookkeeping (see _member_channels)
+    # ------------------------------------------------------------------
+    def _register_socket(self) -> bool:
+        """Track this socket; True when it is the member's first open one."""
+        sockets = _member_channels.setdefault((self.room_code, self.member.id), set())
+        sockets.add(self.channel_name)
+        return len(sockets) == 1
+
+    def _unregister_socket(self) -> bool:
+        """Drop this socket; True when the member has no socket left."""
+        key = (self.room_code, self.member.id)
+        sockets = _member_channels.get(key)
+        if sockets is None:
+            return True
+        sockets.discard(self.channel_name)
+        if sockets:
+            return False
+        _member_channels.pop(key, None)
+        _media_states.pop(key, None)
+        return True
 
     # ------------------------------------------------------------------
     # Client → server
@@ -239,6 +289,7 @@ class ClassroomConsumer(SafeJsonWebsocketConsumer):
             if any(type(value) is not bool for value in state.values()):
                 await self.send_json({"type": "error", "message": "وضعیت رسانه باید بولی باشد."})
                 return
+            _media_states[(self.room_code, self.member.id)] = state
             payload = await self._self_payload()
             payload.update(state)
             await self.channel_layer.group_send(
@@ -431,6 +482,10 @@ class ClassroomConsumer(SafeJsonWebsocketConsumer):
             participant_payload(m, classroom) for m in members
             if include_waiting or not m.in_waiting_room
         ]
+        for participant in participants:
+            cached = _media_states.get((self.room_code, participant["member_id"]))
+            if cached:
+                participant.update(cached)
         state = {
             "is_locked": classroom.is_locked,
             "chat_disabled": classroom.chat_disabled,
@@ -455,11 +510,13 @@ class ClassroomConsumer(SafeJsonWebsocketConsumer):
         # otherwise a later media_state could overwrite a fresh grant with
         # stale effective permissions in every peer's roster.
         member = ClassroomMember.objects.filter(id=self.member.id).select_related("user", "classroom").first()
-        return (
-            participant_payload(member, member.classroom)
-            if member
-            else {"identity": "", "name": ""}
-        )
+        if member is None:
+            return {"identity": "", "name": ""}
+        payload = participant_payload(member, member.classroom)
+        # Echo our own last announcement so a reconnect does not read as «no
+        # camera» in our own roster until the first toggle.
+        payload.update(_media_states.get((self.room_code, member.id), {}))
+        return payload
 
     @database_sync_to_async
     def _effective_permissions(self) -> dict:

@@ -727,6 +727,24 @@ class MediaFacade {
         }
     }
 
+    /**
+     * Re-announce the local mic/camera/screen state to the roster.
+     *
+     * The server ties media state to the socket, so a reconnect starts from
+     * "nothing known" — without this every peer sees the participant as
+     * silent until they touch a device button again.
+     */
+    pushMediaState() {
+        if (!this.impl) return false;
+        const state = {
+            mic_on: Boolean(this.impl.micOn),
+            camera_on: Boolean(this.impl.cameraOn),
+            screen_sharing: Boolean(this.impl.screenStream),
+        };
+        if (typeof this.impl.onStateChange === 'function') this.impl.onStateChange(state);
+        return true;
+    }
+
     /** Keep roster-driven permission gates current in either media engine. */
     syncPeers(peers) { if (this.impl && this.impl.syncPeers) this.impl.syncPeers(peers); }
     handleSignal(msg) { if (this.impl && this.impl.handleSignal) this.impl.handleSignal(msg); }
@@ -748,6 +766,8 @@ class MediaFacade {
     dispose() { if (this.impl && this.impl.dispose) this.impl.dispose(); }
     onDeviceChange(fn) { if (this.impl) this.impl.onDeviceChange = fn; }
     retryPeer(identity) { if (this.impl && this.impl.retryPeer) this.impl.retryPeer(identity); }
+    /** Network came back: let the media engine restart dead peer links. */
+    onNetworkOnline() { if (this.impl && this.impl.onNetworkOnline) this.impl.onNetworkOnline(); }
     async setMicDevice(id) { return this.impl && this.impl.setMicDevice(id); }
     async setCameraDevice(id) { return this.impl && this.impl.setCameraDevice(id); }
     async setOutputDevice(id) { return this.impl && this.impl.setOutputDevice(id); }

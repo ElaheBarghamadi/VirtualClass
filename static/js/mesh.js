@@ -400,6 +400,35 @@ class MeshMedia {
             'warning', 8000);
     }
 
+    /**
+     * The browser says the network is back (Wi-Fi switch, sleep/wake).
+     *
+     * Every peer connection was negotiated with the *old* local addresses, so
+     * the dead ones will not heal on their own — but the grace timers may be
+     * seconds away from firing.  Restarting ICE now is the cheapest recovery
+     * available and costs nothing when everything is already connected.
+     */
+    onNetworkOnline() {
+        this.links.forEach((link) => {
+            if (!link.pc) return;
+            const up = link._isUp(link.pc);
+            if (up && link.pc.connectionState === 'connected') return;
+            link.retried = false;
+            link.failed = false;
+            try {
+                link.pc.restartIce();
+            } catch (err) {
+                // Not supported (older Safari): fall back to the normal path.
+                return;
+            }
+            if (!up) {
+                clearTimeout(link._recovery);
+                link._recovery = null;
+                link.armWatchdog();
+            }
+        });
+    }
+
     /** Re-run ICE for one peer after the user asked for another attempt. */
     retryPeer(identity) {
         const link = this.links.get(identity);

@@ -54,7 +54,7 @@ body.full-page .messages {
 .room-title h1 { margin: 0; font-size: 1rem; font-weight: 750; letter-spacing: -.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .room-logo { width: 30px; height: 30px; border-radius: var(--radius-sm); object-fit: cover; border: 1px solid var(--room-border); }
 .room-header-actions { display: flex; align-items: center; gap: .8rem; }
-.room-clock { font-variant-numeric: tabular-nums; color: var(--room-muted); font-size: .95rem; direction: ltr; }
+.room-clock { font-variant-numeric: tabular-nums; color: var(--room-muted); font-size: .95rem; direction: ltr; flex: none; }
 .live-dot {
     color: var(--danger); font-size: .75rem; font-weight: 800;
     display: inline-flex; align-items: center; gap: .3rem;
@@ -72,7 +72,10 @@ body.full-page .messages {
     background: var(--surface-2); padding: .28rem .75rem; border-radius: var(--radius-pill);
     border: 1px solid var(--room-border);
 }
-.conn-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warning); }
+.conn-pill .conn-text { white-space: nowrap; }
+.conn-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warning); flex: none; }
+
+
 .conn-pill.connected .conn-dot { background: var(--success); }
 .conn-pill.reconnecting .conn-dot { background: var(--warning); animation: pulse 1s infinite; }
 .conn-pill.lost .conn-dot { background: var(--danger); }
@@ -94,6 +97,37 @@ body.full-page .messages {
 .conn-quality.q-excellent, .conn-quality.q-good { color: var(--success); }
 .conn-quality.q-poor { color: var(--warning); }
 .conn-quality.q-lost, .conn-quality.q-reconnecting { color: var(--danger); }
+
+/* ---------- offline strip (network is gone, not just the socket) ---------- */
+.net-banner {
+    display: flex; align-items: center; justify-content: center; gap: .5rem;
+    flex: none; padding: .42rem 1rem;
+    font-size: .78rem; font-weight: 650; line-height: 1.5; text-align: center;
+    color: color-mix(in srgb, var(--warning) 45%, var(--room-text));
+    background: color-mix(in srgb, var(--warning) 13%, var(--room-surface));
+    border-bottom: 1px solid color-mix(in srgb, var(--warning) 34%, transparent);
+}
+.net-banner[hidden] { display: none; }
+.net-banner .ic {
+    width: 15px; height: 15px; flex: none;
+    fill: none; stroke: currentColor; stroke-width: 1.9;
+    stroke-linecap: round; stroke-linejoin: round;
+}
+.net-banner.show { animation: net-in .2s ease-out; }
+@keyframes net-in { from { opacity: 0; transform: translateY(-5px); } }
+
+/* On a phone the header is a single row: while the pill is busy explaining a
+   problem it gets the space, and the clock steps aside instead of clipping. */
+@media (max-width: 560px) {
+    .room-header-actions:has(.conn-pill.lost) .room-clock,
+    .room-header-actions:has(.conn-pill.reconnecting) .room-clock { display: none; }
+}
+
+/* the pill is a button in disguise: it retries by hand when clicked */
+.conn-pill { cursor: pointer; user-select: none; -webkit-user-select: none; }
+.conn-pill.lost { color: color-mix(in srgb, var(--danger) 55%, var(--room-text)); border-color: color-mix(in srgb, var(--danger) 40%, var(--room-border)); }
+.conn-pill.lost:hover { background: color-mix(in srgb, var(--danger) 9%, var(--surface-2)); }
+.conn-pill:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* ---------- body ---------- */
 .room-body {

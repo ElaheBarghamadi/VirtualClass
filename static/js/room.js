@@ -114,6 +114,13 @@ class PresenceClient {
         this.filter = 'ALL';
         this._pingAt = 0;
         this.rtt = null;
+        // Last media announcement we made, replayed after every reconnect.
+        this._lastMedia = null;
+        this._connectAt = 0;
+        // When did this socket last say anything?  A socket can report OPEN
+        // long after the network under it died (Wi-Fi switch, sleep), so
+        // silence is the only honest health signal we have.
+        this._lastInbound = 0;
     }
 
     connect() {
@@ -134,6 +141,7 @@ class PresenceClient {
             return;
         }
         this.ws = ws;
+        this._connectAt = Date.now();
         // A blocked proxy/firewall can leave the handshake pending forever,
         // which used to show «در حال اتصال…» indefinitely.  Fail loudly and
         // retry instead of hanging.
@@ -146,15 +154,27 @@ class PresenceClient {
             }
         }, 12_000);
         ws.onopen = () => {
+            // A replaced socket (manual retry, forced reconnect) must never
+            // drive the UI again: only the current one counts.
+            if (this.ws !== ws) return;
             clearTimeout(this._handshakeTimer);
             this.retryDelay = 1000;
+            this._lastInbound = Date.now();
             this.setStatus('connected');
+            // The server forgets a socket's media state when it closes, so a
+            // reconnect without this leaves every peer with a stale roster —
+            // «camera off» for someone who is very much on camera.  Push the
+            // current local state again as soon as the link is back.
+            this._replayMediaState();
+            Network.sync();
             // real round-trip measurement, repeated every 10s
             this._measureRtt();
             this._rttTimer = setInterval(() => this._measureRtt(), 10_000);
         };
         ws.onmessage = (evt) => {
+            if (this.ws !== ws) return;
             clearTimeout(this._handshakeTimer);
+            this._lastInbound = Date.now();
             let data;
             try {
                 data = JSON.parse(evt.data);
@@ -165,12 +185,16 @@ class PresenceClient {
             handleEvent(data);
         };
         ws.onerror = () => {
+            if (this.ws !== ws) return;
             // The browser gives no detail here on purpose; the close code just
             // after it is the useful signal.  Log the URL so a failed route is
             // obvious in the console.
             console.error('[presence] socket error —', url);
         };
         ws.onclose = (evt) => {
+            // Stale socket: the retry/reconnect path already replaced it, so
+            // it must not schedule another connect or repaint the pill.
+            if (this.ws !== ws) return;
             clearTimeout(this._handshakeTimer);
             clearInterval(this._rttTimer);
             if (evt.code === 4401 || evt.code === 4403) {
@@ -187,7 +211,11 @@ class PresenceClient {
 
     _scheduleRetry() {
         clearTimeout(this._retryTimer);
-        const delay = this.retryDelay = Math.min(this.retryDelay * 2, 15000);
+        // Schedule with the CURRENT delay and only then double: the old order
+        // made even the first retry wait 2s, which is a long dead screen right
+        // after a network hiccup.  1s → 2s → 4s … capped at 15s.
+        const delay = this.retryDelay;
+        this.retryDelay = Math.min(this.retryDelay * 2, 15000);
         this._retryTimer = setTimeout(() => this.connect(), delay);
     }
 
@@ -198,9 +226,11 @@ class PresenceClient {
         this.retryDelay = 1000;
         if (this.ws) {
             this._closing = true;
-            try { this.ws.close(); } catch (err) { /* ignore */ }
+            const old = this.ws;
+            this.ws = null;   // stale from here on: its events are ignored
+            try { old.close(); } catch (err) { /* ignore */ }
         }
-        this.ws = null;
+        this._lastInbound = 0;
         this.connect();
     }
 
@@ -210,7 +240,51 @@ class PresenceClient {
     }
 
     send(payload) {
-        if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(payload));
+        // Remember the latest media announcement even while offline: the
+        // socket reopening is exactly when it is needed again.
+        if (payload && payload.action === 'media_state') this._lastMedia = payload;
+        if (this.ws?.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify(payload));
+            return true;
+        }
+        return false;
+    }
+
+    /** Re-announce mic/camera/screen after the socket came back. */
+    _replayMediaState() {
+        if (this._lastMedia) {
+            this.send(this._lastMedia);
+            return;
+        }
+        try {
+            Media.pushMediaState?.();
+        } catch (err) {
+            console.error('[presence] could not replay media state', err);
+        }
+    }
+
+    /**
+     * Reconnect now if the socket is not healthy — used when the browser says
+     * the network is back or the tab becomes visible again.
+     *
+     * ``force`` is for the online event: a socket opened before the network
+     * switch still claims to be OPEN while every frame it sends is swallowed.
+     * Otherwise a socket that has said nothing for 30s (three missed pings) is
+     * treated as dead too — that is what a sleeping laptop looks like.
+     */
+    nudge(force = false) {
+        const ready = this.ws?.readyState;
+        const silent = Date.now() - (this._lastInbound || this._connectAt);
+        if (!force) {
+            if (ready === WebSocket.OPEN && silent < 30_000) return;
+            if (ready === WebSocket.CONNECTING && silent < 4000) return;
+        }
+        this.reconnect();
+    }
+
+    /** Repaint the pill after the browser's own network state changed. */
+    refreshStatus() {
+        this.setStatus(this.state);
     }
 
     setStatus(state) {
@@ -221,7 +295,15 @@ class PresenceClient {
             reconnecting: ['reconnecting', 'در حال اتصال مجدد…'],
             lost: ['lost', 'قطع شد — برای تلاش دوباره کلیک کنید'],
         };
-        const [cls, text] = map[state] || map.connecting;
+        let [cls, text] = map[state] || map.connecting;
+        // «در حال اتصال مجدد» while the browser has no network is a lie: there
+        // is nothing to retry until the link is back, so say that instead.
+        // This outranks the socket's own idea of its health — an OPEN socket
+        // proves nothing once the link under it is gone.
+        if (navigator.onLine === false) {
+            cls = 'lost';
+            text = 'اینترنت قطع';
+        }
         this.el.className = `conn-pill ${cls}`;
         this.el.querySelector('.conn-text').textContent = text;
         this._updateTitle();
@@ -692,6 +774,73 @@ function initPermsDialog() {
 
 
 const presence = new PresenceClient();
+
+// ---------------------------------------------------------------------------
+// Network awareness
+// ---------------------------------------------------------------------------
+// Two failures this exists to fix, both invisible until it is too late:
+//   * a laptop wakes from sleep or changes network, the socket is already dead
+//     but nothing notices until the retry timer fires (up to 15s later);
+//   * the user is offline and the room looks merely «slow» instead of saying
+//     the internet is gone.
+// ``online``/``visibilitychange``/``pageshow`` are the only cheap signals the
+// browser offers, so every socket registers here and gets kicked on them.
+const Network = {
+    banner: null,
+    _connectors: [],
+
+    init() {
+        this.banner = document.getElementById('net-banner');
+        window.addEventListener('online', () => {
+            this.sync();
+            presence.refreshStatus();
+            // A socket that survived the outage is a zombie: force a new one.
+            this._kick(true);
+        });
+        window.addEventListener('offline', () => {
+            this.sync();
+            presence.refreshStatus();
+        });
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') {
+                this.sync();
+                this._kick();
+            }
+        });
+        // Restored from the back/forward cache: the socket may be gone.
+        window.addEventListener('pageshow', (evt) => {
+            if (!evt.persisted) return;
+            this.sync();
+            this._kick(true);
+        });
+        this.sync();
+    },
+
+    /** A connector is a zero-arg function that reconnects *if* unhealthy. */
+    register(fn) {
+        if (typeof fn === 'function') this._connectors.push(fn);
+    },
+
+    /** Reflect the browser's view of the network in the UI. */
+    sync() {
+        const offline = navigator.onLine === false;
+        document.body.classList.toggle('is-offline', offline);
+        if (!this.banner) return;
+        this.banner.hidden = !offline;
+        this.banner.classList.toggle('show', offline);
+    },
+
+    _kick(force = false) {
+        if (navigator.onLine === false) return;
+        this._connectors.forEach((fn) => {
+            try {
+                fn(force);
+            } catch (err) {
+                console.error('[net] reconnect failed', err);
+            }
+        });
+    },
+};
 
 // ---------------------------------------------------------------------------
 // Boot diagnostics
@@ -2495,11 +2644,26 @@ if (SHOW_CHAT) {
 // is allowed to keep it from connecting.
 safe('chat', () => ChatClient.connect(ROOM_CODE, IDENTITY, PRIVILEGED));
 safe('presence', () => presence.connect());
+// Instant recovery on network/tab wake instead of waiting out the backoff.
+safe('network', () => {
+    Network.init();
+    Network.register((force) => presence.nudge(force));
+    Network.register((force) => ChatClient.nudge?.(force));
+    Network.register(() => Media.onNetworkOnline?.());
+});
 // Clicking the connection pill retries by hand (useful when a network switch
 // killed the socket and the backoff has grown long).
 safe('conn-pill-retry', () => {
-    presence.el?.addEventListener('click', () => {
-        if (presence.state !== 'connected') presence.reconnect();
+    const retry = () => {
+        if (navigator.onLine === false || presence.state !== 'connected') presence.reconnect();
+    };
+    presence.el?.addEventListener('click', retry);
+    // It looks like a pill but behaves like a button, so it has to answer the
+    // keyboard as one too.
+    presence.el?.addEventListener('keydown', (evt) => {
+        if (evt.key !== 'Enter' && evt.key !== ' ' && evt.key !== 'Spacebar') return;
+        evt.preventDefault();
+        retry();
     });
 });
 

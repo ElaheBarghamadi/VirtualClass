@@ -106,6 +106,146 @@ class PresenceConsumerTests(TransactionTestCase):
 
         async_to_sync(scenario)()
 
+    def test_second_socket_does_not_duplicate_join_or_leave(self):
+        """One person, two tabs: the roster must not blink them out of the room.
+
+        Closing a spare tab used to broadcast ``user_left`` even though the
+        student was still there (their stage tile vanished for everybody and
+        their attendance was split in two).
+        """
+        owner = User.objects.create_user(username="ms_owner", password="x")
+        student = User.objects.create_user(username="ms_student", password="x")
+        classroom = create_classroom(owner, title="Multi socket")
+        join_classroom(classroom, student)
+
+        async def scenario():
+            owner_ws = WebsocketCommunicator(
+                app_with_user(owner, classroom_routes), f"/ws/classroom/{classroom.room_code}/"
+            )
+            connected, _ = await owner_ws.connect()
+            assert connected
+            await owner_ws.receive_json_from()   # participant_list
+            await owner_ws.receive_json_from()   # own user_joined
+
+            first = WebsocketCommunicator(
+                app_with_user(student, classroom_routes), f"/ws/classroom/{classroom.room_code}/"
+            )
+            connected, _ = await first.connect()
+            assert connected
+            await first.receive_json_from()      # participant_list
+            msg = await owner_ws.receive_json_from()
+            assert msg["type"] == "user_joined"
+            assert msg["participant"]["user_id"] == student.id
+
+            # The same student opens a second tab.
+            second = WebsocketCommunicator(
+                app_with_user(student, classroom_routes), f"/ws/classroom/{classroom.room_code}/"
+            )
+            connected, _ = await second.connect()
+            assert connected
+            await second.receive_json_from()     # snapshot only, no second join
+
+            # Closing the spare tab must NOT report a departure.
+            await second.disconnect()
+            await owner_ws.send_json_to({"action": "ping"})
+            msg = await owner_ws.receive_json_from()
+            assert msg["type"] == "pong", f"unexpected event after spare-tab close: {msg['type']}"
+
+            # Closing the last tab does.
+            await first.disconnect()
+            msg = await owner_ws.receive_json_from()
+            assert msg["type"] == "user_left"
+            assert msg["participant"]["user_id"] == student.id
+
+            await owner_ws.disconnect()
+
+        async_to_sync(scenario)()
+
+
+class MediaSnapshotTests(TransactionTestCase):
+    """A joining client must learn who already has a live mic or camera.
+
+    Media flags used to exist only as a live broadcast, so anyone arriving
+    after the fact received a roster with no media state at all — and with
+    idle participants kept off the stage that reads as an empty classroom.
+    """
+
+    def test_late_joiner_receives_current_media_flags(self):
+        owner = User.objects.create_user(username="ms_owner", password="x")
+        student = User.objects.create_user(username="ms_student", password="x")
+        late = User.objects.create_user(username="ms_late", password="x")
+        classroom = create_classroom(owner, title="Media snapshot")
+        join_classroom(classroom, student)
+        join_classroom(classroom, late)
+        owner_member_id = classroom.members.get(user=owner).id
+
+        async def scenario():
+            owner_ws = WebsocketCommunicator(
+                app_with_user(owner, classroom_routes), f"/ws/classroom/{classroom.room_code}/"
+            )
+            connected, _ = await owner_ws.connect()
+            assert connected
+            await owner_ws.receive_json_from()   # snapshot
+            await owner_ws.receive_json_from()   # own join
+
+            student_ws = WebsocketCommunicator(
+                app_with_user(student, classroom_routes), f"/ws/classroom/{classroom.room_code}/"
+            )
+            connected, _ = await student_ws.connect()
+            assert connected
+            await student_ws.receive_json_from()  # snapshot
+            await student_ws.receive_json_from()  # own join
+            await owner_ws.receive_json_from()    # student joined
+
+            await owner_ws.send_json_to(
+                {"action": "media_state", "mic_on": True, "camera_on": True, "screen_sharing": False}
+            )
+            await owner_ws.receive_json_from()    # media_state broadcast
+            await student_ws.receive_json_from()
+
+            late_ws = WebsocketCommunicator(
+                app_with_user(late, classroom_routes), f"/ws/classroom/{classroom.room_code}/"
+            )
+            connected, _ = await late_ws.connect()
+            assert connected
+            snapshot = await late_ws.receive_json_from()
+            assert snapshot["type"] == "participant_list"
+            by_id = {p["member_id"]: p for p in snapshot["participants"]}
+            owner_row = by_id[owner_member_id]
+            assert owner_row["mic_on"] is True
+            assert owner_row["camera_on"] is True
+            assert owner_row["screen_sharing"] is False
+
+            await late_ws.disconnect()
+            await student_ws.disconnect()
+            await owner_ws.disconnect()
+
+        async_to_sync(scenario)()
+
+    def test_media_state_is_dropped_when_the_member_leaves(self):
+        owner = User.objects.create_user(username="md_owner", password="x")
+        student = User.objects.create_user(username="md_student", password="x")
+        classroom = create_classroom(owner, title="Media cleanup")
+        join_classroom(classroom, student)
+
+        async def scenario():
+            ws = WebsocketCommunicator(
+                app_with_user(student, classroom_routes), f"/ws/classroom/{classroom.room_code}/"
+            )
+            connected, _ = await ws.connect()
+            assert connected
+            await ws.receive_json_from()   # snapshot
+            await ws.receive_json_from()   # own join
+            await ws.send_json_to(
+                {"action": "media_state", "mic_on": True, "camera_on": False, "screen_sharing": False}
+            )
+            await ws.receive_json_from()   # broadcast
+            await ws.disconnect()
+
+        async_to_sync(scenario)()
+        key = (classroom.room_code, classroom.members.get(user=student).id)
+        assert key not in classrooms_consumers._media_states
+
 
 class RaiseHandTests(TransactionTestCase):
     def test_raise_and_lower_hand_broadcast(self):
