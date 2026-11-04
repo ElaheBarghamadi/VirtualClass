@@ -325,6 +325,12 @@ class LivekitMedia {
         tile.querySelector('.t-mic').classList.toggle('off', !micOn);
         tile.querySelector('video').style.display = camOn ? '' : 'none';
         tile.querySelector('.tile-placeholder').classList.toggle('hidden', camOn);
+        // A participant with neither microphone nor camera on contributes
+        // nothing to the stage. A wall of grey avatars is exactly what made
+        // the room look broken, so idle people leave the grid — the tile and
+        // its live tracks stay in the DOM, so video resumes instantly.
+        tile.classList.toggle('is-idle', !micOn && !camOn);
+        this._layout();
         if (this.localParticipant && participant.identity === this.localParticipant.identity) {
             this.micOn = micOn;
             this.cameraOn = camOn;
@@ -449,9 +455,30 @@ class LivekitMedia {
         this._layout();
     }
 
+    /** Off-stage for anyone the roster reports without mic and without camera. */
+    syncStagePresence(peers) {
+        const live = new Map((peers || []).map(
+            (p) => [p.identity, Boolean(p.mic_on) || Boolean(p.camera_on)]));
+        let touched = false;
+        this.tiles.forEach((tile, identity) => {
+            const on = live.get(identity);
+            if (on === undefined) return;          // not in the roster yet
+            const idle = !on;
+            if (tile.classList.contains('is-idle') !== idle) touched = true;
+            tile.classList.toggle('is-idle', idle);
+        });
+        if (touched) this._layout();
+    }
+
     _layout() {
-        const count = this.tiles.size;
-        this.tilesEl.dataset.count = String(count);
+        // Only tiles that are actually on stage count towards the grid: idle
+        // participants (mic off *and* camera off) are .is-idle and hidden.
+        const shown = [];
+        this.tiles.forEach((tile, identity) => {
+            if (!tile.classList.contains('is-idle')) shown.push(identity);
+        });
+        const count = shown.length;
+        this.tilesEl.dataset.count = String(Math.max(count, 1));
         this.tilesEl.dataset.layout = this.layout;
 
         // Which participant dominates the stage in each mode:
@@ -462,15 +489,29 @@ class LivekitMedia {
         } else {
             focus = this.pinnedIdentity || this.activeSpeaker || null;
         }
+        if (focus && !shown.includes(focus)) focus = null;
 
         this.tilesEl.classList.toggle('has-focus', Boolean(focus));
         this.tiles.forEach((tile, identity) => {
-            tile.classList.toggle('focus', identity === focus);
-            tile.classList.toggle('mini', Boolean(focus) && identity !== focus);
+            const onStage = shown.includes(identity);
+            tile.classList.toggle('focus', onStage && identity === focus);
+            tile.classList.toggle('mini', onStage && Boolean(focus) && identity !== focus);
             // Focus changes tile sizes only; it never hides a participant's
             // live camera. Visibility is controlled by media permissions.
         });
         this.emptyEl.classList.toggle('hidden', count > 0);
+        this._emptyReason(count);
+    }
+
+    /** Explain an empty stage instead of showing a bare placeholder. */
+    _emptyReason(count) {
+        if (count > 0 || !this.emptyEl) return;
+        const el = document.getElementById('stage-empty-text');
+        if (!el) return;
+        if (this.tiles.size > 0) {
+            el.textContent = 'فعلاً کسی دوربین یا میکروفون روشن نکرده است.';
+            this.emptyEl.dataset.reason = 'idle';
+        }
     }
 
     // ------------------------------------------------------- screen share
@@ -699,6 +740,8 @@ class MediaFacade {
     async forceCameraOff() { return this.impl && this.impl.forceCameraOff(); }
     /** Forced stop (host revoked can_share_screen) — bypasses the grant check. */
     async stopScreenShare() { return this.impl && this.impl.stopScreenShare && this.impl.stopScreenShare(); }
+    /** Roster says who currently has a live mic or camera — see syncStagePresence. */
+    syncStagePresence(peers) { if (this.impl && this.impl.syncStagePresence) this.impl.syncStagePresence(peers); }
     /** Roster media_state hook (mesh: hide a stopped remote screen view). */
     notifyPeerState(p) { if (this.impl && this.impl.onPeerMediaState) this.impl.onPeerMediaState(p); }
     applyModerationState(state) { if (this.impl && this.impl.applyModerationState) this.impl.applyModerationState(state); }

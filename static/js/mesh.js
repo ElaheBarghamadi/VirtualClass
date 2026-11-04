@@ -1053,6 +1053,7 @@ class MeshMedia {
         const camLive = Boolean(camTrack && camTrack.readyState === 'live');
         video.style.display = camLive ? '' : 'none';
         tile.querySelector('.tile-placeholder').classList.toggle('hidden', camLive);
+        tile.classList.toggle('is-idle', !camLive && !this.micOn);
         tile.querySelector('.tile-name').textContent = `${this.self.name} (شما)`;
         if (camLive) video.play().catch(() => {});
         this._syncLocalUI();
@@ -1067,6 +1068,7 @@ class MeshMedia {
         video.srcObject = null;
         video.style.display = 'none';
         tile.querySelector('.tile-placeholder').classList.remove('hidden');
+        tile.classList.add('is-idle');
         this._layout();
     }
 
@@ -1098,6 +1100,11 @@ class MeshMedia {
             && audioTrack && !audioTrack.muted && audioTrack.readyState === 'live'
         );
         tile.querySelector('.t-mic').classList.toggle('off', !micLive);
+        // Same rule as the local tile: no camera and no microphone means the
+        // person is not contributing picture or sound, so the stage skips them
+        // (a screen share keeps the tile, since it *is* the picture).
+        tile.classList.toggle('is-idle', !camLive && !micLive && !link.peer.screen_sharing);
+        this._layout();
     }
 
     setLayout(mode) {
@@ -1107,19 +1114,55 @@ class MeshMedia {
         this._layout();
     }
 
+    /** Off-stage for anyone the roster reports without mic and without camera. */
+    syncStagePresence(peers) {
+        const live = new Map((peers || []).map(
+            (p) => [p.identity, Boolean(p.mic_on) || Boolean(p.camera_on)]));
+        let touched = false;
+        this.tiles.forEach((tile, identity) => {
+            if (this.self && identity === this.self.identity) return; // local truth is exact
+            const on = live.get(identity);
+            if (on === undefined) return;
+            const idle = !on;
+            if (tile.classList.contains('is-idle') !== idle) touched = true;
+            tile.classList.toggle('is-idle', idle);
+        });
+        if (touched) this._layout();
+    }
+
     _layout() {
-        const count = this.tiles.size;
-        this.tilesEl.dataset.count = String(count);
+        // Idle participants (no mic, no camera) stay out of the grid — see
+        // _refreshRemoteTile. Only what is on screen shapes the grid.
+        const shown = [];
+        this.tiles.forEach((tile, identity) => {
+            if (!tile.classList.contains('is-idle')) shown.push(identity);
+        });
+        const count = shown.length;
+        this.tilesEl.dataset.count = String(Math.max(count, 1));
         this.tilesEl.dataset.layout = this.layout;
         let focus = null;
         if (this.layout !== 'grid') focus = this.activeSpeaker;
+        if (focus && !shown.includes(focus)) focus = null;
         this.tilesEl.classList.toggle('has-focus', Boolean(focus));
         this.tiles.forEach((tile, identity) => {
-            tile.classList.toggle('focus', identity === focus);
-            tile.classList.toggle('mini', Boolean(focus) && identity !== focus);
+            const onStage = shown.includes(identity);
+            tile.classList.toggle('focus', onStage && identity === focus);
+            tile.classList.toggle('mini', onStage && Boolean(focus) && identity !== focus);
             // Focus adjusts tile sizes but must not hide a live camera.
         });
         this.emptyEl.classList.toggle('hidden', count > 0);
+        this._emptyReason(count);
+    }
+
+    /** Explain an empty stage instead of leaving the join placeholder up. */
+    _emptyReason(count) {
+        if (count > 0 || !this.emptyEl) return;
+        const el = document.getElementById('stage-empty-text');
+        if (!el) return;
+        if (this.tiles.size > 0) {
+            el.textContent = 'فعلاً کسی دوربین یا میکروفون روشن نکرده است.';
+            this.emptyEl.dataset.reason = 'idle';
+        }
     }
 
     // ------------------------------------------------- speaker + quality
@@ -1269,7 +1312,13 @@ class MeshMedia {
         }
         // local tile mic icon
         const myTile = this.tiles.get(this.self.identity);
-        if (myTile) myTile.querySelector('.t-mic')?.classList.toggle('off', !this.micOn);
+        if (myTile) {
+            myTile.querySelector('.t-mic')?.classList.toggle('off', !this.micOn);
+            const camTrack = this.localStream && this.localStream.getVideoTracks()[0];
+            const camLive = Boolean(camTrack && camTrack.readyState === 'live');
+            myTile.classList.toggle('is-idle', !camLive && !this.micOn);
+            this._layout();
+        }
         this.onStateChange({ mic_on: this.micOn, camera_on: this.cameraOn, screen_sharing: Boolean(this.screenStream) });
     }
 

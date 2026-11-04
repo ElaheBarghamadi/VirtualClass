@@ -163,11 +163,17 @@
                         </div>
                         <h2 class="se-title">{{ classroom.title }}</h2>
                         <p id="stage-empty-text">در حال اتصال به سرور رسانه…</p>
-                        <ul class="se-hints" aria-hidden="true">
-                            <li><svg class="ic"><use href="#i-mic"/></svg> میکروفون</li>
-                            <li><svg class="ic"><use href="#i-cam"/></svg> دوربین</li>
-                            <li><svg class="ic"><use href="#i-link"/></svg> دعوت با لینک</li>
-                        </ul>
+                        <div class="se-actions" role="group" aria-label="شروع جلسه">
+                            <button type="button" class="se-action is-primary" data-stage-action="camera">
+                                <svg class="ic" aria-hidden="true"><use href="#i-cam"/></svg> روشن کردن دوربین
+                            </button>
+                            <button type="button" class="se-action" data-stage-action="mic">
+                                <svg class="ic" aria-hidden="true"><use href="#i-mic"/></svg> میکروفون
+                            </button>
+                            <button type="button" class="se-action" data-stage-action="link">
+                                <svg class="ic" aria-hidden="true"><use href="#i-link"/></svg> کپی لینک کلاس
+                            </button>
+                        </div>
                     </div>
                 </div>
 

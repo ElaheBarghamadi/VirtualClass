@@ -295,6 +295,15 @@ class PresenceClient {
         document.getElementById('hand-pill').classList.toggle('hidden', hands === 0);
         document.getElementById('hand-count').textContent = String(hands);
 
+        // Who is actually on stage: a participant with no camera and no
+        // microphone has nothing to show, so their tile stays out of the grid
+        // (they remain in this list, and their media resumes instantly).
+        Media.syncStagePresence?.(inRoom.map((p) => ({
+            identity: p.identity,
+            mic_on: p.mic_on,
+            camera_on: p.camera_on,
+        })));
+
         // Keep the P2P mesh engine's peer set in sync (LiveKit ignores this).
         Media.syncPeers(inRoom.map((p) => ({
             identity: p.identity,
@@ -322,6 +331,12 @@ class PresenceClient {
         li.className = 'participant';
         li.dataset.identity = String(p.identity);
 
+        // One icon per fact.  Both «میکروفون خاموش» and «بی‌صدا شده» used to
+        // render the same crossed mic in red, so a muted student showed the
+        // icon twice and the row looked broken.  Muted-by-host wins.
+        const muted = Boolean(p.muted);
+        const micOff = !muted && p.mic_on === false;
+        const camOff = p.camera_on === false;
         li.innerHTML = `
             <span class="participant-avatar"></span>
             <span class="participant-name-wrap">
@@ -330,9 +345,9 @@ class PresenceClient {
             </span>
             <span class="participant-states" aria-hidden="true">
                 <i class="s-hand ${p.hand_raised ? 'on' : ''}" title="دست بالا"><svg class="ic"><use href="#i-hand"/></svg></i>
-                <i class="s-mic ${p.mic_on === false ? 'off' : ''}" title="میکروفون">${p.mic_on === false ? STATE_ICONS.micOff : STATE_ICONS.mic}</i>
-                <i class="s-camera ${p.camera_on === false ? 'off' : ''}" title="دوربین">${p.camera_on === false ? STATE_ICONS.camOff : STATE_ICONS.cam}</i>
-                <i class="s-muted ${p.muted ? 'on' : ''}" title="بی‌صدا توسط مدیر">${STATE_ICONS.micOff}</i>
+                <i class="s-mic ${micOff ? 'off' : ''}" title="میکروفون">${STATE_ICONS.micOff}</i>
+                <i class="s-muted ${muted ? 'on' : ''}" title="بی‌صدا توسط مدیر">${STATE_ICONS.micOff}</i>
+                <i class="s-camera ${camOff ? 'off' : ''}" title="دوربین">${STATE_ICONS.camOff}</i>
             </span>`;
         li.querySelector('.participant-avatar').textContent = (p.name || '?').charAt(0);
         li.querySelector('.participant-name').textContent =
@@ -341,6 +356,13 @@ class PresenceClient {
 
         if (PRIVILEGED && p.identity !== IDENTITY && p.role !== 'OWNER') {
             li.appendChild(this._hostControls(p));
+        } else if (PRIVILEGED) {
+            // Rows without a «⋯» keep the same width so the mic/camera badges
+            // line up in one column instead of drifting row to row.
+            const spacer = document.createElement('div');
+            spacer.className = 'host-controls host-controls-empty';
+            spacer.setAttribute('aria-hidden', 'true');
+            li.appendChild(spacer);
         }
         return li;
     }
@@ -1189,6 +1211,30 @@ function setDrawer(open) {
     if (!side) return;
     side.classList.toggle('drawer-open', open);
     if (backdrop) backdrop.classList.toggle('open', open);
+}
+
+/** The empty stage offers the two things that fill it, plus the class link.
+ *  Static hint chips looked like decoration; buttons actually start the class. */
+function initStageEmpty() {
+    const actions = { mic: 'btn-mic', camera: 'btn-camera' };
+    document.querySelectorAll('[data-stage-action]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            const action = btn.dataset.stageAction;
+            if (actions[action]) {
+                document.getElementById(actions[action])?.click();
+                return;
+            }
+            if (action === 'link') {
+                const link = window.location.href;
+                const done = () => toast('لینک کلاس کپی شد.', 'info', 2400);
+                if (navigator.clipboard?.writeText) {
+                    navigator.clipboard.writeText(link).then(done).catch(() => window.prompt('لینک کلاس:', link));
+                } else {
+                    window.prompt('لینک کلاس:', link);
+                }
+            }
+        });
+    });
 }
 
 function initDrawer() {
@@ -2416,6 +2462,7 @@ function safe(label, fn) {
 
 safe('tabs', initTabs);
 safe('drawer', initDrawer);
+safe('stage-empty', initStageEmpty);
 safe('controls', initControls);
 safe('bar-space', () => {
     trackControlBarHeight();

@@ -1105,39 +1105,6 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
     font-size: .84rem;
 }
 
-.stage-empty .se-hints {
-    list-style: none;
-    margin: .5rem 0 0;
-    padding: 0;
-    display: flex;
-    flex-wrap: wrap;
-    gap: .4rem .5rem;
-    justify-content: center;
-}
-
-.stage-empty .se-hints li {
-    display: inline-flex;
-    align-items: center;
-    gap: .35rem;
-    padding: .3rem .6rem;
-    border-radius: 999px;
-    border: 1px solid color-mix(in srgb, currentColor 16%, transparent);
-    background: color-mix(in srgb, currentColor 6%, transparent);
-    font-size: .74rem;
-    line-height: 1.6;
-}
-
-.stage-empty .se-hints .ic {
-    width: 14px;
-    height: 14px;
-    fill: none;
-    stroke: currentColor;
-    stroke-width: 1.8;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-}
-
-
 /* ---------------------------------------------------------------------------
    Narrow screens: the whiteboard toolbar and the control bar
 --------------------------------------------------------------------------- */
@@ -1555,4 +1522,125 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
 @keyframes dt-in {
     from { opacity: 0; transform: translateY(10px); }
     to { opacity: 1; transform: translateY(0); }
+}
+
+/* ---------------------------------------------------------------------------
+   Stage hygiene: a participant with neither microphone nor camera on is not
+   on stage.  The tile (and its live tracks) stay in the DOM so video returns
+   the instant someone unmutes — it simply leaves the grid, which is what keeps
+   the room from looking like a wall of empty grey cards.
+--------------------------------------------------------------------------- */
+.tile.is-idle { display: none; }
+
+/* ---------------------------------------------------------------------------
+   Roster: the «⋯» used to be a wide empty pill that read as a stray box.  It is
+   a quiet round icon button now, and it only gains weight on hover/focus.
+--------------------------------------------------------------------------- */
+.hc-btn.hc-more {
+    width: 28px; height: 28px; padding: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 50%;
+    border: 1px solid color-mix(in srgb, var(--room-border) 85%, transparent);
+    background: color-mix(in srgb, var(--surface-3) 80%, var(--surface));
+    color: var(--room-text, var(--text));
+    transition: background .15s var(--ease), color .15s var(--ease),
+                opacity .15s var(--ease), transform .2s var(--ease-spring);
+}
+.hc-btn.hc-more .ic {
+    width: 17px; height: 17px;
+    fill: currentColor; stroke: none;
+    opacity: .85;
+}
+.participant:hover .hc-btn.hc-more,
+.hc-btn.hc-more:focus-visible,
+.hc-btn.hc-more[aria-expanded="true"] {
+    opacity: 1;
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    color: var(--accent);
+}
+.hc-btn.hc-more:active { transform: scale(.9); }
+.host-controls-empty { width: 28px; flex: none; }
+@media (max-width: 620px) {
+    .host-controls-empty { width: 32px; }
+}
+@media (max-width: 620px) {
+    .hc-btn.hc-more { width: 32px; height: 32px; }
+}
+
+/* The roster popover is placed by placeRowMenu() in fixed coordinates, so it
+   must not inherit the centring translate used by the other popovers —
+   that offset pushed it half a width off the left edge and clipped the labels. */
+.row-menu {
+    transform: none;
+    min-width: 0;
+    width: max-content;
+    max-width: min(88vw, 300px);
+    padding: .35rem;
+    border-radius: 16px;
+}
+.row-menu .row-menu-head {
+    display: flex; align-items: center; gap: .45rem;
+    padding: .4rem .55rem .45rem;
+    font-size: .8rem; font-weight: 700; color: var(--text);
+    max-width: 26ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.row-menu .row-menu-head::before {
+    content: ""; width: 4px; height: 14px; border-radius: 999px;
+    background: color-mix(in srgb, var(--accent) 70%, transparent);
+    flex: none;
+}
+.row-menu .row-menu-item { font-size: .84rem; padding: .48rem .55rem; gap: .55rem; }
+.row-menu .row-menu-sep { margin: .3rem .45rem; }
+
+/* ---------------------------------------------------------------------------
+   Empty stage: instead of decorative chips, the two buttons that actually put
+   something on the stage, plus the class link.
+--------------------------------------------------------------------------- */
+.stage-empty .se-actions {
+    display: flex; flex-wrap: wrap; gap: .5rem;
+    justify-content: center;
+    margin-top: .7rem;
+}
+.stage-empty .se-action {
+    display: inline-flex; align-items: center; gap: .42rem;
+    padding: .52rem .95rem;
+    border-radius: 999px;
+    border: 1px solid var(--room-border, var(--border));
+    background: var(--surface);
+    color: var(--text-secondary);
+    font: inherit; font-size: .82rem; font-weight: 600;
+    cursor: pointer;
+    box-shadow: 0 1px 2px rgb(8 10 22 / .05);
+    transition: transform .2s var(--ease-spring), background .16s var(--ease),
+                color .16s var(--ease), border-color .16s var(--ease),
+                box-shadow .16s var(--ease);
+}
+.stage-empty .se-action .ic {
+    width: 15px; height: 15px;
+    fill: none; stroke: currentColor; stroke-width: 1.9;
+    stroke-linecap: round; stroke-linejoin: round;
+}
+.stage-empty .se-action:hover {
+    color: var(--primary);
+    border-color: color-mix(in srgb, var(--primary) 45%, transparent);
+    background: color-mix(in srgb, var(--primary) 7%, var(--surface));
+    box-shadow: 0 4px 14px -6px color-mix(in srgb, var(--primary) 60%, transparent);
+}
+.stage-empty .se-action:active { transform: scale(.97); }
+.stage-empty .se-action.is-primary {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: var(--accent-contrast, #fff);
+    box-shadow: 0 8px 20px -10px color-mix(in srgb, var(--primary) 80%, transparent);
+}
+.stage-empty .se-action.is-primary:hover {
+    background: color-mix(in srgb, var(--primary) 88%, #000);
+    color: var(--accent-contrast, #fff);
+}
+.stage-empty .se-action:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--primary) 65%, transparent);
+    outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+    .stage-empty .se-action { transition: none; }
 }
