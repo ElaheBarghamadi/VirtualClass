@@ -46,6 +46,11 @@ OP_RATE_LIMIT = 40  # ops per second per connection (lasers included)
 # write amplification; the timestamp is refreshed at most this often instead.
 BOARD_TOUCH_INTERVAL = 15
 HISTORY_LIMIT = 2000
+# A WebSocket frame has a hard ceiling (autobahn/daphne refuse >1 MiB), and a
+# busy board's snapshot easily passes it — that used to raise PayloadExceededError
+# mid-``connect``, which killed the socket and left the board empty.  The replay
+# is therefore streamed in chunks well below the limit.
+HISTORY_CHUNK_BYTES = 256 * 1024
 VALID_OP_TYPES = {"draw", "text", "remove", "clear", "page_add", "page_setup", "page_go", "laser"}
 # Laser pointers are ephemeral: relayed to the group, never persisted.
 EPHEMERAL_OP_TYPES = {"laser"}
@@ -87,10 +92,12 @@ class WhiteboardConsumer(SafeJsonWebsocketConsumer):
         await self.accept()
 
         # Snapshot first, then live operations.  ``seq`` lets the client
-        # discard anything already contained in the snapshot.
+        # discard anything already contained in the snapshot.  It is sent in
+        # chunks (``more`` marks the last one).
         history, seq = await self._load_history()
         self.last_seq = seq
-        await self.send_json({"type": "whiteboard_history", "events": history, "seq": seq})
+        for message in self._history_chunks(history, seq):
+            await self.send_json(message)
 
     async def disconnect(self, code: int) -> None:
         if getattr(self, "member", None) is not None:
@@ -113,8 +120,15 @@ class WhiteboardConsumer(SafeJsonWebsocketConsumer):
             return
 
         op = content.get("op")
+        # `op_id` lets the client undo its optimistic copy of a refused op —
+        # without it the author kept ink that nobody else received.
+        op_id = op.get("id") if isinstance(op, dict) and isinstance(op.get("id"), str) else None
         if not self._valid_op(op):
-            await self.send_json({"type": "error", "message": "عملیات تخته نامعتبر است."})
+            await self.send_json({
+                "type": "error",
+                "message": "عملیات تخته نامعتبر است.",
+                "op_id": op_id,
+            })
             return
 
         # Permission re-checked live — settings can change mid-session.
@@ -122,6 +136,7 @@ class WhiteboardConsumer(SafeJsonWebsocketConsumer):
             await self.send_json({
                 "type": "error",
                 "message": "شما اجازهٔ نوشتن روی این صفحه را ندارید.",
+                "op_id": op_id,
             })
             return
 
@@ -142,7 +157,11 @@ class WhiteboardConsumer(SafeJsonWebsocketConsumer):
 
         persisted = await self._persist(op)
         if persisted is None:
-            await self.send_json({"type": "error", "message": "شما اجازهٔ استفاده از تخته را ندارید."})
+            await self.send_json({
+                "type": "error",
+                "message": "شما اجازهٔ استفاده از تخته را ندارید.",
+                "op_id": op_id,
+            })
             return
         op, seq = persisted
         self.last_seq = seq
@@ -369,6 +388,32 @@ class WhiteboardConsumer(SafeJsonWebsocketConsumer):
             return False
         # Only the file being presented — not any file id a client makes up.
         return file_id == classroom.current_file_id
+
+    @staticmethod
+    def _history_chunks(history: list[dict], seq: int) -> list[dict]:
+        """Split a replay snapshot into WebSocket-safe messages."""
+        if not history:
+            return [{"type": "whiteboard_history", "events": [], "seq": seq, "chunk": 0, "more": False}]
+        groups: list[list[dict]] = []
+        current: list[dict] = []
+        size = 0
+        for event in history:
+            try:
+                weight = len(json.dumps(event, separators=(",", ":")))
+            except (TypeError, ValueError):
+                weight = 1024
+            if current and size + weight > HISTORY_CHUNK_BYTES:
+                groups.append(current)
+                current, size = [], 0
+            current.append(event)
+            size += weight
+        if current:
+            groups.append(current)
+        last = len(groups) - 1
+        return [
+            {"type": "whiteboard_history", "events": group, "seq": seq, "chunk": i, "more": i < last}
+            for i, group in enumerate(groups)
+        ]
 
     @database_sync_to_async
     def _load_history(self) -> tuple[list[dict], int]:

@@ -52,6 +52,11 @@ const WS_BUFFER_LIMIT = 16 * 1024;
 /** Page background changes are merged over this window before being sent. */
 const SETUP_DEBOUNCE_MS = 220;
 const MAX_QUEUED_OPS = 200;
+/** Server-side limits mirrored here (whiteboard/consumers.py): a stroke that
+ *  breaks them would be rejected for the whole class but stay on the author's
+ *  screen, so it is thinned before it is sent. */
+const MAX_OP_POINTS = 1200;
+const MAX_PAGES = 999;
 const MAX_UNDO = 60;
 
 class WhiteboardImpl {
@@ -90,6 +95,7 @@ class WhiteboardImpl {
         this._resizeQueued = false;
         this._editor = null;          // inline text editor element
         this._editing = null;         // op being edited (text tool), if any
+        this._undoRestore = new Map(); // opId → op to put back when it is undone
     }
 
     init({ roomCode, identity, canDraw }) {
@@ -220,12 +226,24 @@ class WhiteboardImpl {
             let data;
             try { data = JSON.parse(evt.data); } catch { return; }
             if (data.type === 'whiteboard_history') {
+                // The snapshot arrives in chunks (a whole board can be larger
+                // than a single WebSocket frame); only the last one is applied.
+                if (!data.chunk) {
+                    this._incomingHistory = [];
+                    this._incomingSeq = data.seq || 0;
+                }
+                if (this._incomingHistory) {
+                    for (const e of data.events || []) this._incomingHistory.push(e);
+                }
+                if (data.more) return;
+                const events = this._incomingHistory || data.events || [];
+                this._incomingHistory = null;
                 this._pageOps.clear();
                 this._pageIds.clear();
                 this._pageColors.clear();
                 this._pageGrid.clear();
                 this._replaying = true;
-                (data.events || []).forEach((e) => this._applyOp(e.op));
+                events.forEach((e) => this._applyOp(e.op));
                 this._replaying = false;
                 this.page = Math.max(1, Math.min(this.pageCount, this.page));
                 // one clean repaint for the page we end up on
@@ -240,6 +258,10 @@ class WhiteboardImpl {
                 this._updatePageUI();
                 this._syncEditState();
             } else if (data.type === 'error') {
+                // The server refused an op: drop it here too, otherwise the
+                // author keeps ink that nobody else has (and that disappears
+                // on the next reload).
+                if (data.op_id) this._rollback(data.op_id);
                 import('./toast.js').then(({ toast }) => toast(data.message || 'خطا در تخته.', 'error'));
             }
         };
@@ -436,6 +458,11 @@ class WhiteboardImpl {
 
     addPage() {
         if (!this.canDraw) return this._deny();
+        if (this.pageCount >= MAX_PAGES) {
+            import('./toast.js').then(({ toast }) =>
+                toast(`بیشتر از ${MAX_PAGES.toLocaleString('fa-IR')} صفحه پشتیبانی نمی‌شود.`, 'warning'));
+            return;
+        }
         const target = this.pageCount + 1;
         const op = { type: 'page_add', page: target, id: this._id() };
         // apply locally first (we are the actor — server echo is filtered out)
@@ -608,8 +635,28 @@ class WhiteboardImpl {
         if (this.tool === 'laser') return; // laser needs no down/up
         const p = this._pt(opt);
 
-        if (this.tool === 'text') {
-            this._openEditor(p);
+        // Which label was hit (if any)?
+        const hitId = opt?.target?.data?.opId;
+        const hit = hitId ? this._opById(hitId) : null;
+        const isLabel = !!hit && hit.type === 'text';
+        // Our own double-click detection: the native `dblclick` never reaches
+        // a canvas whose pointerdown opens an editor on the first click.
+        const now = Date.now();
+        const last = this._lastDown;
+        this._lastDown = { t: now, x: p.x, y: p.y };
+        const doubleClick = !!last && now - last.t < 400
+            && Math.abs(p.x - last.x) * this._sx() < 8
+            && Math.abs(p.y - last.y) * this._sy() < 8;
+
+        if (this.tool === 'text' || (isLabel && doubleClick)) {
+            // Clicking an existing label edits it in place; an empty spot
+            // starts a new one.
+            if (isLabel) {
+                this._cancelStroke();
+                this._openEditor(this._opPoint(hit), { text: hit.text, replaceId: hitId });
+            } else if (this.tool === 'text') {
+                this._openEditor(p);
+            }
             return;
         }
 
@@ -826,6 +873,12 @@ class WhiteboardImpl {
         setTimeout(() => { if (this._editing) { input.focus(); input.select(); } }, 20);
     }
 
+    /** World (reference) position stored in an op. */
+    _opPoint(op) {
+        if (op.norm) return { x: op.x * REF_W, y: op.y * REF_H };
+        return { x: op.x * (REF_W / this._w()), y: op.y * (REF_H / this._h()) };
+    }
+
     _opById(id) {
         for (const list of this._pageOps.values()) {
             const hit = list.find((o) => o.id === id);
@@ -854,7 +907,9 @@ class WhiteboardImpl {
         if (!text) return this._closeEditor(true);
         const { point, replaceId, fontSizeWorld } = state;
         this._closeEditor(true);
+        let previous = null;
         if (replaceId) {
+            previous = this._opById(replaceId);
             const remove = { type: 'remove', id: replaceId, page: this.page };
             this._applyOp(remove);
             this._sendOp(remove);
@@ -867,20 +922,26 @@ class WhiteboardImpl {
         this._applyOp(op);
         this._sendOp(op);
         this._pushUndo(op);
+        // Undoing a rewrite should bring the old wording back, not leave a
+        // hole where the label was.
+        if (previous) {
+            this._undoRestore.set(op.id, previous);
+            while (this._undoRestore.size > 50) {
+                this._undoRestore.delete(this._undoRestore.keys().next().value);
+            }
+        }
     }
 
     /** Double-click an existing label to rewrite it. */
     _dblclick(opt) {
         if (!this.canDraw || !opt?.target) return;
+        this._cancelStroke();   // the first click of the pair started one
         const id = opt.target.data?.opId;
         if (!id) return;
         const op = this._opById(id);
         if (!op || op.type !== 'text') return;
-        const point = op.norm
-            ? { x: op.x * REF_W, y: op.y * REF_H }
-            : { x: op.x * (REF_W / this._w()), y: op.y * (REF_H / this._h()) };
         this.setTool('text');
-        this._openEditor(point, { text: op.text, replaceId: id });
+        this._openEditor(this._opPoint(op), { text: op.text, replaceId: id });
     }
 
     // ------------------------------------------------------------ laser
@@ -907,6 +968,61 @@ class WhiteboardImpl {
         return `${this.identity}-${Date.now()}-${++this.idCounter}`;
     }
 
+    /**
+     * Reduce a path to at most `max` points (Ramer–Douglas–Peucker).
+     *
+     * A stroke is one op; the server refuses ops with >4096 points or >64 KB,
+     * and a rejected op means "the author sees ink, the class does not".
+     * Keeping the corner points and dropping redundant ones is visually
+     * almost free at these densities (points are ~1.6 px apart to begin with).
+     */
+    _simplify(points, max = MAX_OP_POINTS) {
+        if (points.length <= max) return points;
+        const sq = (a, b) => (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2;
+        const rdp = (pts, tol) => {
+            if (pts.length < 3) return pts.slice();
+            const first = pts[0];
+            const last = pts[pts.length - 1];
+            const tol2 = tol * tol;
+            let index = -1;
+            let maxDist = 0;
+            const dx = last[0] - first[0];
+            const dy = last[1] - first[1];
+            const len2 = dx * dx + dy * dy;
+            for (let i = 1; i < pts.length - 1; i++) {
+                const pt = pts[i];
+                let dist;
+                if (len2 === 0) {
+                    dist = sq(pt, first);
+                } else {
+                    let t = ((pt[0] - first[0]) * dx + (pt[1] - first[1]) * dy) / len2;
+                    t = Math.max(0, Math.min(1, t));
+                    dist = (pt[0] - (first[0] + t * dx)) ** 2 + (pt[1] - (first[1] + t * dy)) ** 2;
+                }
+                if (dist > maxDist) { maxDist = dist; index = i; }
+            }
+            if (maxDist > tol2 && index > 0) {
+                const left = rdp(pts.slice(0, index + 1), tol);
+                const right = rdp(pts.slice(index), tol);
+                return left.slice(0, -1).concat(right);
+            }
+            return [first, last];
+        };
+        let tol = 0.0008;
+        let out = rdp(points, tol);
+        // Grow the tolerance until the path fits the budget (bounded loop).
+        while (out.length > max && tol < 0.2) {
+            tol *= 1.6;
+            out = rdp(points, tol);
+        }
+        if (out.length <= max) return out;
+        // Pathological fallback: even stride, endpoints kept.
+        const stride = Math.ceil(out.length / max);
+        const thin = out.filter((_, i) => i % stride === 0);
+        if (thin[thin.length - 1] !== out[out.length - 1]) thin.push(out[out.length - 1]);
+        return thin;
+    }
+
     _serialize(obj) {
         // Coordinates travel NORMALISED (0..1 of the reference surface) so the
         // same op renders in the same relative place on any screen size.
@@ -930,9 +1046,13 @@ class WhiteboardImpl {
                 pts.push([x, y]);
             }
             if (pts.length < 2) return null;
+            // A long unbroken scribble can exceed the server's per-op limits
+            // (4096 points / 64 KB) — it was then dropped with a generic error
+            // while the author kept seeing ink nobody else had.  Thin it here.
+            const slim = this._simplify(pts, MAX_OP_POINTS);
             return {
                 type: 'draw', ...common,
-                points: pts,
+                points: slim,
                 color: tool === 'eraser' ? null : obj.stroke,
             };
         }
@@ -1031,6 +1151,9 @@ class WhiteboardImpl {
 
         if (pg === this.page && !this._replaying) {
             if (op.type === 'clear') {
+                // A stroke in flight belongs to the page that was just wiped;
+                // finishing it later would paint it back on a blank board.
+                this._cancelStroke();
                 this.canvas.clear();
                 this._objects.clear();
                 this._applyBg();
@@ -1082,8 +1205,10 @@ class WhiteboardImpl {
                 top: y,
                 fill: op.color || '#111827',
                 fontSize: size,
+                // `evented` (without `selectable`) is what makes the label a
+                // double-click target for editing; it cannot be dragged.
                 selectable: false,
-                evented: false,
+                evented: true,
             });
             text.set('data', { opId: op.id });
             this.canvas.add(text);
@@ -1181,6 +1306,12 @@ class WhiteboardImpl {
                 const [op] = this.myUndo.splice(i, 1);
                 this._applyOp({ type: 'remove', id: op.id, page: this.page });
                 this._sendOp({ type: 'remove', id: op.id, page: this.page });
+                const restore = this._undoRestore.get(op.id);
+                if (restore) {
+                    this._undoRestore.delete(op.id);
+                    this._applyOp(restore);
+                    this._sendOp(restore);
+                }
                 this.myRedo.push(op);
                 this._syncEditState();
                 return;
@@ -1201,6 +1332,7 @@ class WhiteboardImpl {
         } else if (action === 'clear') {
             if (!this.canDraw) return this._deny();
             if (!confirm('فقط صفحهٔ جاری برای همه پاک شود؟')) return;
+            this._cancelStroke();
             const op = { type: 'clear', id: this._id(), page: this.page };
             this._applyOp(op);
             this._sendOp(op);
@@ -1216,6 +1348,19 @@ class WhiteboardImpl {
             this._objects.delete(id);
             this._scheduleRender();
         }
+    }
+
+    /** Undo one locally-applied op whose server copy was refused. */
+    _rollback(opId) {
+        if (!opId) return;
+        for (const pg of [...this._pageOps.keys()]) {
+            if (!this._hasOp(pg, opId)) continue;
+            this._dropOp(pg, opId);                 // not part of the page history
+            if (pg === this.page) this._removeById(opId);   // unpaint it
+        }
+        this.myUndo = this.myUndo.filter((o) => o.id !== opId);
+        this.myRedo = this.myRedo.filter((o) => o.id !== opId);
+        this._syncEditState();
     }
 
     _pushUndo(op) {

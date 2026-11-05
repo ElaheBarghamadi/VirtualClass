@@ -4,6 +4,7 @@ Consumers run through their real ASGI routing with the authenticated
 user injected into the scope the way ``AuthMiddlewareStack`` would.
 """
 import asyncio
+import json
 
 from asgiref.sync import async_to_sync
 from channels.db import database_sync_to_async
@@ -21,6 +22,7 @@ from classrooms.services import (
     set_member_permission,
     set_member_role,
 )
+from whiteboard.consumers import HISTORY_CHUNK_BYTES
 from whiteboard.models import Whiteboard, WhiteboardEvent
 from whiteboard.routing import websocket_urlpatterns as wb_routes
 
@@ -128,9 +130,15 @@ class WhiteboardConsumerTests(TransactionTestCase):
             ws = self._ws(self.owner)
             await ws.connect()
             await ws.receive_json_from()
-            await ws.send_json_to({"action": "op", "op": {"type": "draw", "tool": "laser", "points": []}})
+            await ws.send_json_to({
+                "action": "op",
+                "op": {"type": "draw", "tool": "laser", "points": [], "id": "too-thin"},
+            })
             msg = await ws.receive_json_from()
             assert msg["type"] == "error"
+            # The refusal names the op so the client can drop its optimistic
+            # copy instead of keeping ink nobody else received.
+            assert msg["op_id"] == "too-thin", msg
             await ws.disconnect()
 
         async_to_sync(scenario)()
@@ -212,6 +220,52 @@ class WhiteboardConsumerTests(TransactionTestCase):
         self.assertEqual(board.events.count(), 4)
         self.assertIsNotNone(board.updated_at)
         self.assertEqual(first, second)
+
+    def test_history_is_streamed_in_frame_sized_chunks(self):
+        """A full board must not be sent as one >1 MiB WebSocket frame.
+
+        autobahn/daphne refuse frames above 1 MiB; the resulting
+        PayloadExceededError used to abort ``connect`` and leave the board
+        empty (with the client reconnecting forever).
+        """
+        board, _ = Whiteboard.objects.get_or_create(classroom=self.classroom)
+        points = [[0.1 + (i % 40) / 100, 0.2 + (i // 40) / 100] for i in range(200)]
+        WhiteboardEvent.objects.bulk_create([
+            WhiteboardEvent(
+                whiteboard=board, actor=self.presenter, actor_identity="u:1", page=1,
+                operation={"type": "draw", "tool": "pen", "norm": 1, "id": f"k-{i}", "page": 1,
+                           "color": "#2563eb", "width": 3, "points": points},
+            )
+            for i in range(400)
+        ])
+
+        async def scenario():
+            ws = self._ws(self.owner)
+            connected, _ = await ws.connect()
+            assert connected
+            chunks = []
+            while True:
+                msg = await ws.receive_json_from()
+                assert msg["type"] == "whiteboard_history", msg
+                chunks.append(msg)
+                if not msg.get("more"):
+                    break
+            await ws.disconnect()
+            return chunks
+
+        chunks = async_to_sync(scenario)()
+        total = sum(len(c["events"]) for c in chunks)
+        self.assertEqual(total, 400)
+        self.assertGreater(len(chunks), 1, "history should have been split")
+        for chunk in chunks:
+            self.assertLessEqual(
+                len(json.dumps(chunk, separators=(",", ":"))),
+                HISTORY_CHUNK_BYTES + 128 * 1024,
+            )
+        # seq and ordering survive the split
+        self.assertEqual(chunks[-1]["seq"], WhiteboardEvent.objects.order_by("-id").first().id)
+        ids = [e["id"] for c in chunks for e in c["events"]]
+        self.assertEqual(ids, sorted(ids))
 
     def test_non_member_rejected(self):
         stranger = User.objects.create_user(username="wb_stranger", password="x")
@@ -801,9 +855,16 @@ class WhiteboardHistoryTailTests(TransactionTestCase):
             )
             connected, code = await ws.connect()
             assert connected, code
-            history = await ws.receive_json_from(timeout=5)
+            # The snapshot is streamed: collect every chunk.
+            events = []
+            while True:
+                msg = await ws.receive_json_from(timeout=5)
+                assert msg["type"] == "whiteboard_history", msg
+                events.extend(msg["events"])
+                if not msg.get("more"):
+                    break
             await ws.disconnect()
-            return history
+            return {**msg, "events": events}
 
         history = async_to_sync(scenario)()
         self.assertEqual(history["type"], "whiteboard_history")
