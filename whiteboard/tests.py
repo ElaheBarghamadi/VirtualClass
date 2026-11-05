@@ -829,6 +829,14 @@ class OpValidationTests(TransactionTestCase):
             "color": "#2563eb", "width": 3, "id": "dot-1", "page": 1,
         }))
 
+    def test_dot_flag_is_accepted(self):
+        """`dot:1` marks a tap: the points stay put and clients paint a circle."""
+        self.assertTrue(self.valid({
+            "type": "draw", "tool": "pen", "norm": 1, "dot": 1,
+            "points": [[0.4, 0.5], [0.4, 0.5]],
+            "color": "#2563eb", "width": 3, "id": "dot-2", "page": 1,
+        }))
+
     def test_stroke_width_is_reference_px(self):
         """Widths travel in reference px (0.4 .. 512), independent of the
         sender's window size; the two extremes are the eraser and a fat marker."""

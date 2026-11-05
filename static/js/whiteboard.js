@@ -883,13 +883,21 @@ class WhiteboardImpl {
 
         const op = this._serialize(obj);
         if (!op) { this.canvas.remove(obj); this._render(); return; }
-        if (this._isDot(op)) this._dotify(op, obj);          // a tap is a dot
-        else if (this._degenerate(op)) { this.canvas.remove(obj); this._render(); return; }
+        const dot = this._isDot(op);
+        if (dot) {
+            // A tap left no length, so the placeholder paints nothing: it is
+            // swapped for the round dab that `_applyOp` paints (and that every
+            // other client replays as a circle).
+            this._dotify(op);
+            this.canvas.remove(obj);
+        } else if (this._degenerate(op)) { this.canvas.remove(obj); this._render(); return; }
         op.page = this.page;
-        obj.set('data', { opId: op.id });
-        // Register the live object under its op id so applying the op does
-        // not paint a duplicate on top of it.
-        this._index(op.id, obj);
+        if (!dot) {
+            obj.set('data', { opId: op.id });
+            // Register the live object under its op id so applying the op does
+            // not paint a duplicate on top of it.
+            this._index(op.id, obj);
+        }
         this._applyOp(op);
         this._sendOp(op);
         this._pushUndo(op);
@@ -899,7 +907,7 @@ class WhiteboardImpl {
     /** A tap (no travel) — a dot in handwriting, so it must survive. */
     _isDot(op) {
         if (op.type !== 'draw' || !op.points || op.points.length > 2) return false;
-        if (!['pen', 'highlighter', 'eraser'].includes(op.tool)) return false;   // shapes are not ink
+        if (!['pen', 'highlighter'].includes(op.tool)) return false;   // shapes/rubber have no dots
         const [a, b] = op.points;
         return Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) < 0.006;
     }
@@ -909,19 +917,10 @@ class WhiteboardImpl {
      * a very short round-capped segment the width of the pen.  (Persian
      * letters such as «ن» are unwritable without dots.)
      */
-    _dotify(op, obj) {
-        const w = (obj?.strokeWidth || 4) / REF_W;      // pen width in x units
-        const [x, y] = op.points[0];
-        // A diagonal nudge renders as a round dab; a horizontal one looked like
-        // a short dash.  Kept tiny so the dot is a circle, not a stroke.
-        const dx = w * 0.12;
-        const dy = w * 0.12 * (REF_W / REF_H);
-        op.points = [[x - dx, y - dy], [x + dx, y + dy]];
-        // The live object is what the author sees: give it the same body,
-        // otherwise the dot only appears on the next repaint.
-        if (obj && Array.isArray(obj.points)) {
-            obj.set({ points: op.points.map(([px, py]) => ({ x: px * REF_W, y: py * REF_H })) });
-        }
+    _dotify(op) {
+        // The server wants at least two points; the pair stays where it is and
+        // `dot:1` tells every client to paint a circle instead of a segment.
+        op.dot = 1;
     }
 
     /**
@@ -1417,6 +1416,20 @@ class WhiteboardImpl {
             case 'pen':
             case 'highlighter':
             case 'eraser': {
+                if (op.dot) {
+                    // A tap: a round dab the diameter of the pen, so Persian
+                    // dots are round on every screen and at every zoom.
+                    const [dx, dy] = op.points[0];
+                    // A nib dab is about the pen's width; the floor keeps a thin
+                    // pen's dots legible (a Persian «ن» is unreadable without them).
+                    const r = Math.max(3.5, (op.width || 3) / 2);
+                    return new fabric.Circle({
+                        left: px(dx, REF_W) - r, top: px(dy, REF_H) - r,
+                        radius: r, fill: op.color || '#000', stroke: '',
+                        selectable: false, evented: false,
+                        opacity: op.tool === 'highlighter' ? 0.32 : 1,
+                    });
+                }
                 const pts = (op.points || []).map(([x, y]) => ({ x: px(x, REF_W), y: px(y, REF_H) }));
                 // A stored single-point op (a tap) becomes a dot.
                 if (pts.length === 1) pts.push({ x: pts[0].x, y: pts[0].y });
