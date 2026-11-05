@@ -818,6 +818,31 @@ class OpValidationTests(TransactionTestCase):
             "type": "draw", "tool": "pen", "points": [[0, 0], [1, 1]] * 4097, "id": "x",
         }))
 
+    def test_tap_is_sent_as_a_two_point_dot(self):
+        """A tap (a dot — every Persian letter needs one) is encoded as a
+        two-point stroke whose points sit a hair apart, so the round pen cap
+        paints a dab. The server must accept it: a single point used to be
+        refused, which silently swallowed the author's dots."""
+        self.assertTrue(self.valid({
+            "type": "draw", "tool": "pen", "norm": 1,
+            "points": [[0.4, 0.5], [0.4006, 0.501]],
+            "color": "#2563eb", "width": 3, "id": "dot-1", "page": 1,
+        }))
+
+    def test_stroke_width_is_reference_px(self):
+        """Widths travel in reference px (0.4 .. 512), independent of the
+        sender's window size; the two extremes are the eraser and a fat marker."""
+        base = {
+            "type": "draw", "tool": "pen", "norm": 1,
+            "points": [[0.1, 0.2], [0.3, 0.4]], "color": "#000000",
+            "id": "w-1", "page": 1,
+        }
+        self.assertTrue(self.valid({**base, "width": 0.4}))
+        self.assertTrue(self.valid({**base, "width": 110}))
+        self.assertTrue(self.valid({**base, "width": 512}))
+        self.assertFalse(self.valid({**base, "width": 512.5}))
+        self.assertFalse(self.valid({**base, "width": 0}))
+
     def test_non_boolean_normalization_and_invalid_page_rejected(self):
         self.assertFalse(self.valid({
             "type": "draw", "tool": "pen", "norm": "false",

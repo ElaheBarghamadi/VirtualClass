@@ -41,6 +41,42 @@
  * Local undo/redo affects only this user's own operations.
  */
 
+/**
+ * A polyline that DRAWS as a smooth curve.
+ *
+ * Handwriting is a stream of sampled points; joining them with straight
+ * segments is what makes ink look like a polygon, especially on quick strokes
+ * where samples are far apart.  This subclass keeps fabric's point list (and
+ * therefore the stored op, the payload size and the eraser's z-order) exactly
+ * as before, but renders the path as quadratic curves through the midpoints —
+ * the standard "curve through sample midpoints" trick.  Corner fidelity is
+ * kept by ending with a straight segment to the newest point, so the ink
+ * always reaches the pen tip.
+ */
+const SmoothPolyline = fabric.util.createClass(fabric.Polyline, {
+    type: 'polyline',   // keep the base type: serialisers/checks stay valid
+    commonRender(ctx) {
+        const pts = this.points;
+        const n = pts.length;
+        if (!n || isNaN(pts[n - 1].y)) return false;
+        const ox = this.pathOffset.x;
+        const oy = this.pathOffset.y;
+        ctx.beginPath();
+        ctx.moveTo(pts[0].x - ox, pts[0].y - oy);
+        if (n === 2) {
+            ctx.lineTo(pts[1].x - ox, pts[1].y - oy);
+            return true;
+        }
+        for (let i = 1; i < n - 1; i++) {
+            const mx = (pts[i].x + pts[i + 1].x) / 2 - ox;
+            const my = (pts[i].y + pts[i + 1].y) / 2 - oy;
+            ctx.quadraticCurveTo(pts[i].x - ox, pts[i].y - oy, mx, my);
+        }
+        ctx.lineTo(pts[n - 1].x - ox, pts[n - 1].y - oy);
+        return true;
+    },
+});
+
 /** Internal drawing surface. All coordinates/shapes are expressed in it. */
 const REF_W = 1200;
 const REF_H = 700;
@@ -307,7 +343,15 @@ class WhiteboardImpl {
             btn.addEventListener('click', () => this.run(btn.dataset.action));
         });
         document.getElementById('wb-color')?.addEventListener('input', (e) => { this.color = e.target.value; });
-        document.getElementById('wb-width')?.addEventListener('input', (e) => { this.width = Number(e.target.value); });
+        document.getElementById('wb-width')?.addEventListener('input', (e) => {
+            this.width = Number(e.target.value);
+            const cursor = this._wrapEl()?.querySelector('.wb-cursor');
+            if (cursor) {
+                const size = Math.max(6, this._toolWidth(this.tool) * this._sy());
+                cursor.style.width = `${size}px`;
+                cursor.style.height = `${size}px`;
+            }
+        });
 
         // page background colour — a colour-picker drag fires dozens of input
         // events; they are merged into ONE op (and one DB row).
@@ -337,6 +381,14 @@ class WhiteboardImpl {
         });
         const wrap = this._wrapEl();
         if (wrap) wrap.dataset.wbTool = tool;
+        const cursor = wrap?.querySelector('.wb-cursor');
+        if (cursor) {
+            cursor.classList.toggle('hidden', !['pen', 'highlighter', 'eraser'].includes(tool));
+            const size = Math.max(6, this._toolWidth(tool) * this._sy());
+            cursor.style.width = `${size}px`;
+            cursor.style.height = `${size}px`;
+            cursor.classList.toggle('is-eraser', tool === 'eraser');
+        }
     }
 
     /**
@@ -587,11 +639,52 @@ class WhiteboardImpl {
     }
 
     // ------------------------------------------------------------ drawing
+    /** A ring under the pointer that shows the actual pen/rubber width. */
+    _cursorEl() {
+        const wrap = this._wrapEl();
+        if (!wrap) return null;
+        let el = wrap.querySelector('.wb-cursor');
+        if (!el) {
+            el = document.createElement('div');
+            el.className = 'wb-cursor hidden';
+            el.setAttribute('aria-hidden', 'true');
+            wrap.appendChild(el);
+        }
+        return el;
+    }
+
+    _trackCursor(e) {
+        const el = this._cursorEl();
+        if (!el || !this.canvas) return;
+        const stroke = ['pen', 'highlighter', 'eraser'].includes(this.tool);
+        if (!stroke) { el.classList.add('hidden'); return; }
+        const rect = this.canvas.upperCanvasEl.getBoundingClientRect();
+        if (e.clientX < rect.left || e.clientY < rect.top || e.clientX > rect.right || e.clientY > rect.bottom) {
+            el.classList.add('hidden');
+            return;
+        }
+        const size = Math.max(6, this._toolWidth(this.tool) * this._sy());
+        el.style.width = `${size}px`;
+        el.style.height = `${size}px`;
+        el.style.left = `${e.clientX - rect.left}px`;
+        el.style.top = `${e.clientY - rect.top}px`;
+        el.classList.toggle('is-eraser', this.tool === 'eraser');
+        el.classList.remove('hidden');
+    }
+
     _bindDrawing() {
         this.canvas.on('mouse:down', (opt) => this._down(opt));
         this.canvas.on('mouse:move', (opt) => this._move(opt));
-        this.canvas.on('mouse:up', () => this._up());
+        this.canvas.on('mouse:up', (opt) => this._up(opt));
         this.canvas.on('mouse:dblclick', (opt) => this._dblclick(opt));
+        // High-rate devices (pen, touch, gaming mice) report several samples
+        // per frame; fabric only sees one.  Harvesting the coalesced events is
+        // what turns a polygon into handwriting.
+        this.canvas.upperCanvasEl?.addEventListener('pointermove', (e) => {
+            this._onCoalesced(e);
+            this._trackCursor(e);
+        }, { passive: true });
+        this.canvas.upperCanvasEl?.addEventListener('pointerleave', () => this._cursorEl()?.classList.add('hidden'));
         // A touch/pen pointer can be lifted outside Fabric's canvas element.
         // Finish the stroke on the window too; _up() safely ignores duplicates.
         const finishStroke = () => this._up();
@@ -623,11 +716,6 @@ class WhiteboardImpl {
         if (abs) return { x: abs.x, y: abs.y };
         const p = opt?.pointer || { x: 0, y: 0 };
         return { x: p.x * (REF_W / this._w()), y: p.y * (REF_H / this._h()) };
-    }
-
-    /** Current pen width in reference units (the slider is in CSS px). */
-    _penWidth() {
-        return Math.max(0.5, this.width * (REF_H / this._h()));
     }
 
     _down(opt) {
@@ -676,6 +764,14 @@ class WhiteboardImpl {
     }
 
     /** A fresh live stroke in the current tool's style. */
+    /** Width (reference px) for a tool: a marker is fat, a rubber is broad. */
+    _toolWidth(tool) {
+        const base = Math.max(0.5, this.width);
+        if (tool === 'eraser') return Math.min(110, base * 6);
+        if (tool === 'highlighter') return base * 2.4;
+        return base;
+    }
+
     _makeStroke(tool, p) {
         const opaque = {
             selectable: false,
@@ -684,26 +780,61 @@ class WhiteboardImpl {
             strokeLineCap: 'round',
             strokeLineJoin: 'round',
             fill: '',
-            strokeWidth: tool === 'eraser' ? this._penWidth() * 6 : this._penWidth(),
+            // Reference px: the canvas transform scales this with the board, so
+            // every peer sees the same relative ink (bug: it used to be divided
+            // by the local canvas height, so a student on a smaller stage saw
+            // hair-thin strokes).
+            strokeWidth: this._toolWidth(tool),
         };
         let shape;
         if (tool === 'eraser') {
             // destination-out really removes ink: the (transparent) canvas is
             // punched through and the page background below shows up again.
-            shape = new fabric.Polyline([p, p], {
+            shape = new SmoothPolyline([p, p], {
                 ...opaque,
                 stroke: 'rgba(0,0,0,1)',
                 globalCompositeOperation: 'destination-out',
             });
         } else {
-            shape = new fabric.Polyline([p, p], {
+            shape = new SmoothPolyline([p, p], {
                 ...opaque,
                 stroke: this.color,
-                opacity: tool === 'highlighter' ? 0.35 : 1,
+                opacity: tool === 'highlighter' ? 0.32 : 1,
             });
         }
         shape._wbTool = tool;
         return shape;
+    }
+
+    /**
+     * Add one sample to the live stroke.
+     *
+     * Sub-epsilon moves are dropped (they only add bytes) and the render is
+     * scheduled once per frame, so a 240 Hz pen does not cost 240 frames.
+     */
+    _appendPoint(p) {
+        if (!this.drawing || !this.liveShape || !Array.isArray(this.liveShape.points)) return false;
+        const pts = this.liveShape.points;
+        const last = pts[pts.length - 1];
+        if (last && Math.abs(p.x - last.x) + Math.abs(p.y - last.y) < POINT_EPSILON) return false;
+        pts.push(p);
+        this._lastPoint = p;
+        this._scheduleRender();
+        return true;
+    }
+
+    /** Coalesced pointer samples: a pen reports far more than one per frame. */
+    _onCoalesced(e) {
+        if (!this.drawing || !this.liveShape || !this.canvas) return;
+        if (typeof e.getCoalescedEvents !== 'function') return;
+        const events = e.getCoalescedEvents() || [];
+        if (events.length < 2) return;
+        let added = false;
+        for (const ev of events) {
+            const raw = this.canvas.getPointer(ev);      // absolute (reference) coords
+            if (this._appendPoint({ x: raw.x, y: raw.y })) added = true;
+        }
+        if (added) this._render();
     }
 
     _move(opt) {
@@ -725,13 +856,7 @@ class WhiteboardImpl {
         if (!this.drawing || !this.liveShape) return;
         const p = this._pt(opt);
         if (this.liveShape.type === 'polyline') {
-            const pts = this.liveShape.points;
-            const last = pts[pts.length - 1];
-            // Decimation: sub-epsilon movement adds nothing but bytes.
-            if (last && Math.abs(p.x - last.x) + Math.abs(p.y - last.y) < POINT_EPSILON) return;
-            pts.push(p);
-            this.liveShape.set({ points: pts });
-            this._scheduleRender();
+            this._appendPoint(p);
         } else {
             this._updateShape(this.liveShape, this.startPoint, p);
         }
@@ -745,14 +870,21 @@ class WhiteboardImpl {
         this._render();
     }
 
-    _up() {
+    _up(opt) {
         if (!this.drawing || !this.liveShape) { this.drawing = false; return; }
         const obj = this.liveShape;
+        // The pointer keeps moving between the last `mousemove` and the
+        // release; without this the stroke stops a few pixels short.
+        const end = opt?.absolutePointer || this._lastPoint;
+        if (end && obj.type === 'polyline') this._appendPoint({ x: end.x, y: end.y });
         this.liveShape = null;
         this.drawing = false;
+        this._lastPoint = null;
 
         const op = this._serialize(obj);
-        if (!op || this._degenerate(op)) { this.canvas.remove(obj); this._render(); return; }
+        if (!op) { this.canvas.remove(obj); this._render(); return; }
+        if (this._isDot(op)) this._dotify(op, obj);          // a tap is a dot
+        else if (this._degenerate(op)) { this.canvas.remove(obj); this._render(); return; }
         op.page = this.page;
         obj.set('data', { opId: op.id });
         // Register the live object under its op id so applying the op does
@@ -762,6 +894,34 @@ class WhiteboardImpl {
         this._sendOp(op);
         this._pushUndo(op);
         this._render();
+    }
+
+    /** A tap (no travel) — a dot in handwriting, so it must survive. */
+    _isDot(op) {
+        if (op.type !== 'draw' || !op.points || op.points.length > 2) return false;
+        if (!['pen', 'highlighter', 'eraser'].includes(op.tool)) return false;   // shapes are not ink
+        const [a, b] = op.points;
+        return Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) < 0.006;
+    }
+
+    /**
+     * Give a tap a body: a zero-length segment paints nothing, so the dot is
+     * a very short round-capped segment the width of the pen.  (Persian
+     * letters such as «ن» are unwritable without dots.)
+     */
+    _dotify(op, obj) {
+        const w = (obj?.strokeWidth || 4) / REF_W;      // pen width in x units
+        const [x, y] = op.points[0];
+        // A diagonal nudge renders as a round dab; a horizontal one looked like
+        // a short dash.  Kept tiny so the dot is a circle, not a stroke.
+        const dx = w * 0.12;
+        const dy = w * 0.12 * (REF_W / REF_H);
+        op.points = [[x - dx, y - dy], [x + dx, y + dy]];
+        // The live object is what the author sees: give it the same body,
+        // otherwise the dot only appears on the next repaint.
+        if (obj && Array.isArray(obj.points)) {
+            obj.set({ points: op.points.map(([px, py]) => ({ x: px * REF_W, y: py * REF_H })) });
+        }
     }
 
     /**
@@ -783,7 +943,8 @@ class WhiteboardImpl {
     _makeShape(tool, a, b) {
         const common = {
             stroke: this.color,
-            strokeWidth: this._penWidth(),
+            // Reference px, like the ink: the same op looks the same everywhere.
+            strokeWidth: this._toolWidth(tool),
             fill: '',
             selectable: false,
             evented: false,
@@ -1032,7 +1193,8 @@ class WhiteboardImpl {
         const tool = obj._wbTool || 'pen';
         const common = {
             id: obj.data?.opId || this._id(), tool, norm: 1,
-            // Server cap is 512; a huge window on a tiny screen could exceed it.
+            // Width is already in reference px (see _makeStroke), so it means
+            // the same thing on every screen. Server cap is 512.
             width: +Math.min(512, Math.max(0.4, Number(obj.strokeWidth) || 1)).toFixed(2),
         };
         if (obj.type === 'polyline') {
@@ -1045,6 +1207,7 @@ class WhiteboardImpl {
                 if (last && Math.abs(last[0] - x) < 0.0008 && Math.abs(last[1] - y) < 0.0008) continue;
                 pts.push([x, y]);
             }
+            if (pts.length === 1) pts.push([...pts[0]]);   // a tap: keep the pair, it becomes a dot
             if (pts.length < 2) return null;
             // A long unbroken scribble can exceed the server's per-op limits
             // (4096 points / 64 KB) — it was then dropped with a generic error
@@ -1255,10 +1418,12 @@ class WhiteboardImpl {
             case 'highlighter':
             case 'eraser': {
                 const pts = (op.points || []).map(([x, y]) => ({ x: px(x, REF_W), y: px(y, REF_H) }));
+                // A stored single-point op (a tap) becomes a dot.
+                if (pts.length === 1) pts.push({ x: pts[0].x, y: pts[0].y });
                 if (pts.length < 2) return null;
-                return new fabric.Polyline(pts, {
+                return new SmoothPolyline(pts, {
                     ...common,
-                    opacity: op.tool === 'highlighter' ? 0.35 : 1,
+                    opacity: op.tool === 'highlighter' ? 0.32 : 1,
                 });
             }
             case 'line':

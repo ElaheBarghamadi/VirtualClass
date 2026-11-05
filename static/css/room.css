@@ -725,6 +725,20 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
     background-image: radial-gradient(circle, var(--wb-line) 1.4px, transparent 1.6px);
 }
 .wb-canvas-wrap .canvas-container { position: absolute; inset: 0; z-index: 1; }
+
+/* Pen/rubber size ring under the pointer. */
+.wb-cursor {
+  position: absolute;
+  z-index: 3;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  pointer-events: none;
+  border: 1px solid rgba(17, 24, 39, .55);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .75);
+  transition: width .08s ease, height .08s ease;
+}
+.wb-cursor.is-eraser { border-style: dashed; border-color: rgba(220, 100, 100, .85); background: rgba(220, 100, 100, .07); }
+.wb-cursor.hidden, .wb-cursor[hidden] { display: none; }
 .wb-canvas-wrap .lower-canvas { background: transparent; }
 .wb-canvas-wrap .upper-canvas { background: transparent !important; }
 .wb-canvas-wrap canvas[aria-label] { background: transparent; } /* pre-fabric paint, removed on init */
