@@ -216,9 +216,18 @@ participant_removed · waiting_room_entry · notification
 classroom_locked · classroom_unlocked · settings_changed
 session_started · session_ended
 file_uploaded · presentation_changed
-whiteboard_operation · whiteboard_history
+whiteboard_operation · whiteboard_snapshot · whiteboard_history
 whiteboard_state · rtc_signal
 ```
+
+**بازپخش تخته** — تخته رویدادمحور است، اما بازپخشِ «همهٔ رویدادها» بعد از چند هزار خط
+از حد می‌گذشت و سقف ثابتِ قبلی (۲۰۰۰ رویداد) باعث می‌شد ابتدای تخته برای کسی که دیر
+وارد می‌شد یا صفحه را رفرش می‌کرد **بی‌صدا حذف** شود. الان سرور وضعیت جاری تخته را
+دوره‌ای در `WhiteboardSnapshot` جمع می‌کند (`whiteboard/snapshot.py`): عملیاتِ قدیمی‌تر
+با `clear`/`remove` اعمال‌شده در یک ردیف فشرده و ردیف‌هایشان پاک می‌شود. بازپخش =
+`whiteboard_snapshot` (وضعیت، تکه‌تکه زیر ۲۵۶KB) + `whiteboard_history` (رویدادهای بعد از
+آخرین `seq`). هیچ عملیاتی بدون نمایش حذف نمی‌شود و طول بازپخش با تعداد کل خطوطِ تاریخ
+کلاس رشد نمی‌کند.
 
 **`whiteboard_state`** — وقتی کسی با مجوز `can_use_whiteboard` تخته را باز/بسته می‌کند، سرور وضعیت را به **همهٔ اعضا** broadcast می‌کند و در فیلد `classroom.whiteboard_open` ذخیره می‌کند؛ بنابراین حتی عضوِ دیرهنگام هم تختهٔ باز را می‌بیند.
 
@@ -479,7 +488,7 @@ cp .env.example .env
 | `WEBRTC_ICE_SERVERS` | لیست JSON سرورهای STUN/TURN برای حالت mesh (مثال: coturn) |
 | `MESH_MAX_PARTICIPANTS` | آستانهٔ هشدار به میزبان در حالت mesh (پیش‌فرض ۱۲) |
 | `UPLOAD_RATE_LIMIT` / `UPLOAD_RATE_WINDOW` | محدودیت نرخ بارگذاری هر کاربر (پیش‌فرض ۱۰ بار در ۶۰۰ ثانیه) |
-| `MEDIA_TOKEN_TTL_MINUTES` | عمر توکن رسانه (پیش‌فرض ۳۶۰) |
+| `MEDIA_TOKEN_TTL_MINUTES` | عمر توکن رسانه (پیش‌فرض ۱۲۰؛ کلاینت پس از قطع، توکن تازه می‌گیرد) |
 | `MAX_UPLOAD_MB` | حداکثر حجم آپلود (پیش‌فرض ۲۵) |
 
 ### مایگریشن، سوپریوزر، اجرا
@@ -643,6 +652,8 @@ online_classroom/
 - endpointهای داشبورد، پروفایل، مدیریت کلاس و اکشن‌های میزبان همچنان `login_required`اند — مهمان حتی با session معتبر به آن‌ها نمی‌رسد
 - `can_upload_files` برای مهمان همیشه False است، حتی اگر flag در دیتابیس True باشد
 
+**قطعی فوری دسترسی رسانه**: حذف عضو، بی‌صدا کردن، گرفتن مجوز میکروفون/دوربین، «بی‌صدا کردن همه» و غیرفعال‌سازی کلاس علاوه بر دیتابیس و سوکت‌های Django، از طریق `RoomService` در LiveKit هم اعمال می‌شود (`classrooms/media.py`): شرکت‌کننده از اتاق حذف یا ترک‌هایش mute می‌شود و با غیرفعال شدن کلاس اتاق بسته می‌شود. عمر توکن رسانه پیش‌فرض ۱۲۰ دقیقه است و کلاینت پس از قطعِ سوکتِ رسانه، توکن تازه می‌گیرد و دوباره وصل می‌شود — پس مجوزهای باطل‌شده دوباره زنده نمی‌شوند.
+
 **کوکی‌ها/هدرها**: `SameSite=Lax`، و در حالت غیردیباگ `Secure`، `HSTS` و `SSL redirect` به‌صورت خودکار فعال می‌شوند.
 
 **لاگ‌ها**: ساخت‌یافته و فقط با شناسه‌ها (`room_code`, `user_id`, `session_id`). رمز، توکن و credentials هرگز لاگ نمی‌شوند.
@@ -652,7 +663,7 @@ online_classroom/
 ## ۶. تست‌ها
 
 ```bash
-python manage.py test     # 279 تست
+python manage.py test     # 340 تست
 ```
 
 ### تست مرورگری سرتاسری (E2E)
@@ -676,7 +687,7 @@ python tests_e2e/run_e2e.py --room <CODE>
 
 ### CI (GitHub Actions)
 
-`.github/workflows/ci.yml` روی هر push: تست‌های Django (۱۶۷ مورد، شامل تبدیل
+`.github/workflows/ci.yml` روی هر push: تست‌های Django (۳۴۰ مورد، شامل تبدیل
 واقعی Office با LibreOffice نصب‌شده روی رانر) + سرور runserver + سوئیت E2E کامل.
 
 | حوزه | پوشش |
@@ -720,7 +731,22 @@ python tests_e2e/run_e2e.py --room <CODE>
 daphne -b 0.0.0.0 -p 8000 config.asgi:application
 ```
 
-چک‌لیست: `DEBUG=false` · `SECRET_KEY` تصادفی · `DATABASE_URL` روی PostgreSQL · `REDIS_URL` روی Redis · `ALLOWED_HOSTS` و `CSRF_TRUSTED_ORIGINS` · `MEDIA_SERVER_*` · پشت reverse proxy با پشتیبانی WebSocket (Nginx با `Upgrade`/`Connection` headers) · `MEDIA_ROOT` روی volume یا object storage · `python manage.py collectstatic`.
+چک‌لیست: `DEBUG=false` · `SECRET_KEY` تصادفی · `DATABASE_URL` روی PostgreSQL · `REDIS_URL` روی Redis · `ALLOWED_HOSTS` و `CSRF_TRUSTED_ORIGINS` · `MEDIA_SERVER_*` (Django باید برای حذف/بی‌صدا کردن/بستن اتاق به API همان آدرس دسترسی داشته باشد) · پشت reverse proxy با پشتیبانی WebSocket (Nginx با `Upgrade`/`Connection` headers) · `MEDIA_ROOT` روی volume یا object storage · `python manage.py collectstatic`.
+
+### نگهداری داده (retention)
+
+دو جدول با گذشت زمان بی‌کران رشد می‌کنند: `WhiteboardEvent` (یک ردیف برای هر خط) و
+`ChatMessage`. دستور زیر قدیمی‌ها را جمع می‌کند و روی cron/timer قابل اجراست:
+
+```bash
+python manage.py prune_history --dry-run           # فقط گزارش
+python manage.py prune_history --board-days 90      # تخته‌های بی‌استفاده: فشرده‌سازی به snapshot
+python manage.py prune_history --board-days 90 --chat-days 180
+```
+
+`--board-days` محتوا را **حذف نمی‌کند**: خطوط به snapshot فشرده می‌شوند (تخته همان‌طور
+که هست دیده می‌شود) و فقط ردیف‌های رویداد پاک می‌شوند. `--chat-days` پیش‌فرض ۰ است،
+یعنی تاریخچهٔ گفتگو تا وقتی خودتان نخواهید دست‌نخورده می‌ماند.
 
 ### PythonAnywhere
 
