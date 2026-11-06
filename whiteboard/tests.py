@@ -22,8 +22,9 @@ from classrooms.services import (
     set_member_permission,
     set_member_role,
 )
-from whiteboard.consumers import HISTORY_CHUNK_BYTES
-from whiteboard.models import Whiteboard, WhiteboardEvent
+from whiteboard.consumers import HISTORY_CHUNK_BYTES, WhiteboardConsumer
+from whiteboard.models import Whiteboard, WhiteboardEvent, WhiteboardSnapshot
+from whiteboard.snapshot import apply_op, compact_board, empty_state, normalise_state
 from whiteboard.routing import websocket_urlpatterns as wb_routes
 
 User = get_user_model()
@@ -860,26 +861,224 @@ class OpValidationTests(TransactionTestCase):
         self.assertFalse(self.valid({"type": "page_go", "page": 1000}))
 
 
+class WhiteboardSnapshotTests(TransactionTestCase):
+    """Replay must stay complete however long the class has been running.
+
+    The old replay sent only the newest 2000 events, so a busy board silently
+    lost its first pages for anybody who joined late or refreshed.  A board is
+    now folded into a snapshot, and replay is snapshot + the events on top.
+    """
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="snap_owner", password="x")
+        self.classroom = create_classroom(self.owner, title="Snapshot")
+        self.board, _ = Whiteboard.objects.get_or_create(classroom=self.classroom)
+
+    def _draw_op(self, index, page=1):
+        return {
+            "type": "draw", "tool": "pen", "norm": 1, "id": f"op-{index}", "page": page,
+            "color": "#2563eb", "width": 3,
+            "points": [[0.1 + (index % 50) / 100, 0.2 + (index % 30) / 100],
+                       [0.2 + (index % 50) / 100, 0.3 + (index % 30) / 100]],
+        }
+
+    def _seed(self, count, page=1, start=0):
+        WhiteboardEvent.objects.bulk_create([
+            WhiteboardEvent(
+                whiteboard=self.board, actor=self.owner, actor_identity="u:1", page=page,
+                operation=self._draw_op(i, page=page),
+            )
+            for i in range(start, start + count)
+        ])
+        return [f"op-{i}" for i in range(start, start + count)]
+
+    def _add_event(self, op):
+        return WhiteboardEvent.objects.create(
+            whiteboard=self.board, actor=self.owner, actor_identity="u:1",
+            page=op.get("page", 1), operation=op,
+        )
+
+    def _replay(self):
+        """Connect as the owner and collect the whole replay."""
+        async def scenario():
+            ws = WebsocketCommunicator(
+                app_with_user(self.owner, wb_routes),
+                f"/ws/classroom/{self.classroom.room_code}/whiteboard/",
+            )
+            connected, _ = await ws.connect()
+            assert connected
+            snapshots, history = [], []
+            while True:
+                msg = await ws.receive_json_from()
+                assert msg["type"] in {"whiteboard_snapshot", "whiteboard_history"}, msg
+                (snapshots if msg["type"] == "whiteboard_snapshot" else history).append(msg)
+                if msg["type"] == "whiteboard_history" and not msg.get("more"):
+                    break
+            await ws.disconnect()
+            return snapshots, history
+
+        return async_to_sync(scenario)()
+
+    def test_whole_board_survives_compaction(self):
+        """1000+ operations come back in full — none of them is dropped."""
+        ids = self._seed(1300)
+        snapshots, history = self._replay()
+
+        replayed = [op["id"] for chunk in snapshots for op in chunk["ops"]]
+        replayed += [e["op"]["id"] for chunk in history for e in chunk["events"]]
+        self.assertEqual(len(set(replayed)), 1300)
+        self.assertEqual(set(replayed), set(ids))
+        # The tail was folded: replay is bounded, not 1300 events.
+        self.assertTrue(snapshots, "a big board must replay as a snapshot")
+        self.assertEqual(WhiteboardEvent.objects.count(), 0, "folded events are deleted")
+        self.assertGreater(WhiteboardSnapshot.objects.get(whiteboard=self.board).seq, 0)
+
+    def test_replay_frames_arrive_in_a_usable_order(self):
+        """Snapshot chunks first, then the tail; exactly one closing frame.
+
+        The client rebuilds the pages from the snapshot and then applies the
+        tail on top, finishing when it sees a history frame with ``more:false``.
+        """
+        self._seed(1300)
+        compact_board(self.board.id, force=True)
+        self._seed(2, start=7000)
+
+        async def scenario():
+            ws = WebsocketCommunicator(
+                app_with_user(self.owner, wb_routes),
+                f"/ws/classroom/{self.classroom.room_code}/whiteboard/",
+            )
+            connected, _ = await ws.connect()
+            assert connected
+            frames = []
+            while True:
+                msg = await ws.receive_json_from()
+                frames.append(msg)
+                if msg["type"] == "whiteboard_history" and not msg.get("more"):
+                    break
+            await ws.disconnect()
+            return frames
+
+        frames = async_to_sync(scenario)()
+        kinds = [f["type"] for f in frames]
+        first_history = kinds.index("whiteboard_history")
+        self.assertTrue(all(k == "whiteboard_snapshot" for k in kinds[:first_history]))
+        self.assertTrue(all(k == "whiteboard_history" for k in kinds[first_history:]))
+        self.assertEqual([f["chunk"] for f in frames[:first_history]], list(range(first_history)))
+        # Each series ends with its own ``more:false``; the history series is
+        # the one that finishes the replay for the client.
+        closing = [f for f in frames if f["type"] == "whiteboard_history" and not f.get("more")]
+        self.assertEqual(len(closing), 1)
+        self.assertIs(frames[-1], closing[0])
+
+    def test_snapshot_is_followed_by_the_live_tail(self):
+        self._seed(1300)
+        compact_board(self.board.id, force=True)
+        tail_ids = self._seed(3, start=9000)
+
+        snapshots, history = self._replay()
+        snapshot_ids = [op["id"] for chunk in snapshots for op in chunk["ops"]]
+        tail = [e["op"]["id"] for chunk in history for e in chunk["events"]]
+        self.assertEqual(len(snapshot_ids), 1300)
+        self.assertEqual(tail, tail_ids)
+
+    def test_clear_after_snapshot_stays_applied(self):
+        """A clear that lands after compaction must not be undone by old state."""
+        page_one = self._seed(5, page=1)
+        self._seed(4, page=2, start=100)
+        compact_board(self.board.id, force=True)
+        self._add_event({"type": "clear", "id": "clr-1", "page": 1})
+        compact_board(self.board.id, force=True)
+
+        snapshots, _history = self._replay()
+        ids = [op["id"] for chunk in snapshots for op in chunk["ops"]]
+        for op_id in page_one:
+            self.assertNotIn(op_id, ids)
+        self.assertEqual(len(ids), 4)
+
+    def test_remove_after_snapshot_drops_one_operation(self):
+        self._seed(3, page=1)
+        compact_board(self.board.id, force=True)
+        self._add_event({"type": "remove", "id": "op-1", "page": 1})
+        compact_board(self.board.id, force=True)
+
+        snapshots, _history = self._replay()
+        ids = [op["id"] for chunk in snapshots for op in chunk["ops"]]
+        self.assertEqual(ids, ["op-0", "op-2"])
+
+    def test_snapshot_keeps_page_markers_and_count(self):
+        self._seed(2, page=1)
+        self._add_event({"type": "page_setup", "id": "setup-1", "page": 1, "grid": "dots"})
+        self._add_event({"type": "page_add", "id": "page-2", "page": 2})
+        compact_board(self.board.id, force=True)
+
+        snapshots, _history = self._replay()
+        self.assertEqual(snapshots[0]["pageCount"], 2)
+        self.assertEqual([op["id"] for chunk in snapshots for op in chunk["ops"]],
+                         ["op-0", "op-1", "setup-1"])
+
+    def test_fold_ignores_transient_operations(self):
+        state = empty_state()
+        apply_op(state, {"型": "nope"})
+        apply_op(state, {"type": "laser", "page": 1, "x": 0.1, "y": 0.2})
+        apply_op(state, {"type": "page_go", "page": 3})
+        self.assertEqual(state["ops"], [])
+        self.assertEqual(state["pageCount"], 1)
+        apply_op(state, {"type": "page_add", "page": 5})
+        self.assertEqual(state["pageCount"], 5)
+        self.assertEqual(state["ops"], [])
+
+    def test_normalise_state_survives_junk(self):
+        self.assertEqual(normalise_state(None)["ops"], [])
+        self.assertEqual(normalise_state({"ops": "nope", "pageCount": "x"})["pageCount"], 1)
+        state = normalise_state({"ops": [{"type": "draw", "id": "a"}, "junk"], "pageCount": 3})
+        self.assertEqual(len(state["ops"]), 1)
+        self.assertEqual(state["pageCount"], 3)
+
+    def test_snapshot_chunks_stay_under_the_frame_limit(self):
+        """A big materialised board must still fit into WebSocket frames."""
+        op = {
+            "type": "draw", "tool": "pen", "norm": 1, "id": "big", "page": 1,
+            "color": "#2563eb", "width": 3,
+            "points": [[round(0.0001 * i, 4), round(0.0002 * i, 4)] for i in range(400)],
+        }
+        state = {"version": 1, "pageCount": 1, "ops": [{**op, "id": f"big-{i}"} for i in range(600)]}
+        chunks = WhiteboardConsumer._snapshot_chunks(state, 42)
+        self.assertGreater(len(chunks), 1)
+        for chunk in chunks:
+            self.assertLessEqual(len(json.dumps(chunk, separators=(",", ":"))), 1024 * 1024)
+        self.assertFalse(chunks[-1]["more"])
+        self.assertEqual(sum(len(c["ops"]) for c in chunks), 600)
+
+
 class WhiteboardHistoryTailTests(TransactionTestCase):
-    """Reconnections receive the most recent events in chronological order."""
+    """A long board replays in full, in chronological order, in safe frames."""
 
     def setUp(self):
         self.owner = User.objects.create_user(username="hist_owner", password="x")
         self.classroom = create_classroom(self.owner, title="History tail")
 
-    def test_load_history_keeps_newest_two_thousand_events(self):
+    def test_long_history_replays_every_operation(self):
+        """2000+ operations: the old replay cut everything before the last 2000.
+
+        With snapshots the whole board comes back — the folded state first, then
+        whatever tail is newer than it.
+        """
         board = Whiteboard.objects.create(classroom=self.classroom)
         WhiteboardEvent.objects.bulk_create([
             WhiteboardEvent(
                 whiteboard=board,
                 actor=self.owner,
                 actor_identity=f"u:{self.owner.id}",
-                operation={"type": "clear", "page": 1, "id": f"event-{i}"},
                 page=1,
+                operation={
+                    "type": "draw", "tool": "pen", "norm": 1, "id": f"event-{i}", "page": 1,
+                    "color": "#2563eb", "width": 3, "points": [[0.1, 0.2], [0.3, 0.4]],
+                },
             )
             for i in range(2001)
         ])
-        expected = list(WhiteboardEvent.objects.filter(whiteboard=board).order_by("id"))
+        last_id = WhiteboardEvent.objects.order_by("-id").first().id
 
         async def scenario():
             ws = WebsocketCommunicator(
@@ -888,24 +1087,23 @@ class WhiteboardHistoryTailTests(TransactionTestCase):
             )
             connected, code = await ws.connect()
             assert connected, code
-            # The snapshot is streamed: collect every chunk.
-            events = []
+            snapshot, events, last = [], [], None
             while True:
                 msg = await ws.receive_json_from(timeout=5)
-                assert msg["type"] == "whiteboard_history", msg
-                events.extend(msg["events"])
-                if not msg.get("more"):
-                    break
+                last = msg
+                if msg["type"] == "whiteboard_snapshot":
+                    snapshot.extend(op["id"] for op in msg["ops"])
+                elif msg["type"] == "whiteboard_history":
+                    events.extend(e["id"] for e in msg["events"])
+                    if not msg.get("more"):
+                        break
+                else:  # pragma: no cover - protocol guard
+                    raise AssertionError(msg)
             await ws.disconnect()
-            return {**msg, "events": events}
+            return snapshot, events, last
 
-        history = async_to_sync(scenario)()
-        self.assertEqual(history["type"], "whiteboard_history")
-        self.assertEqual(len(history["events"]), 2000)
-        self.assertEqual(history["events"][0]["id"], expected[1].id)
-        self.assertEqual(history["events"][-1]["id"], expected[-1].id)
-        self.assertEqual(history["seq"], expected[-1].id)
-        self.assertEqual(
-            [event["id"] for event in history["events"]],
-            sorted(event["id"] for event in history["events"]),
-        )
+        snapshot_ids, tail_ids, last_frame = async_to_sync(scenario)()
+        replayed = snapshot_ids + [e for e in tail_ids]
+        self.assertEqual(replayed, [f"event-{i}" for i in range(2001)])
+        self.assertEqual(last_frame["seq"], last_id)
+        self.assertLessEqual(WhiteboardEvent.objects.count(), 1200)

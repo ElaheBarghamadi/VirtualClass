@@ -36,7 +36,8 @@ from classrooms.permissions import effective_permissions
 from classrooms.services import member_group, resolve_scope_member
 from classrooms.ws_security import RateLimiter, SafeJsonWebsocketConsumer, ws_origin_allowed
 
-from .models import Whiteboard, WhiteboardEvent
+from .models import Whiteboard, WhiteboardEvent, WhiteboardSnapshot
+from .snapshot import COMPACT_CHECK_EVERY, compact_board, snapshot_ops
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +46,6 @@ OP_RATE_LIMIT = 40  # ops per second per connection (lasers included)
 # One extra UPDATE per op only to refresh ``Whiteboard.updated_at`` was pure
 # write amplification; the timestamp is refreshed at most this often instead.
 BOARD_TOUCH_INTERVAL = 15
-HISTORY_LIMIT = 2000
 # A WebSocket frame has a hard ceiling (autobahn/daphne refuse >1 MiB), and a
 # busy board's snapshot easily passes it — that used to raise PayloadExceededError
 # mid-``connect``, which killed the socket and left the board empty.  The replay
@@ -91,12 +91,12 @@ class WhiteboardConsumer(SafeJsonWebsocketConsumer):
         await self.channel_layer.group_add(self.member_group_name, self.channel_name)
         await self.accept()
 
-        # Snapshot first, then live operations.  ``seq`` lets the client
-        # discard anything already contained in the snapshot.  It is sent in
-        # chunks (``more`` marks the last one).
-        history, seq = await self._load_history()
+        # Replay = materialised snapshot + the events newer than it.  Both are
+        # streamed in chunks (``more`` marks the last one of each series), and
+        # ``seq`` lets the client discard anything it already has.
+        state, snapshot_seq, history, seq = await self._load_replay()
         self.last_seq = seq
-        for message in self._history_chunks(history, seq):
+        for message in self._replay_messages(state, snapshot_seq, history, seq):
             await self.send_json(message)
 
     async def disconnect(self, code: int) -> None:
@@ -390,39 +390,86 @@ class WhiteboardConsumer(SafeJsonWebsocketConsumer):
         return file_id == classroom.current_file_id
 
     @staticmethod
-    def _history_chunks(history: list[dict], seq: int) -> list[dict]:
-        """Split a replay snapshot into WebSocket-safe messages."""
-        if not history:
-            return [{"type": "whiteboard_history", "events": [], "seq": seq, "chunk": 0, "more": False}]
-        groups: list[list[dict]] = []
-        current: list[dict] = []
+    def _chunk(items: list, size_hint=1024) -> list[list]:
+        """Split a replay payload into WebSocket-safe groups."""
+        if not items:
+            return [[]]
+        groups: list[list] = []
+        current: list = []
         size = 0
-        for event in history:
+        for item in items:
             try:
-                weight = len(json.dumps(event, separators=(",", ":")))
+                weight = len(json.dumps(item, separators=(",", ":")))
             except (TypeError, ValueError):
-                weight = 1024
+                weight = size_hint
             if current and size + weight > HISTORY_CHUNK_BYTES:
                 groups.append(current)
                 current, size = [], 0
-            current.append(event)
+            current.append(item)
             size += weight
         if current:
             groups.append(current)
+        return groups
+
+    @classmethod
+    def _history_chunks(cls, history: list[dict], seq: int) -> list[dict]:
+        """Split a replay snapshot into WebSocket-safe messages."""
+        groups = cls._chunk(history)
         last = len(groups) - 1
         return [
             {"type": "whiteboard_history", "events": group, "seq": seq, "chunk": i, "more": i < last}
             for i, group in enumerate(groups)
         ]
 
+    @classmethod
+    def _snapshot_chunks(cls, state: dict, seq: int) -> list[dict]:
+        """Stream the materialised board (if any) before the event tail."""
+        if not state:
+            return []
+        ops = list(state.get("ops") or [])
+        groups = cls._chunk(ops)
+        last = len(groups) - 1
+        page_count = int(state.get("pageCount") or 1)
+        return [
+            {
+                "type": "whiteboard_snapshot",
+                "pageCount": page_count,
+                "ops": group,
+                "seq": seq,
+                "chunk": i,
+                "more": i < last,
+            }
+            for i, group in enumerate(groups)
+        ]
+
+    @classmethod
+    def _replay_messages(cls, state, snapshot_seq: int, history: list[dict], seq: int) -> list[dict]:
+        messages = cls._snapshot_chunks(state, snapshot_seq)
+        messages.extend(cls._history_chunks(history, seq))
+        return messages
+
     @database_sync_to_async
-    def _load_history(self) -> tuple[list[dict], int]:
-        """Return replayable operations plus the sequence watermark."""
+    def _load_replay(self):
+        """Return ``(snapshot_state, snapshot_seq, events, watermark)``.
+
+        Older operations are folded into the snapshot first, so this stays
+        bounded and — unlike the old fixed window — nothing is ever dropped
+        without being represented in the state the client receives.
+        """
         board, _ = Whiteboard.objects.get_or_create(classroom=self.classroom)
-        # Keep the newest tail, then restore chronological order for replay.
+        self._board_id_cache = board.id
+        try:
+            compact_board(board.id)
+        except Exception:  # pragma: no cover - replay must survive a bad fold
+            logger.exception("whiteboard_compaction_failed board=%s", board.id)
+        snapshot = WhiteboardSnapshot.objects.filter(whiteboard_id=board.id).first()
+        state, snapshot_seq = snapshot_ops(snapshot)
+
         events = list(
-            board.events.select_related("actor").order_by("-id")[:HISTORY_LIMIT]
-        )[::-1]
+            WhiteboardEvent.objects.filter(whiteboard_id=board.id, id__gt=snapshot_seq)
+            .select_related("actor")
+            .order_by("id")
+        )
         history = [
             {
                 "id": e.id,
@@ -432,8 +479,8 @@ class WhiteboardConsumer(SafeJsonWebsocketConsumer):
             }
             for e in events
         ]
-        seq = events[-1].id if events else 0
-        return history, seq
+        seq = events[-1].id if events else snapshot_seq
+        return state or None, snapshot_seq, history, seq
 
     @database_sync_to_async
     def _persist(self, op: dict) -> tuple[dict, int] | None:
@@ -473,9 +520,26 @@ class WhiteboardConsumer(SafeJsonWebsocketConsumer):
                 self._board_id_cache = None
                 event = self._create_event(self._board_id(member.classroom), member, op, page)
             self._touch_board(board_id)
+            self._maybe_compact(board_id)
             op = dict(op)
             op["event_id"] = event.id
             return op, event.id
+
+    def _maybe_compact(self, board_id: int) -> None:
+        """Bound the event log without doing a count on every stroke.
+
+        A long drawing session writes thousands of rows; once they are folded
+        into the snapshot, replay stays small for the rest of the class.
+        """
+        pending = getattr(self, "_ops_since_compact", 0) + 1
+        if pending < COMPACT_CHECK_EVERY:
+            self._ops_since_compact = pending
+            return
+        self._ops_since_compact = 0
+        try:
+            compact_board(board_id)
+        except Exception:  # pragma: no cover - never fail a stroke over this
+            logger.exception("whiteboard_compaction_failed board=%s", board_id)
 
     def _create_event(self, board_id, member, op, page):
         return WhiteboardEvent.objects.create(

@@ -62,3 +62,34 @@ class WhiteboardEvent(models.Model):
 
     def __str__(self) -> str:
         return f"{self.whiteboard_id}:{self.operation.get('type', '?')}"
+
+
+class WhiteboardSnapshot(models.Model):
+    """A materialised view of the board: the ops that are still on it.
+
+    Replaying every stored operation works only while a board is young: after a
+    few thousand strokes the table dwarfs the board and a reconnect either
+    takes forever or — as it did — gets truncated to a fixed window, silently
+    dropping the beginning of the board for every new or reconnecting client.
+
+    A snapshot folds the older events into one row (``state``) and those events
+    are then deleted; replay = snapshot + the handful of events after ``seq``.
+    ``state`` is ``{"version": 1, "pageCount": n, "ops": [op, ...]}`` where the
+    ops are real board operations (page included), so clients rebuild the same
+    pages from them that they would build from the event log.
+    """
+
+    whiteboard = models.OneToOneField(
+        Whiteboard, on_delete=models.CASCADE, related_name="snapshot", verbose_name="تخته"
+    )
+    state = models.JSONField(default=dict, verbose_name="وضعیت")
+    # Highest event id folded into this state; later events are replayed on top.
+    seq = models.BigIntegerField(default=0, verbose_name="آخرین رویداد")
+    updated_at = models.DateTimeField(auto_now=True, verbose_name="آخرین فشرده‌سازی")
+
+    class Meta:
+        verbose_name = "عکس فوری تخته"
+        verbose_name_plural = "عکس‌های فوری تخته"
+
+    def __str__(self) -> str:
+        return f"snapshot:{self.whiteboard_id}@{self.seq}"

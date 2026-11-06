@@ -252,6 +252,13 @@ class WhiteboardImpl {
             // snapshot instead of being wiped by it.
             clearTimeout(this._flushTimer);
             this._flushTimer = setTimeout(() => this._flushOutbox(), 2500);
+            // A replay always starts with the snapshot (when the board has one)
+            // followed by the event tail.  The 2.5 s flush is only a fallback
+            // for "the server never sent a replay"; every chunk postpones it so
+            // a long replay cannot push queued ops into the middle of it.
+            this._incomingSnapshot = null;
+            this._snapshotApplied = false;
+            this._postponeFlush();
         };
         ws.onclose = (evt) => {
             if (ws._retired) return;                              // replaced on purpose
@@ -261,12 +268,43 @@ class WhiteboardImpl {
         ws.onmessage = (evt) => {
             let data;
             try { data = JSON.parse(evt.data); } catch { return; }
-            if (data.type === 'whiteboard_history') {
-                // The snapshot arrives in chunks (a whole board can be larger
-                // than a single WebSocket frame); only the last one is applied.
+            if (data.type === 'whiteboard_snapshot' || data.type === 'whiteboard_history') {
+                this._postponeFlush();
+            }
+            if (data.type === 'whiteboard_snapshot') {
+                // The board as it stands: the server folds older operations
+                // into one state (that is what keeps a long class from losing
+                // its early pages on reconnect).  A big board arrives in chunks.
+                if (!data.chunk) this._incomingSnapshot = [];
+                if (this._incomingSnapshot) {
+                    for (const op of data.ops || []) this._incomingSnapshot.push(op);
+                }
+                if (data.more) return;
+                const ops = this._incomingSnapshot || data.ops || [];
+                this._incomingSnapshot = null;
+                this.pageCount = Math.max(1, Number(data.pageCount) || 1);
+                this._pageOps.clear();
+                this._pageIds.clear();
+                this._pageColors.clear();
+                this._pageGrid.clear();
+                this._replaying = true;
+                ops.forEach((op) => this._applyOp(op));
+                this._replaying = false;
+                // The event tail follows and is applied on top of this state.
+                this._snapshotApplied = true;
+            } else if (data.type === 'whiteboard_history') {
+                // The tail arrives in chunks (a single board can be larger than
+                // one WebSocket frame); only the last chunk finishes the replay.
                 if (!data.chunk) {
                     this._incomingHistory = [];
                     this._incomingSeq = data.seq || 0;
+                    if (!this._snapshotApplied) {
+                        // No snapshot: this log IS the whole board.
+                        this._pageOps.clear();
+                        this._pageIds.clear();
+                        this._pageColors.clear();
+                        this._pageGrid.clear();
+                    }
                 }
                 if (this._incomingHistory) {
                     for (const e of data.events || []) this._incomingHistory.push(e);
@@ -274,13 +312,10 @@ class WhiteboardImpl {
                 if (data.more) return;
                 const events = this._incomingHistory || data.events || [];
                 this._incomingHistory = null;
-                this._pageOps.clear();
-                this._pageIds.clear();
-                this._pageColors.clear();
-                this._pageGrid.clear();
                 this._replaying = true;
                 events.forEach((e) => this._applyOp(e.op));
                 this._replaying = false;
+                this._snapshotApplied = false;
                 this.page = Math.max(1, Math.min(this.pageCount, this.page));
                 // one clean repaint for the page we end up on
                 this._repaintPage();
@@ -315,6 +350,12 @@ class WhiteboardImpl {
         this._outbox.push(op);
         if (this._outbox.length > MAX_QUEUED_OPS) this._outbox.shift();
         return false;
+    }
+
+    /** Keep the outbox flush waiting while replay data is still arriving. */
+    _postponeFlush() {
+        clearTimeout(this._flushTimer);
+        this._flushTimer = setTimeout(() => this._flushOutbox(), 2500);
     }
 
     /** Re-send ops produced while offline (once, in order). */
