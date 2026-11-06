@@ -19,6 +19,7 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.utils import timezone
 
+from . import media as media_control
 from .models import AttendanceRecord, Classroom, ClassroomMember, ClassroomSession
 from .permissions import (
     PRIVILEGED_ROLES,
@@ -423,6 +424,20 @@ def leave_classroom(classroom: Classroom, user: User) -> None:
 
 
 @transaction.atomic
+def _sync_media_rights(classroom: Classroom, member: ClassroomMember, perms=None) -> None:
+    """Make the SFU stop publishing what this member may no longer send.
+
+    Revoking a permission used to change the database and the roster only: the
+    browser kept its already-attached LiveKit tracks, so a muted student stayed
+    audible until their token expired.  This pushes the revocation to the SFU.
+    """
+    perms = perms if perms is not None else effective_permissions(member, classroom)
+    if member.muted or not perms.get("can_use_microphone"):
+        media_control.mute_participant(classroom, member, source="audio")
+    if member.camera_disabled or not perms.get("can_use_camera"):
+        media_control.mute_participant(classroom, member, source="video")
+
+
 def deactivate_classroom(classroom: Classroom, owner: User) -> None:
     """End a classroom and revoke every member's HTTP/WS access immediately."""
     _require_owner(classroom, owner)
@@ -448,6 +463,7 @@ def deactivate_classroom(classroom: Classroom, owner: User) -> None:
         "type": "classroom_deactivated",
         "text": "این کلاس توسط مالک غیرفعال شد.",
     })
+    media_control.end_room(classroom)
 
 
 @transaction.atomic
@@ -624,6 +640,7 @@ def set_member_permission(classroom: Classroom, operator: User, member_id: int, 
         "camera_disabled": target.camera_disabled,
         "permissions": perms,
     })
+    _sync_media_rights(classroom, target, perms)
     logger.info("permission_changed", extra={"room_code": classroom.room_code, "target": target.user_id, "permission": permission})
     return perms
 
@@ -654,6 +671,7 @@ def set_member_role(classroom: Classroom, owner: User, member_id: int, role: str
         "role_label": target.get_role_display(),
         "permissions": effective_permissions(target, classroom),
     })
+    _sync_media_rights(classroom, target)
     logger.info("role_changed", extra={"room_code": classroom.room_code, "target": target.user_id, "role": role})
 
 
@@ -677,6 +695,8 @@ def set_member_muted(classroom: Classroom, operator: User, member_id: int, muted
         "camera_disabled": target.camera_disabled,
         "permissions": effective_permissions(target, classroom),
     })
+    if muted:
+        _sync_media_rights(classroom, target)
 
 
 def request_unmute(classroom: Classroom, operator: User, member_id: int) -> None:
@@ -709,6 +729,7 @@ def mute_all(classroom: Classroom, operator: User) -> int:
         # mute-all must NOT apply the mute on their clients
         "muted_member_ids": muted_ids,
     })
+    media_control.mute_all_participants(classroom)
     return count
 
 
@@ -733,6 +754,7 @@ def remove_member(classroom: Classroom, operator: User, member_id: int, ban_minu
         "type": "participant_removed", "member_id": target.id, "identity": target.identity,
         "user_id": target.user_id,
     })
+    media_control.revoke_participant(classroom, target)
     logger.info("participant_removed", extra={"room_code": classroom.room_code, "target": target.user_id})
 
 

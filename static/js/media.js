@@ -51,6 +51,9 @@ class LivekitMedia {
         this.peerInfo = new Map();
         this._remotePermissionState = new WeakMap();
         this._screenShareOwner = null;
+        this._retryDelay = 1000;
+        this._retryTimer = null;
+        this._closing = false;
     }
 
     async init(opts) {
@@ -80,6 +83,7 @@ class LivekitMedia {
             });
             this._wireEvents();
             await this.room.connect(url, token);
+            this._retryDelay = 1000;
             this.localParticipant = this.room.localParticipant;
             document.getElementById('stage-empty-text').textContent =
                 'برای فعال کردن دوربین/میکروفون از دکمه‌های پایین استفاده کنید.';
@@ -117,7 +121,7 @@ class LivekitMedia {
             })
             .on(R.SignalReconnecting, () => this.onQualityChange('reconnecting', null))
             .on(R.SignalConnected, () => this.onQualityChange(this.quality, null))
-            .on(R.Disconnected, () => toast('اتصال رسانه قطع شد؛ در حال تلاش مجدد…', 'warning'))
+            .on(R.Disconnected, () => this._scheduleReconnect())
             .on(R.MediaDevicesError, (e) => toast(`خطای دستگاه رسانه: ${e.message || ''}`, 'error'));
     }
 
@@ -688,7 +692,38 @@ class LivekitMedia {
         return navigator.mediaDevices.enumerateDevices();
     }
 
+    /**
+     * A media token expires on purpose (it is the only thing that carries the
+     * publish grants), so a long lesson can outlive it.  Re-fetching a token
+     * and rejoining also picks up any permission change the host made while we
+     * were connected.
+     */
+    _scheduleReconnect() {
+        if (this._closing || !this.enabled) return;
+        clearTimeout(this._retryTimer);
+        toast('اتصال رسانه قطع شد؛ در حال تلاش مجدد…', 'warning');
+        this._retryTimer = setTimeout(async () => {
+            if (this._closing || !this.enabled) return;
+            const wasMic = this.micOn;
+            const wasCamera = this.cameraOn;
+            try {
+                await this.connect();
+                // Restore what the participant had on, if the new token allows it.
+                if (this.room && wasMic && !this.micOn) await this.toggleMicrophone();
+                if (this.room && wasCamera && !this.cameraOn) await this.toggleCamera();
+            } catch (err) {
+                console.warn('[media] reconnect failed', err);
+            }
+            this._retryDelay = Math.min(this._retryDelay * 2, 15000);
+            if (!this.room || this.room.state !== LivekitClient.ConnectionState.Connected) {
+                this._retryTimer = setTimeout(() => this._scheduleReconnect(), this._retryDelay);
+            }
+        }, this._retryDelay);
+    }
+
     disconnect() {
+        this._closing = true;
+        clearTimeout(this._retryTimer);
         if (this.room) this.room.disconnect();
     }
 }

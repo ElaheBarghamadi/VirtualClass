@@ -195,7 +195,11 @@ AUTH_PASSWORD_VALIDATORS = [
 LIVEKIT_URL = os.environ.get("MEDIA_SERVER_URL", "")
 LIVEKIT_API_KEY = os.environ.get("MEDIA_SERVER_API_KEY", "")
 LIVEKIT_API_SECRET = os.environ.get("MEDIA_SERVER_API_SECRET", "")
-LIVEKIT_TOKEN_TTL_MINUTES = int(os.environ.get("MEDIA_TOKEN_TTL_MINUTES", "360"))
+# A media token carries the publish grants, so its lifetime is also how long a
+# revoked student could keep talking before the SFU drops them.  Two hours
+# covers a long lesson, and the browser re-fetches a token and rejoins when the
+# SFU disconnects it (static/js/media.js ``_scheduleReconnect``).
+LIVEKIT_TOKEN_TTL_MINUTES = int(os.environ.get("MEDIA_TOKEN_TTL_MINUTES", "120"))
 
 # Mesh cannot enforce revocation of an existing peer connection. Production
 # defaults off; an explicit opt-in is for trusted/test deployments only.
