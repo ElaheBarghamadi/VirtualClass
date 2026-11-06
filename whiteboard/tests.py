@@ -1035,6 +1035,28 @@ class WhiteboardSnapshotTests(TransactionTestCase):
         self.assertEqual(len(state["ops"]), 1)
         self.assertEqual(state["pageCount"], 3)
 
+    def test_compaction_is_checked_every_n_ops(self):
+        """A busy socket must not query the board on every single stroke."""
+        from unittest import mock
+        from whiteboard.consumers import COMPACT_CHECK_EVERY
+
+        consumer = WhiteboardConsumer()
+        with mock.patch("whiteboard.consumers.compact_board") as compact:
+            for _ in range(COMPACT_CHECK_EVERY - 1):
+                consumer._maybe_compact(1)
+            compact.assert_not_called()
+            consumer._maybe_compact(1)
+            compact.assert_called_once()
+            self.assertEqual(consumer._ops_since_compact, 0)
+
+    def test_a_failed_compaction_never_breaks_a_stroke(self):
+        from unittest import mock
+
+        consumer = WhiteboardConsumer()
+        consumer._ops_since_compact = 10 ** 6      # due now
+        with mock.patch("whiteboard.consumers.compact_board", side_effect=RuntimeError("boom")):
+            consumer._maybe_compact(1)             # must not raise
+
     def test_snapshot_chunks_stay_under_the_frame_limit(self):
         """A big materialised board must still fit into WebSocket frames."""
         op = {
