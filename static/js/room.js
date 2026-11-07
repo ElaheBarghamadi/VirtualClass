@@ -905,11 +905,22 @@ function applyOwnPermissionUpdate(permissions, moderation = {}) {
 // ---------------------------------------------------------------------------
 // Event router — one consistent server protocol
 // ---------------------------------------------------------------------------
+/** Identities whose join/leave line is already in the chat.
+ *  A reconnect replays `user_joined` for people who never left, and the chat
+ *  used to announce «… به کلاس پیوست» twice in a row for one arrival. */
+const announcedPresence = new Set();
+
 function handleEvent(data) {
     switch (data.type) {
         case 'participant_list': {
             presence.participants.clear();
-            data.participants.forEach((p) => { if (p.identity) presence.participants.set(p.identity, p); });
+            data.participants.forEach((p) => {
+                if (!p.identity) return;
+                presence.participants.set(p.identity, p);
+                // Somebody who is already here when we arrive still deserves a
+                // «ترک کرد» line later — but not a «پیوست» one now.
+                if (p.identity !== IDENTITY) announcedPresence.add(p.identity);
+            });
             const ownParticipant = presence.participants.get(IDENTITY);
             if (ownParticipant?.permissions) {
                 applyOwnPermissionUpdate(ownParticipant.permissions, {
@@ -925,7 +936,9 @@ function handleEvent(data) {
         case 'user_joined':
             presence.upsert(data.participant);
             checkMeshCapacity();
-            if (data.participant.identity !== IDENTITY) {
+            if (data.participant.identity !== IDENTITY
+                && !announcedPresence.has(data.participant.identity)) {
+                announcedPresence.add(data.participant.identity);
                 ChatClient.addSystemMessage(`${data.participant.name} به کلاس پیوست.`);
             }
             break;
@@ -933,7 +946,11 @@ function handleEvent(data) {
             presence.remove(data.participant.identity);
             Media.notifyPeerState?.({ identity: data.participant.identity, screen_sharing: false });
             if (permsTargetIdentity === data.participant.identity) refreshPermsDialog(data.participant.identity);
-            ChatClient.addSystemMessage(`${data.participant.name} کلاس را ترک کرد.`);
+            // Only announce a departure of someone whose arrival was announced:
+            // a reconnect burst must not fill the chat with ghost notices.
+            if (announcedPresence.delete(data.participant.identity)) {
+                ChatClient.addSystemMessage(`${data.participant.name} کلاس را ترک کرد.`);
+            }
             break;
         case 'raise_hand':
         case 'lower_hand':
@@ -1328,7 +1345,13 @@ function trackControlBarHeight() {
     };
     const apply = () => {
         const h = Math.round(bar.getBoundingClientRect().height);
-        if (h > 0) root.style.setProperty('--bar-h', `${h}px`);
+        if (h > 0) {
+            root.style.setProperty('--bar-h', `${h}px`);
+            // The toast stack lives directly under <body>, where the room's
+            // custom properties are not inherited — mirror the height on the
+            // document root so it can reserve the same space.
+            document.documentElement.style.setProperty('--bar-h', `${h}px`);
+        }
         fades();
     };
     apply();
@@ -1350,6 +1373,25 @@ function trackControlBarHeight() {
         // Re-centre the rail after an orientation change.
         window.addEventListener('orientationchange', () => { rail.scrollLeft = 0; fades(); });
     }
+}
+
+// ---------------------------------------------------------------------------
+// Device-test card height → --dt-h
+//
+// The first-run test card floats in the same corner as the toast stack, so the
+// toasts sit on top of it instead of covering its buttons.  A ResizeObserver on
+// a display:none card reports 0, which is exactly the offset we want.
+// ---------------------------------------------------------------------------
+function trackDeviceTestHeight() {
+    const card = document.getElementById('device-test-card');
+    if (!card) return;
+    const apply = () => {
+        const h = card.classList.contains('hidden') ? 0 : Math.round(card.getBoundingClientRect().height);
+        document.documentElement.style.setProperty('--dt-h', `${h}px`);
+    };
+    apply();
+    if (window.ResizeObserver) new ResizeObserver(apply).observe(card);
+    else window.addEventListener('resize', apply);
 }
 
 // ---------------------------------------------------------------------------
@@ -1433,7 +1475,12 @@ function activateTab(name) {
     document.querySelectorAll('.side-panel').forEach((p) => {
         p.classList.toggle('active', p.id === `panel-${name}`);
     });
-    if (name === 'chat') ChatClient.resetUnread();
+    if (name === 'chat') {
+        ChatClient.resetUnread();
+        // Opening the tab should land on the newest message, not wherever
+        // this browser last left the scrollbar.
+        ChatClient.jumpToLatest();
+    }
 }
 
 function initLayouts() {
@@ -2685,6 +2732,7 @@ safe('stage-empty', initStageEmpty);
 safe('controls', initControls);
 safe('bar-space', () => {
     trackControlBarHeight();
+    trackDeviceTestHeight();
     syncBarSpace();
     window.addEventListener('resize', syncBarSpace);
     window.addEventListener('load', syncBarSpace);

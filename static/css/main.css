@@ -2121,3 +2121,112 @@ dialog.app-dialog .field-help { margin: .2rem 0 0; font-size: .82rem; color: var
     dialog.app-dialog .switch-row input[type="checkbox"]::after,
     .quiz-progress-fill { transition: none; }
 }
+
+/* ==========================================================================
+   Toasts — the app's single status channel
+
+   Every action that cannot show its result in place reports through here:
+   a refused camera, a muted class, a sent report, a lost socket.  The box is
+   pinned to the viewport on purpose — inside the room `body.full-page` clips
+   overflow, and a statically positioned toast landed below the fold, i.e. the
+   button appeared to do nothing at all.
+   ========================================================================== */
+.toast-container {
+    position: fixed;
+    inset-inline: 0;
+    inset-block-start: max(0.85rem, env(safe-area-inset-top, 0px));
+    margin-inline: auto;
+    width: min(460px, calc(100% - 1.5rem));
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    z-index: 200;
+    pointer-events: none;
+}
+
+/* In the room the header owns the top edge and the dock owns the bottom one,
+   so the stack floats just above the control bar. */
+body.full-page .toast-container {
+    inset-block-start: auto;
+    /* --dt-h is the first-run device-test card (room.js keeps it current), so a
+       toast never lands on top of «شروع تست». */
+    inset-block-end: calc(var(--bar-h, 76px) + var(--dt-h, 0px) + 1.5rem + env(safe-area-inset-bottom, 0px));
+}
+
+.toast {
+    position: relative;
+    pointer-events: auto;
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    padding-block: 0.6rem;
+    padding-inline: 0.95rem 0.5rem;
+    border-radius: var(--radius-md);
+    background: var(--surface-elevated, var(--surface));
+    color: var(--text);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow-lg);
+    font-size: var(--fs-sm);
+    line-height: 1.55;
+    overflow: hidden;
+}
+
+/* A 3px rail states the level without relying on the icon alone. */
+.toast::before {
+    content: "";
+    position: absolute;
+    inset-block: 0;
+    inset-inline-start: 0;
+    width: 3px;
+    background: var(--accent);
+}
+.toast-success::before { background: var(--success); }
+.toast-warning::before { background: var(--warning); }
+.toast-error::before { background: var(--danger); }
+
+.toast-icon {
+    width: 18px;
+    height: 18px;
+    flex: none;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.9;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    color: var(--accent);
+}
+.toast-success .toast-icon { color: var(--success); }
+.toast-warning .toast-icon { color: var(--warning); }
+.toast-error .toast-icon { color: var(--danger); }
+
+.toast-text {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.toast-close {
+    flex: none;
+    width: 28px;
+    height: 28px;
+    display: grid;
+    place-items: center;
+    border: 0;
+    border-radius: var(--radius-pill);
+    background: none;
+    color: var(--muted);
+    font-size: 1.1rem;
+    line-height: 1;
+    cursor: pointer;
+    transition: background var(--speed) var(--ease), color var(--speed) var(--ease);
+}
+.toast-close:hover,
+.toast-close:focus-visible {
+    background: var(--surface-2);
+    color: var(--text);
+    outline: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .toast { animation: none !important; }
+}

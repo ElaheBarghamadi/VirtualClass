@@ -89,6 +89,9 @@
         <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.4"/><path d="M12 7.4V12l3 1.8"/></symbol>
         <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
         <symbol id="i-signal" viewBox="0 0 24 24"><path d="M4.5 19.5v-3"/><path d="M9.5 19.5v-7"/><path d="M14.5 19.5v-11"/><path d="M19.5 19.5v-15"/></symbol>
+        {# points left, the direction a message travels in an RTL chat #}
+        <symbol id="i-send" viewBox="0 0 24 24"><path d="M20.5 12 3.8 4.6l3.4 7.4-3.4 7.4z"/><path d="M7.2 12h6.6"/></symbol>
+        <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="m6 9.5 6 6 6-6"/></symbol>
     </defs>
 </svg>
 <div class="room" id="classroom-root"
@@ -352,6 +355,10 @@
                 </button>
             </div>
         </section>
+            {% comment %}Both layers live inside the stage column so bubbles and
+               captions stay over the video, never over the chat rail.{% endcomment %}
+            <div class="caption-layer" id="caption-layer" role="status" aria-live="polite" aria-atomic="false"></div>
+            <div class="reaction-layer" id="reaction-layer" aria-hidden="true"></div>
             </div><!-- /.stage -->
         {% comment %}The control bar lives inside the stage column so it centres
            over the video area, never over the chat panel.{% endcomment %}
@@ -544,11 +551,33 @@
             </section>
 
             <!-- ===== chat ===== -->
-            <section class="side-panel" id="panel-chat" role="tabpanel">
-                <div class="chat-messages" id="chat-messages" aria-live="polite" aria-label="پیام‌های گفتگو"></div>
+            <section class="side-panel side-panel-chat" id="panel-chat" role="tabpanel" aria-label="گفتگو">
+                <div class="chat-scroll" id="chat-scroll">
+                    <div class="chat-messages" id="chat-messages" aria-live="polite" aria-label="پیام‌های گفتگو"></div>
+                    <div class="chat-empty" id="chat-empty">
+                        <span class="chat-empty-icon" aria-hidden="true"><svg class="ic"><use href="#i-chat"/></svg></span>
+                        <p class="chat-empty-title">هنوز پیامی نیست</p>
+                        <p class="chat-empty-text">اولین پیام را بفرستید تا گفتگوی کلاس شروع شود.</p>
+                    </div>
+                </div>
+                <button type="button" class="chat-jump hidden" id="chat-jump" aria-label="رفتن به آخرین پیام‌ها">
+                    <svg class="ic" aria-hidden="true"><use href="#i-chevron-down"/></svg>
+                    <span id="chat-jump-text">آخرین پیام‌ها</span>
+                </button>
+                <p class="chat-off hidden" id="chat-off" role="status">
+                    <svg class="ic" aria-hidden="true"><use href="#i-lock"/></svg>
+                    <span id="chat-off-text">ارسال پیام در این کلاس بسته است.</span>
+                </p>
                 <form class="chat-form" id="chat-form" autocomplete="off">
-                    <input type="text" id="chat-input" placeholder="پیام خود را بنویسید…" maxlength="1000" aria-label="متن پیام">
-                    <button type="submit" class="btn btn-primary btn-sm" id="chat-send">ارسال</button>
+                    <span class="chat-field">
+                        <input type="text" id="chat-input" placeholder="پیام خود را بنویسید…" maxlength="1000"
+                               aria-label="متن پیام" enterkeyhint="send">
+                    </span>
+                    {# a flex sibling, not an overlay: a long message must never sit under the counter #}
+                    <span class="chat-count hidden" id="chat-count" aria-hidden="true"></span>
+                    <button type="submit" class="chat-send" id="chat-send" title="ارسال (Enter)" aria-label="ارسال پیام">
+                        <svg class="ic" aria-hidden="true"><use href="#i-send"/></svg>
+                    </button>
                 </form>
             </section>
 
@@ -648,9 +677,6 @@
         <span id="cam-pip-label" class="cam-pip-label"></span>
         <button type="button" id="cam-pip-fs" class="cam-pip-fs" title="نمایش تمام‌صفحه" aria-label="نمایش تمام‌صفحهٔ دوربین"><svg class="ic" aria-hidden="true"><use href="#i-maximize"/></svg></button>
     </div>
-
-    <div class="caption-layer" id="caption-layer" role="status" aria-live="polite" aria-atomic="false"></div>
-    <div class="reaction-layer" id="reaction-layer" aria-hidden="true"></div>
 
 
 
