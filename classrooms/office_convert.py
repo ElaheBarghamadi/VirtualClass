@@ -1,15 +1,15 @@
 """Office → PDF conversion via LibreOffice (optional dependency).
 
 Teachers mostly carry PPTX/DOCX.  When ``soffice`` is installed on the
-server, uploads of those formats are converted once, at upload time, and
-the PDF copy powers the in-browser presentation (pdf.js).  When it is
-not installed everything still works — Office files simply stay
-download-only, exactly as before.
+server, those formats are converted once and the PDF copy powers the
+in-browser presentation (pdf.js).  When it is not installed everything still
+works — Office files simply stay download-only.
 
-Deliberately synchronous and bounded: conversion runs during the upload
-request (the progress bar covers it) with a hard timeout, and any
-failure is logged, never raised — an unconvertible file must not break
-the upload.
+This module is the *mechanics* only (find the binary, run it, attach the
+result).  Who runs it, and when, lives in :mod:`classrooms.tasks`: the
+conversion is a background job so an upload never waits for LibreOffice.
+The call itself stays bounded by a hard timeout, and any failure is logged,
+never raised — an unconvertible file must not break anything.
 """
 from __future__ import annotations
 

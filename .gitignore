@@ -12,6 +12,12 @@ env/
 # Django
 db.sqlite3
 db.sqlite3-journal
+# celery beat's local schedule file (created on first run)
+celerybeat-schedule
+celerybeat-schedule.db
+celerybeat-schedule.bak
+celerybeat-schedule.dat
+celerybeat-schedule.dir
 staticfiles/
 media/
 private_media/

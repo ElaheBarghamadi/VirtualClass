@@ -313,6 +313,77 @@ USE_I18N = True
 USE_TZ = True
 
 # ---------------------------------------------------------------------------
+# Background jobs — Celery
+# ---------------------------------------------------------------------------
+# One Redis does the whole job list: channel layer, cache, task broker and
+# result backend.  ``REDIS_URL`` (see Channels above) is the single switch:
+#
+#   REDIS_URL set    → real queue.  Run one worker:
+#                      celery -A config worker -l info
+#                      celery -A config beat -l info   (periodic jobs)
+#   REDIS_URL empty  → no broker, so tasks run inline (eager) in the web
+#                      process.  Development and the test-suite stay
+#                      dependency-free, and uploads behave as they always did.
+CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", REDIS_URL or "memory://")
+CELERY_RESULT_BACKEND = os.environ.get(
+    "CELERY_RESULT_BACKEND", REDIS_URL or "cache+memory://"
+)
+CELERY_TASK_ALWAYS_EAGER = env_bool(
+    "CELERY_TASK_ALWAYS_EAGER", "true" if not REDIS_URL else "false"
+)
+# A background job must never be able to turn a successful upload into a 500.
+CELERY_TASK_EAGER_PROPAGATES = False
+# Nobody waits on the result of these jobs; skipping the backend keeps Redis
+# free of one key per upload.
+CELERY_TASK_IGNORE_RESULT = True
+CELERY_TASK_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TIMEZONE = TIME_ZONE
+CELERY_ENABLE_UTC = True
+# Fail fast instead of hanging a request when the broker is unreachable;
+# ``core.queue.dispatch`` then runs the job inline.
+CELERY_BROKER_CONNECTION_TIMEOUT = int(
+    os.environ.get("CELERY_BROKER_CONNECTION_TIMEOUT", "4")
+)
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
+# A stuck conversion or an infinite loop in a job is killed, not left forever.
+CELERY_TASK_TIME_LIMIT = int(os.environ.get("CELERY_TASK_TIME_LIMIT", "600"))
+# soft limit = a chance to clean up before the hard kill
+CELERY_TASK_SOFT_TIME_LIMIT = max(30, CELERY_TASK_TIME_LIMIT - 60)
+CELERY_TASK_DEFAULT_QUEUE = "default"
+CELERY_WORKER_MAX_TASKS_PER_CHILD = int(os.environ.get("CELERY_MAX_TASKS_PER_CHILD", "200"))
+
+# Periodic jobs, driven by `celery -A config beat` (no system cron needed).
+# Interval jobs are in seconds; the daily ones use cron syntax.
+from celery.schedules import crontab  # noqa: E402  (used by the schedule below)
+
+CELERY_BEAT_SCHEDULE = {
+    # A session that was never ended would keep its room "in class" forever.
+    "close-stale-sessions": {
+        "task": "classrooms.tasks.close_stale_sessions",
+        "schedule": 15 * 60,
+    },
+    # Same housekeeping as `manage.py prune_history`, just automatic.
+    "prune-history": {
+        "task": "core.tasks.prune_history",
+        "schedule": crontab(hour=3, minute=30),
+    },
+    # Guests are throwaway rows; nobody needs last term's.
+    "prune-stale-guests": {
+        "task": "classrooms.tasks.prune_stale_guests",
+        "schedule": crontab(hour=3, minute=50),
+    },
+}
+
+# Housekeeping windows (0 / negative disables the corresponding job).
+STALE_SESSION_HOURS = int(os.environ.get("STALE_SESSION_HOURS", "8"))
+GUEST_RETENTION_DAYS = int(os.environ.get("GUEST_RETENTION_DAYS", "7"))
+# Defaults mirror `manage.py prune_history`: boards 90 days, chat kept forever.
+PRUNE_BOARD_DAYS = int(os.environ.get("PRUNE_BOARD_DAYS", "90"))
+PRUNE_CHAT_DAYS = int(os.environ.get("PRUNE_CHAT_DAYS", "0"))
+
+# ---------------------------------------------------------------------------
 # Static files
 # ---------------------------------------------------------------------------
 STATIC_URL = "static/"

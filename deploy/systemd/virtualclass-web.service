@@ -1,0 +1,32 @@
+# VirtualClass — web (HTTP + WebSockets) through Daphne.
+#
+#   sudo cp deploy/systemd/virtualclass-web.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now virtualclass-web
+#
+# Copy this unit to /etc/systemd/system/ and adjust User/paths.  Daphne speaks
+# ASGI, so one process serves both HTTP and WebSockets — no second server and
+# no container runtime is needed.
+[Unit]
+Description=VirtualClass web (Daphne ASGI)
+After=network.target redis-server.service postgresql.service
+Wants=redis-server.service
+
+[Service]
+Type=simple
+User=virtualclass
+Group=virtualclass
+WorkingDirectory=/srv/virtualclass
+EnvironmentFile=/srv/virtualclass/.env
+ExecStart=/srv/virtualclass/.venv/bin/daphne \
+    -b 127.0.0.1 -p 8000 \
+    --proxy-headers \
+    config.asgi:application
+Restart=always
+RestartSec=3
+# Cameras/mics and uploads: keep the service tidy but able to write its media.
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

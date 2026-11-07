@@ -21,6 +21,8 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_http_methods, require_POST
 from django.views.decorators.cache import never_cache
 
+from core.queue import dispatch
+
 from .file_validation import ALLOWED_EXTENSIONS, validate_upload
 from .forms import (
     ClassroomCustomizationForm,
@@ -32,6 +34,7 @@ from .forms import (
 )
 from .media import generate_media_token, media_config_payload, media_enabled
 from .storage import private_file_response
+from .tasks import convert_office_file
 from .models import Classroom, ClassroomSession, SharedFile
 from .permissions import Role, effective_permissions, is_privileged
 from .services import (
@@ -46,6 +49,7 @@ from .services import (
     approve_waiting_room,
     attendance_summary,
     banned_members,
+    broadcast,
     create_classroom,
     deactivate_classroom,
     end_classroom_for_all,
@@ -779,13 +783,6 @@ def file_upload_view(request, room_code: str):
         size=upload.size,
         content_type=(upload.content_type or "application/octet-stream")[:128],
     )
-    # Office → PDF (when LibreOffice is installed) so PPTX/DOCX/XLSX can be
-    # presented in the browser; a no-op otherwise — never fails the upload.
-    from .office_convert import convert_to_pdf
-    convert_to_pdf(shared)
-
-    from .services import broadcast
-
     broadcast(classroom.room_code, {
         "type": "file_uploaded",
         "file": {
@@ -799,7 +796,13 @@ def file_upload_view(request, room_code: str):
             "url": f"/class/{classroom.room_code}/files/{shared.id}/download/",
         },
     })
-    return JsonResponse({"ok": True, "id": shared.id, "name": shared.original_name})
+    # Office → PDF runs as a background job, so the upload returns at once:
+    # the room is told separately (`file_presentable`) when the presentable
+    # copy is ready.  Without a broker the job runs inline in this request —
+    # same result, and never a failed upload.
+    dispatch(convert_office_file, shared.id)
+    return JsonResponse({"ok": True, "id": shared.id, "name": shared.original_name,
+                         "has_pdf": bool(shared.pdf_version)})
 
 
 @require_http_methods(["GET"])

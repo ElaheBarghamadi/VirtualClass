@@ -1,0 +1,31 @@
+# VirtualClass — Celery worker (background jobs).
+#
+#   sudo cp deploy/systemd/virtualclass-worker.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now virtualclass-worker
+#
+# Requires REDIS_URL in .env — that URL is both the broker and the result
+# backend.  Scale with more instances (`systemctl start virtualclass-worker@2`
+# via a template unit) or raise --concurrency.
+[Unit]
+Description=VirtualClass Celery worker
+After=network.target redis-server.service
+Wants=redis-server.service
+
+[Service]
+Type=simple
+User=virtualclass
+Group=virtualclass
+WorkingDirectory=/srv/virtualclass
+EnvironmentFile=/srv/virtualclass/.env
+ExecStart=/srv/virtualclass/.venv/bin/celery -A config worker \
+    --loglevel=INFO --concurrency=2 --max-tasks-per-child=200
+Restart=always
+RestartSec=5
+# A job that hangs is killed by the time limit, not by systemd.
+KillMode=mixed
+TimeoutStopSec=30
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

@@ -5,8 +5,12 @@ djangorestframework>=3.18.2,<3.19
 # WebSockets / real-time
 channels>=4.1,<5
 channels-redis>=4.2,<5
-redis>=5.0,<6
+redis>=6.1,<7           # channel layer + cache + Celery broker/result backend
+                        # (kombu's Redis transport in celery 5.7 needs >=6.1)
 daphne>=4.1,<5          # ASGI server used by `runserver` for WebSockets
+
+# Background jobs — `celery -A config worker` / `beat`
+celery[redis]>=5.4,<6
 
 # Media server (LiveKit SFU) — server-side token generation only
 livekit-api>=1.0,<2

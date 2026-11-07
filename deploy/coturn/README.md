@@ -16,17 +16,23 @@ listed in `WEBRTC_ICE_SERVERS`.
 
 ## Run it
 
+No container runtime needed — coturn is a single package on every distro.
+
 ```bash
 cd deploy/coturn
-cp .env.example .env
-python3 -c "import secrets; print(secrets.token_hex(16))"   # paste into TURN_SECRET
-+ Behind NAT? also uncomment `external-ip` in `turnserver.conf` and set the
-  public IP (a cloud VM has a private interface, so the relay must advertise
-  the address clients can reach).
-$EDITOR .env                      # set TURN_SECRET and TURN_REALM
-docker compose up -d
-docker compose logs -f
+sudo apt install coturn            # Fedora/RHEL: sudo dnf install coturn
+python3 -c "import secrets; print(secrets.token_hex(16))"   # the shared secret
+
+# readable by the `turnserver` service user, nobody else
+sudo install -m 640 -o root -g turnserver turnserver.conf /etc/turnserver.conf
+sudoedit /etc/turnserver.conf      # set realm= and user=classroom:<the secret>
+sudo systemctl enable --now coturn
+journalctl -u coturn -f            # watch it come up
 ```
+
+Behind NAT (a cloud VM has a private interface, so the relay must advertise
+the address clients can reach)? Uncomment `external-ip=` in
+`turnserver.conf` and set the public IP.
 
 Open these ports on the host firewall / cloud security group:
 

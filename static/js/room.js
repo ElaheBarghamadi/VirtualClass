@@ -1124,6 +1124,11 @@ function handleEvent(data) {
             addFileItem(data.file);
             toast(`فایل «${data.file.name}» بارگذاری شد.`, 'info', 2500);
             break;
+        case 'file_presentable':
+            // The background conversion finished: this file can now be
+            // presented (previous broadcast said it could only be downloaded).
+            markFilePresentable(data.file_id, data.name);
+            break;
         case 'file_deleted':
             removeFileItem(data.file_id);
             toast(`فایل «${data.name}» حذف شد.`, 'info', 2500);
@@ -2430,6 +2435,7 @@ function initFiles() {
                     id: data.id, name: data.name,
                     size: formatBytes(file.size),
                     uploader: 'شما', uploader_id: SELF_USER_ID,
+                    has_pdf: data.has_pdf,
                     url: `/class/${ROOM_CODE}/files/${data.id}/download/`,
                 });
                 toast('فایل بارگذاری شد.', 'success');
@@ -2607,6 +2613,28 @@ function addFileItem(file) {
 function removeFileItem(fileId) {
     document.querySelector(`#file-list .file-item[data-file-id="${Number(fileId)}"]`)?.remove();
     updateFileEmpty();
+}
+
+/**
+ * A file that was uploaded as Office (PPTX/DOCX/XLSX) only becomes
+ * presentable once the server has converted it to PDF. That happens in the
+ * background, so the row is upgraded in place when `file_presentable` lands —
+ * no refresh, no re-upload.
+ */
+function markFilePresentable(fileId, name) {
+    const li = document.querySelector(`#file-list .file-item[data-file-id="${Number(fileId)}"]`);
+    if (!li) return;
+    if (li.dataset.hasPdf === '1') return;  // already shown as ready
+    li.dataset.hasPdf = '1';
+    const nameEl = li.querySelector('.file-name');
+    if (nameEl && !nameEl.querySelector('.pdf-ready-pill')) {
+        const pill = document.createElement('span');
+        pill.className = 'pdf-ready-pill';
+        pill.title = 'نسخهٔ PDF آمادهٔ ارائه است';
+        pill.textContent = '✓ PDF';
+        nameEl.appendChild(pill);
+    }
+    toast(`نسخهٔ ارائهٔ «${name || li.dataset.fileName}» آماده شد.`, 'success', 3000);
 }
 
 /** Submit the hidden leave form (server revokes the membership/guest slot). */

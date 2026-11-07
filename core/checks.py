@@ -27,3 +27,24 @@ def deploy_configuration(app_configs, **kwargs) -> list[CheckWarning]:
             id="deploy.W001",
         ))
     return issues
+
+
+@register()
+def queue_configuration(app_configs, **kwargs) -> list[CheckWarning]:
+    """Warn when a production deployment has no broker to share.
+
+    Without ``REDIS_URL`` every web process builds its own in-memory channel
+    layer (a socket event reaches only the process that sent it) and Celery
+    runs jobs inline.  That is perfect for development and wrong for a real
+    deployment, so say so instead of letting it be discovered in class.
+    """
+    issues: list[CheckWarning] = []
+    if not settings.DEBUG and not getattr(settings, "REDIS_URL", ""):
+        issues.append(CheckWarning(
+            "REDIS_URL is empty while DEBUG=false: WebSocket events and "
+            "background jobs stay inside one process.",
+            hint="Run Redis and set REDIS_URL=redis://127.0.0.1:6379/0, then "
+                 "start `celery -A config worker`. See README §۳.",
+            id="deploy.W002",
+        ))
+    return issues

@@ -8,7 +8,14 @@ from dotenv import load_dotenv
 
 def main() -> None:
     """Run administrative tasks."""
-    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
+    # `manage.py test` runs without Redis: no broker, no worker and no channel
+    # layer server (see config/settings_test.py).  An explicit
+    # DJANGO_SETTINGS_MODULE in the environment still wins over both defaults.
+    testing = len(sys.argv) > 1 and sys.argv[1] in {"test", "testserver"}
+    os.environ.setdefault(
+        "DJANGO_SETTINGS_MODULE",
+        "config.settings_test" if testing else "config.settings",
+    )
     # Load .env (if present) before settings are evaluated.
     load_dotenv()
     try:

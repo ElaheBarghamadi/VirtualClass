@@ -102,7 +102,7 @@
 
 ## ۲. معماری
 
-```
+```text
                      ┌──────────────────────────────────────────┐
                      │                Browser                    │
                      │  Django Templates + Vanilla JS (ESM)      │
@@ -120,12 +120,35 @@
         │               │    logic)      │             │
         │  permissions  ┘                │             │
         │  media.py ── short-lived JWT ──┼─────────────┘
-        └──────┬──────────────┬──────────┘   (token scopes = permissions)
-               │              │
-               ▼              ▼
-        PostgreSQL/SQLite   Redis
-        (source of truth)  (channel layer + cache)
+        │  tasks.py ── @shared_task ─────┼──┐  (token scopes = permissions)
+        └──────┬──────────────┬──────────┘  │ enqueue
+               │              │             ▼
+               ▼              ▼      ┌──────────────────────┐
+        PostgreSQL/SQLite   Redis ───┤  Celery worker/beat  │
+        (source of truth)   (channel │  (background jobs)   │
+                             layer + └──────────────────────┘
+                             cache + broker + results)
 ```
+
+### کارهای پس‌زمینه: Celery + Redis
+
+همه‌چیز با **یک** متغیر تنظیم می‌شود: `REDIS_URL`. همان Redis که channel layer و cache است، **broker و result backend سلری** هم هست؛ لازم نیست چند سرویس جدا بالا بیاورید.
+
+| قطعه | جا | کار |
+|---|---|---|
+| اپ Celery | `config/celery.py` | `celery -A config worker` و `celery -A config beat` همین را می‌خوانند؛ تنظیمات از `CELERY_*` در `config/settings.py` |
+| تسک‌ها | `<app>/tasks.py` | کنار همان اپی که مالکشان است و به‌صورت خودکار کشف می‌شوند (`classrooms/tasks.py`، `core/tasks.py`) |
+| صف‌کردن | `core/queue.py::dispatch` | تنها جایی که کد تصمیم نمی‌گیرد «چه زمانی»: اگر broker باشد می‌فرستد، وگرنه همان‌جا اجرا می‌کند |
+| زمان‌بندی | `CELERY_BEAT_SCHEDULE` | جلسه‌های رهاشده، `prune_history`، مهمان‌های قدیمی — بدون cron |
+
+کارهایی که واقعاً پس‌زمینه‌اند:
+
+- **تبدیل Office → PDF** (`classrooms.tasks.convert_office_file`): قبلاً وسط درخواست آپلود اجرا می‌شد و تا ۹۰ ثانیه بارگذاری را معطل نگه می‌داشت؛ الان آپلود بلافاصله برمی‌گردد و وقتی PDF آماده شد، اتاق رویداد `file_presentable` می‌گیرد و همان ردیف فایل «✓ PDF» می‌شود.
+- **بستن جلسه‌های فراموش‌شده** (`close_stale_sessions`): اگر میزبان مرورگر را ببندد، جلسه برای همیشه `LIVE` نمی‌ماند.
+- **نگهداری داده** (`core.tasks.prune_history`): همان دستور `manage.py prune_history`، خودکار.
+- **پاک‌سازی مهمان‌ها** (`prune_stale_guests`): عضویت‌های مهمانِ غیرفعال.
+
+> **بدون Redis هم کار می‌کند.** اگر `REDIS_URL` خالی باشد، Celery در حالت *eager* اجرا می‌شود: `dispatch` همان لحظه و در همان پروسهٔ وب تسک را اجرا می‌کند. یعنی توسعه، تست و حتی یک نصب کوچک تک‌پروسه‌ای هیچ worker یا broker ای لازم ندارند و رفتار دقیقاً مثل قبل است — فقط وقتی چند پروسه/چند کاربر واقعی دارید Redis و worker معنا پیدا می‌کنند.
 
 ### چرا Django به‌عنوان بک‌اند اصلی باقی می‌ماند؟
 
@@ -143,7 +166,7 @@
 
 | گزینه | ارزیابی |
 |---|---|
-| **LiveKit** ✅ | SDK رسمی پایتون (`livekit-api`) → تولید توکن **داخل خود Django**، بدون سرویس جانبی، کاملاً قابل تست به‌صورت آفلاین. سرور: یک ایمیج Docker، Apache-2.0، فعال و پرنگهداری. |
+| **LiveKit** ✅ | SDK رسمی پایتون (`livekit-api`) → تولید توکن **داخل خود Django**، بدون سرویس جانبی، کاملاً قابل تست به‌صورت آفلاین. سرور: یک باینری مستقل (Go)، Apache-2.0، فعال و پرنگهداری. |
 | mediasoup | کتابخانهٔ **Node.js** — یک رانتایم بک‌اند دوم تحمیل می‌کند و Django را از مرکزیت خارج می‌کند. |
 | Janus | نوشته‌شده در C با معماری پلاگین/REST — یکپارچه‌سازی با Django به‌مراتب پیچیده‌تر و کم‌نگهداری‌تر. |
 
@@ -153,16 +176,18 @@
 
 اگر LiveKit پیکربندی نشده باشد، اتاق به‌طور خودکار به **حالت mesh** می‌رود (`static/js/mesh.js`): هر شرکت‌کننده اتصال P2P مستقیم با بقیه می‌سازد (mic/camera و اشتراک صفحه روی اتصال‌های جدا، تا تصویر صفحه با دوربین قاطی نشود). هماهنگی با *perfect negotiation* انجام می‌شود: **عضو با `member_id` بزرگ‌تر پیشنهاد می‌دهد** و کوچکت‌ر پاسخ می‌دهد؛ SDP/ICE از مسیر `rtc_signal` بالا و **نقطه‌به‌نقطه** (نه broadcast) رله می‌شوند. به‌طور پیش‌فرض STUN عمومی گوگل استفاده می‌شود و کاندیدای host برای شبکهٔ محلی بدون اینترنت هم کار می‌کند؛ ولی STUN خالی پشت NATهای سخت (شبکهٔ شرکتی/موبایل) برای رله‌کردن کافی نیست. برای رفع این محدودیت یک **coturn** بالا بیاورید و آن را در `WEBRTC_ICE_SERVERS` معرفی کنید تا بدون تغییر کد استفاده شود:
 
-یک بسته‌ی آماده در `deploy/coturn/` هست (docker-compose + تنظیماتِ hardening + راهنما):
+یک بستهٔ آماده در `deploy/coturn/` هست (فایل `turnserver.conf` با تنظیماتِ hardening + راهنما) — نصبش یک بستهٔ سیستمی است، نه کانتینر:
 
 ```bash
 cd deploy/coturn
-cp .env.example .env                                       # TURN_SECRET را پر کنید
-python3 -c "import secrets; print(secrets.token_hex(16))"  # تولید رمز
-docker compose up -d
+sudo apt install coturn                                    # Fedora/RHEL: dnf install coturn
+python3 -c "import secrets; print(secrets.token_hex(16))"  # تولید رمز مشترک
+sudo install -m 640 -o root -g turnserver turnserver.conf /etc/turnserver.conf
+sudoedit /etc/turnserver.conf                              # realm و user=classroom:<رمز> را بگذارید
+sudo systemctl enable --now coturn
 ```
 
-یا به‌صورت دستی:
+سپس همان رمز را در `.env` بگذارید:
 
 ```bash
 # /etc/turnserver.conf
@@ -216,7 +241,7 @@ permission_changed · role_changed · participant_muted · mute_all
 participant_removed · waiting_room_entry · notification
 classroom_locked · classroom_unlocked · settings_changed
 session_started · session_ended
-file_uploaded · presentation_changed
+file_uploaded · file_presentable · file_deleted · presentation_changed
 whiteboard_operation · whiteboard_snapshot · whiteboard_history
 whiteboard_state · rtc_signal
 ```
@@ -472,19 +497,28 @@ User (accounts)
 
 ## ۳. راه‌اندازی
 
-پیش‌نیاز: **Python 3.11+**
+پیش‌نیاز: **Python 3.11+** و (اختیاری) **Redis**. هیچ‌کدام از این مراحل به Docker نیاز ندارد.
 
 ```bash
+git clone <repo-url> online_classroom && cd online_classroom
 python -m venv .venv
-
-# Windows
-.venv\Scripts\activate
-
-# Linux/macOS
-source .venv/bin/activate
-
+source .venv/bin/activate            # ویندوز: .venv\Scripts\activate
 pip install -r requirements.txt
+
+cp .env.example .env                 # SECRET_KEY را عوض نکنید هم کار می‌کند؛ در پروداکشن باید عوض شود
+python manage.py migrate
+python manage.py createsuperuser     # اختیاری: برای پنل ادمین
+python manage.py runserver           # http://localhost:8000/
 ```
+
+همین. **Redis لازم نیست** و **worker لازم نیست**: بدون `REDIS_URL` لایهٔ realtime درون‌پروسه‌ای است و کارهای پس‌زمینه همان‌جا اجرا می‌شوند. برای اینکه همه‌چیز (وب + Redis + worker + زمان‌بند) با یک دستور بالا بیاید:
+
+```bash
+python scripts/dev.py                # وب + worker (اگر Redis در دسترس باشد)
+python scripts/dev.py --beat         # + زمان‌بند کارهای دوره‌ای
+```
+
+`scripts/dev.py` اگر `redis-server` نصب باشد و پورت آزاد باشد خودش بالا می‌آوردش، مایگریشن‌ها را اعمال می‌کند و لاگ هر پروسه را با برچسب `[web]`/`[worker]`/`[beat]`/`[redis]` چاپ می‌کند. برای اجرای دستی همان چهار دستور استاندارد همیشه در دسترس است (`manage.py runserver`، `celery -A config worker -l info`، `celery -A config beat -l info`).
 
 ### متغیرهای محیطی
 
@@ -497,7 +531,12 @@ cp .env.example .env
 | `SECRET_KEY` | کلید مخفی Django |
 | `DEBUG` | توسعه `true`، پروداکشن `false` |
 | `DATABASE_URL` | خالی = SQLite؛ پروداکشن `postgres://user:pass@host:5432/db` |
-| `REDIS_URL` | خالی = لایهٔ InMemory؛ پروداکشن `redis://127.0.0.1:6379/0` |
+| `REDIS_URL` | خالی = تک‌پروسه (InMemory + LocMem + اجرای درون‌خطی کارها)؛ پروداکشن `redis://127.0.0.1:6379/0`. همان URL هم‌زمان channel layer، cache، **broker** و **result backend** سلری است |
+| `CELERY_BROKER_URL` / `CELERY_RESULT_BACKEND` | اختیاری؛ پیش‌فرض همان `REDIS_URL` |
+| `CELERY_TASK_ALWAYS_EAGER` | `true` = کارها همان لحظه در پروسهٔ وب اجرا شوند. پیش‌فرض: بدون Redis `true`، با Redis `false` |
+| `STALE_SESSION_HOURS` | جلسه‌ای که این‌قدر ساعت `LIVE` مانده باشد خودکار بسته می‌شود (۰ = خاموش، پیش‌فرض ۸) |
+| `GUEST_RETENTION_DAYS` | عضویت مهمانِ غیرفعال بعد از این‌همه روز پاک می‌شود (۰ = خاموش، پیش‌فرض ۷) |
+| `PRUNE_BOARD_DAYS` / `PRUNE_CHAT_DAYS` | پنجره‌های `prune_history` (پیش‌فرض ۹۰ / ۰ یعنی گفتگو دست‌نخورده) |
 | `ALLOWED_HOSTS` / `CSRF_TRUSTED_ORIGINS` | هاست‌ها و originهای مورد اعتماد. پیش‌فرضِ توسعه `*` است: هر آدرس و پورتی جواب می‌دهد (پیش‌نمایش، IP لن، گوشی هم‌شبکه، تونل). با `DEBUG=false` مقدار `*` عمداً در بوت **رد می‌شود** و باید نام دامنهٔ واقعی را بنویسید |
 | `MEDIA_SERVER_URL` / `MEDIA_SERVER_API_KEY` / `MEDIA_SERVER_API_SECRET` | تنظیمات LiveKit — خالی بگذارید تا بدون مدیا اجرا شود |
 | `WEBRTC_ICE_SERVERS` | لیست JSON سرورهای STUN/TURN برای حالت mesh (مثال: coturn) |
@@ -533,26 +572,50 @@ python manage.py runserver
 
 > بدون تنظیم LiveKit هم همه‌چیز کار می‌کند — گفتگو، تخته، فایل، مدیریت شرکت‌کنندگان فعال‌اند و ناحیهٔ ویدیو پیام «سرور رسانه پیکربندی نشده» نشان می‌دهد.
 
-### Redis
+### Redis (channel layer + cache + صف کارها)
 
 ```bash
-# Docker
-docker run -d -p 6379:6379 --name classroom-redis redis:7
-
-# یا مستقیم
-redis-server
+# دبیان/اوبونتو
+sudo apt install redis-server && sudo systemctl enable --now redis-server
+# فدورا/RHEL:  sudo dnf install redis
+# مک:          brew install redis && brew services start redis
+# فقط برای همین جلسه:  redis-server --port 6379
 ```
 
 سپس در `.env`: `REDIS_URL=redis://127.0.0.1:6379/0`
 
-Redis برای **channel layer** و **cache** (rate limiting رمز کلاس) استفاده می‌شود — نه به‌عنوان دیتابیس. منبع حقیقت داده‌های ماندگار همیشه PostgreSQL/SQLite است.
+Redis اینجا **دیتابیس نیست**: منبع حقیقت همان PostgreSQL/SQLite است. Redis چهار نقش دارد — channel layer وب‌سوکت، cache (rate limiting رمز کلاس)، broker سلری و result backend. یک نمونه برای همه کافی است (و `CELERY_BROKER_URL`/`CELERY_RESULT_BACKEND` فقط وقتی لازم‌اند که بخواهید صف را به نمونهٔ دیگری ببرید).
+
+بدون Redis: همان `runserver` کافی است (تک‌پروسه، کارها درون‌خطی). با Redis: یک `runserver` **و** یک worker:
+
+### worker و زمان‌بند
+
+```bash
+# پنجرهٔ اول
+python manage.py runserver
+
+# پنجرهٔ دوم — اجرای کارهای پس‌زمینه
+celery -A config worker -l info
+
+# پنجرهٔ سوم (اختیاری) — کارهای دوره‌ای
+celery -A config beat -l info
+```
+
+چه کارهایی؟ `convert_office_file` (تبدیل PPTX/DOCX/XLSX به PDF برای ارائه — قبلاً وسط درخواست آپلود اجرا می‌شد)، `close_stale_sessions`، `prune_history` و `prune_stale_guests` (بند «نگهداری داده» در بخش ۸). فهرست کامل با `celery -A config inspect registered` (worker باید بالا باشد) یا در `classrooms/tasks.py` و `core/tasks.py`.
+
+قواعد ساده:
+
+- **صف = Redis.** آپلود فایل بلافاصله برمی‌گردد؛ تبدیل در worker انجام می‌شود و نتیجه با رویداد `file_presentable` به اتاق برمی‌گردد.
+- **worker بدون Redis بالا نمی‌آید** (`REDIS_URL` خالی ⇒ حالت in-process)؛ در این حالت دستور worker را اجرا نکنید، کاری برای انجام دادن ندارد.
+- **بدون LibreOffice** هم آپلود سالم است: فایل فقط قابل دانلود می‌ماند (بدون ارائه). نصب: `sudo apt install libreoffice-impress libreoffice-writer`، یا `LIBREOFFICE_PATH=/path/to/soffice`.
+- **beat فقط یک نسخه** اجرا شود؛ دو scheduler هر کار دوره‌ای را دو بار صف می‌کنند.
 
 ### راه‌اندازی سرور رسانه (LiveKit)
 
 ```bash
-# حالت توسعه (کلیدهای dev)
-docker run -d --name livekit -p 7880:7880 -p 7881:7881 -p 7882:7882/udp \
-  livekit/livekit-server --dev --bind 0.0.0.0
+# باینری رسمی (بدون Docker) — نسخه را از github.com/livekit/livekit/releases بردارید
+curl -sSL https://get.livekit.io | bash
+livekit-server --dev --bind 0.0.0.0      # کلیدهای dev برای توسعه
 
 # سپس در .env
 MEDIA_SERVER_URL=ws://127.0.0.1:7880
@@ -560,16 +623,7 @@ MEDIA_SERVER_API_KEY=devkey
 MEDIA_SERVER_API_SECRET=secretsecretsecretsecretsecretse
 ```
 
-برای پروداکشن از `livekit-server` با فایل کانفیگ و TURN سرور استفاده کنید (مستندات رسمی LiveKit).
-
-### Docker
-
-```bash
-cp .env.example .env   # SECRET_KEY و MEDIA_SERVER_* را تنظیم کنید
-docker compose up --build
-```
-
-سرویس‌ها: `web` (Django + Daphne)، `postgres:16`، `redis:7`. سرور رسانه جدا deploy می‌شود (بند قبل). Docker برای توسعهٔ لوکال **الزامی نیست**.
+برای پروداکشن `livekit-server` را با فایل کانفیگ (`livekit.yaml`) و TURN اجرا کنید (مستندات رسمی LiveKit)؛ در `deploy/` هم نمونه‌های systemd برای اپ هست.
 
 ### اجرای تست‌ها
 
@@ -577,14 +631,14 @@ docker compose up --build
 python manage.py test
 ```
 
----
+`manage.py test` خودکار `config/settings_test.py` را انتخاب می‌کند: تسک‌ها eager، channel layer و cache درون‌حافظه. یعنی تست‌ها **نه** Redis می‌خواهند، **نه** worker — حتی اگر `.env` شما `REDIS_URL` داشته باشد.
 
 ## ۴. ساختار پروژه
 
 ```
 online_classroom/
 ├── manage.py
-├── config/                  # settings, urls, asgi (WebSocket routing), wsgi
+├── config/                  # settings, celery.py (worker/beat), urls, asgi, wsgi
 ├── accounts/                # کاربر سفارشی، ثبت‌نام، ورود، پروفایل،
 │                            #   context_processors (ترجیحات UI)
 ├── classrooms/              # هستهٔ دامنه
@@ -605,7 +659,10 @@ online_classroom/
 │   └── js/                  # theme.js, modal.js, room.js, media.js, chat.js,
 │                            #   whiteboard.js, lobby.js, toast.js, app.js
 ├── templates/               # base.html, home.html, 403.html, 404.html
-├── Dockerfile / docker-compose.yml / .dockerignore
+├── core/queue.py            # dispatch(): صف‌کردن یا اجرای درون‌خطی یک تسک
+├── core/tasks.py            # کارهای دوره‌ای (prune_history)
+├── scripts/dev.py           # بالا آوردن وب + Redis + worker با یک دستور
+├── deploy/systemd/          # واحدهای web / worker / beat برای پروداکشن
 ├── requirements.txt / .env.example / .gitignore
 └── README.md
 ```
@@ -693,8 +750,12 @@ online_classroom/
 ## ۶. تست‌ها
 
 ```bash
-python manage.py test     # 340 تست
+python manage.py test     # ۳۷۸ تست، بدون نیاز به Redis یا worker
 ```
+
+تست‌ها روی `config/settings_test.py` اجرا می‌شوند (خودکار): تسک‌ها eager، channel
+layer و cache درون‌حافظه، پس هیچ سرویس جانبی لازم نیست — حتی اگر `.env` شما
+`REDIS_URL` داشته باشد.
 
 ### تست مرورگری سرتاسری (E2E)
 
@@ -717,7 +778,7 @@ python tests_e2e/run_e2e.py --room <CODE>
 
 ### CI (GitHub Actions)
 
-`.github/workflows/ci.yml` روی هر push: تست‌های Django (۳۴۰ مورد، شامل تبدیل
+`.github/workflows/ci.yml` روی هر push: تست‌های Django (۳۷۸ مورد، شامل تبدیل
 واقعی Office با LibreOffice نصب‌شده روی رانر) + سرور runserver + سوئیت E2E کامل.
 
 | حوزه | پوشش |
@@ -737,6 +798,7 @@ python tests_e2e/run_e2e.py --room <CODE>
 | آزمون | شروع/پایان فقط میزبان، پاسخ مهمان/دانش‌آموز، اعتبارسنجی گزینه و پرسش، رد پاسخ پس از پایان، upsert تغییر پاسخ، نمره‌دهی، عدم نشت گزینهٔ صحیح در payload، رد آزمون کلاس دیگر، ساخت پرسش توسط مالک و رد غیرمالک |
 | تکلیف | ساخت/حذف توسط مالک، رد ساخت توسط دانش‌آموز، ۴۰۴ برای غریبه، ارسال/ویرایش پاسخ، رد ارسال خالی و پس از مهلت، تصحیح + رد نمرهٔ خارج بازه، قفل شدن پاسخ تصحیح‌شده، رد تصحیح توسط دانش‌آموز |
 | ممنوعیت مهمان | ثبت IP هنگام ورود، مسدود شدن همان IP در دورهٔ ممنوعیت، آزادی IP دیگر و پایان مهلت |
+| صف و کارهای پس‌زمینه | صف/اجرای درون‌خطی (`dispatch`)، بازگشت به اجرای درون‌خطی وقتی broker قطع است، آپلود بدون تبدیل درون‌درخواستی، تبدیل Office و اعلان `file_presentable`، ایدمپوتنت بودن تبدیل، بستن جلسهٔ رهاشده (+بستن حضور)، پاک‌سازی مهمان‌های قدیمی، `prune_history` دوره‌ای، سیم‌کشی `REDIS_URL`→broker/backend/layer/cache، و چک `deploy.W002` |
 
 ---
 
@@ -756,23 +818,43 @@ python tests_e2e/run_e2e.py --room <CODE>
 
 ## ۸. نکتهٔ استقرار پروداکشن
 
+سه پروسهٔ مستقل، همه از همان `.env` و همان virtualenv. هیچ سرویس کانتینری لازم نیست؛ کافی است سه واحد systemd بسازید (نمونه‌ها در [`deploy/systemd/`](deploy/systemd)):
+
 ```bash
-# چند پروسه — هر دو HTTP و WebSocket
-daphne -b 0.0.0.0 -p 8000 config.asgi:application
+# ۱) وب — HTTP + WebSocket (ASGI)
+daphne -b 127.0.0.1 -p 8000 --proxy-headers config.asgi:application
+
+# ۲) worker — کارهای پس‌زمینه (نیازمند REDIS_URL)
+celery -A config worker -l info --concurrency=2
+
+# ۳) beat — فقط یکی، فقط برای کارهای دوره‌ای
+celery -A config beat -l info
 ```
 
-چک‌لیست: `DEBUG=false` · `SECRET_KEY` تصادفی · `DATABASE_URL` روی PostgreSQL · `REDIS_URL` روی Redis · `ALLOWED_HOSTS` و `CSRF_TRUSTED_ORIGINS` · `MEDIA_SERVER_*` (Django باید برای حذف/بی‌صدا کردن/بستن اتاق به API همان آدرس دسترسی داشته باشد) · پشت reverse proxy با پشتیبانی WebSocket (Nginx با `Upgrade`/`Connection` headers) · `MEDIA_ROOT` روی volume یا object storage · `python manage.py collectstatic`.
+```bash
+sudo cp deploy/systemd/virtualclass-{web,worker,beat}.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now virtualclass-web virtualclass-worker virtualclass-beat
+```
+
+چک‌لیست: `DEBUG=false` · `SECRET_KEY` تصادفی · `DATABASE_URL` روی PostgreSQL · `REDIS_URL` روی Redis (**بدونش** worker بالا نمی‌آید و کارها درون‌خطی اجرا می‌شوند) · `ALLOWED_HOSTS` و `CSRF_TRUSTED_ORIGINS` · `MEDIA_SERVER_*` (Django باید برای حذف/بی‌صدا کردن/بستن اتاق به API همان آدرس دسترسی داشته باشد) · پشت reverse proxy با پشتیبانی WebSocket (Nginx با `Upgrade`/`Connection` headers) · `MEDIA_ROOT` روی volume یا object storage · `python manage.py collectstatic` · نصب LibreOffice اگر تبدیل Office→PDF می‌خواهید.
+
+> ترتیب اجرا مهم است: Redis → worker/beat → وب. اگر Redis در دسترس نباشد، ارسال تسک با یک هشدار در لاگ به اجرای درون‌خطی برمی‌گردد و درخواست کاربر نمی‌شکند (`core/queue.py`)، ولی تبدیل فایل تا اتمامش درخواست آپلود را نگه می‌دارد.
 
 ### نگهداری داده (retention)
 
 دو جدول با گذشت زمان بی‌کران رشد می‌کنند: `WhiteboardEvent` (یک ردیف برای هر خط) و
-`ChatMessage`. دستور زیر قدیمی‌ها را جمع می‌کند و روی cron/timer قابل اجراست:
+`ChatMessage`. دستور زیر قدیمی‌ها را جمع می‌کند:
 
 ```bash
 python manage.py prune_history --dry-run           # فقط گزارش
 python manage.py prune_history --board-days 90      # تخته‌های بی‌استفاده: فشرده‌سازی به snapshot
 python manage.py prune_history --board-days 90 --chat-days 180
 ```
+
+همین دستور **خودکار** هم اجرا می‌شود: `CELERY_BEAT_SCHEDULE` آن را هر شب ساعت ۳:۳۰ با
+همان پنجره‌هایی که در `PRUNE_BOARD_DAYS`/`PRUNE_CHAT_DAYS` گذاشته‌اید صدا می‌زند
+(`core/tasks.py`). اگر beat اجرا نمی‌کنید، همان خط بالا را در cron بگذارید.
 
 `--board-days` محتوا را **حذف نمی‌کند**: خطوط به snapshot فشرده می‌شوند (تخته همان‌طور
 که هست دیده می‌شود) و فقط ردیف‌های رویداد پاک می‌شوند. `--chat-days` پیش‌فرض ۰ است،

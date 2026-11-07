@@ -89,3 +89,50 @@ class PruneHistoryCommandTests(TestCase):
         ChatMessage.objects.update(created_at=timezone.now() - timedelta(days=4000))
         call_command("prune_history", "--board-days", "0", stdout=StringIO())
         self.assertEqual(ChatMessage.objects.count(), 1)
+
+
+class PruneHistoryTaskTests(TestCase):
+    """The Celery beat job runs the same command — no second implementation."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="task_owner", password="x")
+        self.classroom = create_classroom(self.owner, title="Task")
+
+    def _message(self, days_ago: int) -> ChatMessage:
+        message = ChatMessage.objects.create(
+            classroom=self.classroom, sender=self.owner, sender_name="o", message="m",
+        )
+        ChatMessage.objects.filter(id=message.id).update(
+            created_at=timezone.now() - timedelta(days=days_ago)
+        )
+        return message
+
+    def test_task_deletes_only_messages_past_the_window(self):
+        from core.tasks import prune_history
+
+        old = self._message(400)
+        recent = self._message(10)
+
+        report = prune_history(board_days=0, chat_days=180)
+
+        self.assertFalse(ChatMessage.objects.filter(id=old.id).exists())
+        self.assertTrue(ChatMessage.objects.filter(id=recent.id).exists())
+        self.assertIn("chat messages deleted: 1", report)
+
+    def test_task_reads_its_windows_from_settings(self):
+        from django.test import override_settings
+
+        from core.tasks import prune_history
+
+        old = self._message(400)
+        with override_settings(PRUNE_BOARD_DAYS=0, PRUNE_CHAT_DAYS=180):
+            prune_history()
+        self.assertFalse(ChatMessage.objects.filter(id=old.id).exists())
+
+    def test_disabled_windows_do_nothing(self):
+        from core.tasks import prune_history
+
+        old = self._message(400)
+        report = prune_history(board_days=0, chat_days=0)
+        self.assertTrue(ChatMessage.objects.filter(id=old.id).exists())
+        self.assertIn("nothing to do", report)

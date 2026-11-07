@@ -1,0 +1,26 @@
+# VirtualClass — Celery beat (scheduler for the periodic jobs).
+#
+#   sudo cp deploy/systemd/virtualclass-beat.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now virtualclass-beat
+#
+# Exactly ONE beat process may run: two schedulers would enqueue every job
+# twice.  The schedule itself lives in CELERY_BEAT_SCHEDULE (config/settings.py).
+[Unit]
+Description=VirtualClass Celery beat scheduler
+After=network.target redis-server.service
+Wants=redis-server.service
+
+[Service]
+Type=simple
+User=virtualclass
+Group=virtualclass
+WorkingDirectory=/srv/virtualclass
+EnvironmentFile=/srv/virtualclass/.env
+ExecStart=/srv/virtualclass/.venv/bin/celery -A config beat --loglevel=INFO
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

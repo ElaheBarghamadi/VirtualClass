@@ -1059,8 +1059,14 @@ def start_session(classroom: Classroom, host: User, session: ClassroomSession | 
     return session
 
 
-def end_session(session: ClassroomSession, host: User) -> ClassroomSession:
-    _require_privileged(session.classroom, host)
+def close_session(session: ClassroomSession) -> ClassroomSession:
+    """End a live session and clean up after it.
+
+    No permission check: callers do that first (``end_session`` for the host,
+    the stale-session task for the scheduler).  Everything that must happen
+    when a class stops — attendance intervals closed, room told — happens here
+    so both paths behave identically.
+    """
     if session.status == ClassroomSession.Status.LIVE:
         session.status = ClassroomSession.Status.ENDED
         session.ended_at = timezone.now()
@@ -1070,6 +1076,11 @@ def end_session(session: ClassroomSession, host: User) -> ClassroomSession:
         broadcast(session.classroom.room_code, {"type": "session_ended", "session_id": session.id})
         logger.info("session_ended", extra={"room_code": session.classroom.room_code, "session_id": session.id})
     return session
+
+
+def end_session(session: ClassroomSession, host: User) -> ClassroomSession:
+    _require_privileged(session.classroom, host)
+    return close_session(session)
 
 
 def attendance_join(classroom: Classroom, member: ClassroomMember) -> AttendanceRecord | None:
