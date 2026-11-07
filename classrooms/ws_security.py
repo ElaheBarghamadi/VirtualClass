@@ -56,12 +56,70 @@ def _origin_endpoint(value: str) -> tuple[str, str, int] | None:
     return _endpoint(parsed.scheme, parsed.netloc)
 
 
+def _first_header(headers: dict, name: bytes) -> str:
+    """First value of a possibly comma-joined proxy header."""
+    return (headers.get(name, b"").split(b",")[0]).decode("latin-1").strip()
+
+
+def _request_endpoint(scope: dict, headers: dict):
+    """The endpoint the *browser* used, as far as the proxy tells us.
+
+    Behind a TLS-terminating proxy (every container platform, every nginx
+    setup) the socket reaches Daphne as plain ``ws`` on an internal host while
+    the browser's Origin says ``https`` on the public host.  Comparing the two
+    literally rejects every handshake — which is exactly what
+    "ws_origin_rejected" in production looked like.  When the operator has
+    declared a trusted proxy (``TRUST_X_FORWARDED_PROTO``), the forwarded
+    headers describe the public request and are what Origin must be compared
+    against.
+    """
+    scheme = "https" if scope.get("scheme") in {"https", "wss"} else "http"
+    host_text = headers.get(b"host", b"").decode("latin-1")
+    if getattr(settings, "SECURE_PROXY_SSL_HEADER", None):
+        forwarded_proto = _first_header(headers, b"x-forwarded-proto").lower()
+        if forwarded_proto in {"https", "wss"}:
+            scheme = "https"
+        elif forwarded_proto in {"http", "ws"}:
+            scheme = "http"
+        forwarded_host = _first_header(headers, b"x-forwarded-host")
+        if forwarded_host:
+            host_text = forwarded_host
+    return _endpoint(scheme, host_text)
+
+
+def _comparable(endpoint: tuple[str, str, int] | None):
+    """Identity of an endpoint for origin comparison.
+
+    The scheme is deliberately dropped: the browser decides it, the proxy
+    decides what we see, and a mismatch between them is a deployment detail,
+    not a security property.  What matters is that the Origin points at *our*
+    host — a hostile site cannot fake that.  Non-default ports still have to
+    match, so ``https://host:8443`` never matches a plain ``host``.
+    """
+    if endpoint is None:
+        return None
+    _, host, port = endpoint
+    return host, (None if port in _DEFAULT_PORTS.values() else port)
+
+
+def describe_origin(scope: dict) -> str:
+    """One line for the rejection log: what was compared and against what."""
+    headers = dict(scope.get("headers") or [])
+    origin = headers.get(b"origin", b"").decode("latin-1")
+    request = _request_endpoint(scope, headers)
+    trusted = ", ".join(str(o) for o in getattr(settings, "CSRF_TRUSTED_ORIGINS", [])) or "-"
+    return (
+        f"origin={origin or '-'} scope_scheme={scope.get('scheme') or '-'} "
+        f"compared_with={request} trusted_origins={trusted}"
+    )
+
+
 def ws_origin_allowed(scope: dict) -> bool:
     """True when this WebSocket handshake may proceed.
 
-    Browser handshakes must have an Origin matching the request Host, or an
-    explicitly trusted origin. Native/server clients without an Origin remain
-    supported; they still need a valid authenticated session.
+    Browser handshakes must have an Origin pointing at the request's host, or
+    at an explicitly trusted origin. Native/server clients without an Origin
+    remain supported; they still need a valid authenticated session.
     """
     headers = dict(scope.get("headers") or [])
     origin_raw = headers.get(b"origin")
@@ -69,16 +127,14 @@ def ws_origin_allowed(scope: dict) -> bool:
         return True
     try:
         origin_text = origin_raw.decode("latin-1")
-        host_text = headers.get(b"host", b"").decode("latin-1")
     except UnicodeDecodeError:
         return False
 
     origin = _origin_endpoint(origin_text)
-    request_scheme = "https" if scope.get("scheme") in {"https", "wss"} else "http"
-    request = _endpoint(request_scheme, host_text)
     if origin is None:
         return False
-    if request is not None and origin == request:
+    request = _request_endpoint(scope, headers)
+    if request is not None and _comparable(origin) == _comparable(request):
         return True
 
     for trusted in getattr(settings, "CSRF_TRUSTED_ORIGINS", []):

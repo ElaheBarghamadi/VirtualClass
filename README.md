@@ -217,6 +217,15 @@ WEBRTC_ICE_SERVERS=[{"urls":["stun:turn.example.com:3478"]},{"urls":["turn:turn.
 
 `presentation.js` با **generation guard** و **بارگذاری single-flight** کار می‌کند: رندرهای همزمان (show + ResizeObserver + history) یک سند را فقط **یک بار** دانلود می‌کنند و رندر قدیمی بی‌صدا لغو می‌شود — دیگر `doc.destroy()` وسط رندر فعال رخ نمی‌دهد و پنل خطا روی رندر سالم فلش نمی‌زند. رندر وقتی holder مخفی است (۰×۰) کلاً انجام نمی‌شود؛ ResizeObserver پس از نمایان شدن دوباره رندر می‌کند.
 
+### WebSocket پشت پروکسیِ TLS
+
+`ws_origin_allowed()` در `classrooms/ws_security.py` جلوی Cross-Site WebSocket Hijacking را می‌گیرد، ولی مقایسه‌اش **هاست و پورت** است نه scheme: مرورگر `Origin: https://…` می‌فرستد و سوکت در سرور به‌صورت `ws` می‌رسد، چون TLS در لبه (پلتفرم/nginx) تمام می‌شود. مقایسهٔ تحت‌اللفظی scheme باعث می‌شد همهٔ دست‌دادن‌ها با `ws_origin_rejected` رد شوند و اتاق «صفحه» باز شود ولی «جلسه» نه.
+
+- Origin بیگانه (`https://evil.example`)، هاست جعلی (`testserver.evil.example`) و پورت غیرپیش‌فرض (`https://host:8443`) همچنان رد می‌شوند.
+- با `TRUST_X_FORWARDED_PROTO=true`، هدرهای `X-Forwarded-Host`/`X-Forwarded-Proto` ملاک مقایسه‌اند (یعنی هاست عمومی، نه هاست داخلی).
+- `CSRF_TRUSTED_ORIGINS` همچنان راه دوم پذیرش است.
+- خط لاگ رد شدن حالا می‌گوید چه چیزی با چه چیزی مقایسه شد: `origin=… compared_with=… trusted_origins=…`.
+
 ### معماری WebSocket
 
 | اندپوینت | کانکیومر | وظیفه |

@@ -34,7 +34,7 @@ from django.utils import timezone
 from classrooms.models import ClassroomMember
 from classrooms.permissions import effective_permissions
 from classrooms.services import member_group, resolve_scope_member
-from classrooms.ws_security import RateLimiter, SafeJsonWebsocketConsumer, ws_origin_allowed
+from classrooms.ws_security import RateLimiter, SafeJsonWebsocketConsumer, describe_origin, ws_origin_allowed
 
 from .models import Whiteboard, WhiteboardEvent, WhiteboardSnapshot
 from .snapshot import COMPACT_CHECK_EVERY, compact_board, snapshot_ops
@@ -73,7 +73,11 @@ class WhiteboardConsumer(SafeJsonWebsocketConsumer):
 
         # CSWSH defence — see classrooms.ws_security.
         if not ws_origin_allowed(self.scope):
-            logger.warning("ws_origin_rejected room=%s", self.room_code)
+            logger.warning(
+                "ws_origin_rejected room=%s %s",
+                self.room_code,
+                describe_origin(self.scope),
+            )
             await self.close(code=4403)
             return
         self._limiter = RateLimiter(OP_RATE_LIMIT)

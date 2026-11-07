@@ -37,7 +37,7 @@ from channels.db import database_sync_to_async
 from channels.layers import get_channel_layer
 
 from .models import Classroom, ClassroomMember
-from .ws_security import RateLimiter, SafeJsonWebsocketConsumer, ws_origin_allowed
+from .ws_security import RateLimiter, SafeJsonWebsocketConsumer, describe_origin, ws_origin_allowed
 
 #: Live caption text is capped and rate-limited (see receive_json).
 CAPTION_MAX_CHARS = 200
@@ -112,7 +112,11 @@ class ClassroomConsumer(SafeJsonWebsocketConsumer):
         # CSWSH defence: a browser handshake from a foreign origin would
         # ride on the victim's cookies — reject it before anything else.
         if not ws_origin_allowed(self.scope):
-            logger.warning("ws_origin_rejected room=%s", self.room_code)
+            logger.warning(
+                "ws_origin_rejected room=%s %s",
+                self.room_code,
+                describe_origin(self.scope),
+            )
             await self.close(code=4403)
             return
         self._limiter = RateLimiter(RECEIVE_RATE_LIMIT)

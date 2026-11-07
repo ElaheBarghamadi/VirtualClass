@@ -21,7 +21,7 @@ from channels.testing import WebsocketCommunicator
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.core.files.base import ContentFile
-from django.test import TestCase, TransactionTestCase
+from django.test import TestCase, TransactionTestCase, override_settings
 from rest_framework.test import APIClient
 
 from chat.routing import websocket_urlpatterns as chat_routes
@@ -112,6 +112,75 @@ class WsOriginTests(SecurityTestBase):
             await ws.disconnect()
 
         asyncio.get_event_loop().run_until_complete(scenario())
+
+
+class WsOriginBehindProxyTests(SecurityTestBase):
+    """The production shape: TLS ends at a proxy, the socket arrives as ``ws``.
+
+    Every container platform and every nginx setup terminates TLS in front of
+    Daphne, so the browser's ``Origin: https://host`` meets a socket whose
+    scheme is ``ws``.  Comparing the two literally rejected every handshake —
+    the room connected as a page and never as a session.
+    """
+
+    def _ws(self, origin: bytes, host: bytes = b"testserver", extra=()):
+        headers = [(b"host", host), *extra, (b"origin", origin)]
+        return WebsocketCommunicator(
+            app_with_user(self.owner, wb_routes),
+            f"/ws/classroom/{self.classroom.room_code}/whiteboard/",
+            headers=headers,
+        )
+
+    def _connect(self, ws):
+        import asyncio
+
+        async def run():
+            connected, _ = await ws.connect()
+            if connected:
+                await ws.disconnect()
+            return connected
+
+        return asyncio.get_event_loop().run_until_complete(run())
+
+    def test_https_origin_on_a_ws_socket_is_accepted(self):
+        # no proxy headers involved: the scheme difference alone used to fail
+        with override_settings(SECURE_PROXY_SSL_HEADER=None):
+            self.assertTrue(self._connect(self._ws(b"https://testserver")))
+            self.assertTrue(self._connect(self._ws(b"https://testserver:443")))
+
+    def test_a_foreign_host_is_still_rejected(self):
+        self.assertFalse(self._connect(self._ws(b"https://evil.example")))
+        self.assertFalse(self._connect(self._ws(b"https://testserver.evil.example")))
+
+    def test_a_different_port_is_still_rejected(self):
+        self.assertFalse(self._connect(self._ws(b"https://testserver:8443")))
+
+    def test_forwarded_host_is_used_only_when_the_proxy_is_trusted(self):
+        forwarded = ((b"x-forwarded-host", b"class.example.com"),
+                     (b"x-forwarded-proto", b"https"))
+        with override_settings(SECURE_PROXY_SSL_HEADER=None):
+            ws = self._ws(b"https://class.example.com", host=b"localhost:8000", extra=forwarded)
+            self.assertFalse(self._connect(ws), "untrusted proxy headers must be ignored")
+
+        with override_settings(SECURE_PROXY_SSL_HEADER=("HTTP_X_FORWARDED_PROTO", "https")):
+            ws = self._ws(b"https://class.example.com", host=b"localhost:8000", extra=forwarded)
+            self.assertTrue(self._connect(ws))
+
+    def test_csrf_trusted_origins_still_allow_a_rewritten_host(self):
+        with override_settings(CSRF_TRUSTED_ORIGINS=["https://class.example.com"]):
+            ws = self._ws(b"https://class.example.com", host=b"localhost:8000")
+            self.assertTrue(self._connect(ws))
+
+    def test_describe_origin_names_what_was_compared(self):
+        from classrooms.ws_security import describe_origin
+
+        scope = {
+            "scheme": "ws",
+            "headers": [(b"host", b"localhost:8000"), (b"origin", b"https://class.example.com")],
+        }
+        text = describe_origin(scope)
+        self.assertIn("origin=https://class.example.com", text)
+        self.assertIn("compared_with=", text)
 
 
 # ---------------------------------------------------------------------------
