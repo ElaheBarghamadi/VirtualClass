@@ -697,6 +697,38 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
     font-size: .78rem; font-weight: 600; white-space: nowrap;
     padding: 0 .35rem; color: var(--room-text); direction: rtl;
 }
+/* Floating zoom pill over the board: it costs no toolbar width (which is
+   tight on laptops) and stays reachable while writing. */
+.wb-zoom {
+    position: absolute; bottom: .6rem; left: .6rem; z-index: 4;
+    display: flex; align-items: center; gap: .05rem;
+    padding: .12rem; border-radius: 999px;
+    background: color-mix(in srgb, var(--surface) 92%, transparent);
+    border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+    box-shadow: var(--shadow-sm, 0 2px 8px rgba(0, 0, 0, .12));
+    backdrop-filter: blur(6px);
+}
+.wb-zoom button {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 26px; height: 26px; padding: 0 .25rem;
+    border: none; border-radius: 999px; background: transparent;
+    color: var(--room-text); font-size: 1rem; font-weight: 700; line-height: 1;
+    cursor: pointer; transition: background var(--speed) var(--ease), color var(--speed) var(--ease);
+}
+.wb-zoom button:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 10%, transparent); }
+.wb-zoom button:disabled { opacity: .35; cursor: default; }
+.wb-zoom .wb-zoom-level {
+    min-width: 46px; font-size: .72rem; font-variant-numeric: tabular-nums;
+}
+.wb-zoom .wb-zoom-level.is-zoomed { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+@media (max-width: 560px) {
+    .wb-zoom { bottom: .4rem; left: .4rem; }
+    .wb-zoom .wb-zoom-level { min-width: 40px; }
+}
+/* Space / middle-drag panning gets a hand cursor, like every drawing app. */
+.wb-canvas-wrap.is-pan-ready .upper-canvas { cursor: grab; }
+.wb-canvas-wrap.is-panning .upper-canvas { cursor: grabbing; }
+.wb-canvas-wrap.is-panning .wb-cursor { display: none; }
 .wb-canvas-wrap { flex: 1; min-height: 0; min-width: 0; position: relative; overflow: hidden; background: var(--surface); border-radius: var(--radius); }
 /* Fabric.js stacks TWO canvases: .lower-canvas (the painted artwork) and
    .upper-canvas (a transparent interaction layer on top).  A `background`

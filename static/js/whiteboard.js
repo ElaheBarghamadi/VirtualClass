@@ -94,6 +94,12 @@ const MAX_QUEUED_OPS = 200;
 const MAX_OP_POINTS = 1200;
 const MAX_PAGES = 999;
 const MAX_UNDO = 60;
+/** Zoom is magnification of the reference surface: 1 = fit, 4 = 4× detail. */
+const MIN_ZOOM = 1;
+const MAX_ZOOM = 4;
+const ZOOM_STEP = 1.25;
+/** Wheel zoom: exp(-deltaY * WHEEL_ZOOM_RATE) — a trackpad tick is gentle. */
+const WHEEL_ZOOM_RATE = 0.0015;
 
 class WhiteboardImpl {
     constructor() {
@@ -132,6 +138,13 @@ class WhiteboardImpl {
         this._editor = null;          // inline text editor element
         this._editing = null;         // op being edited (text tool), if any
         this._undoRestore = new Map(); // opId → op to put back when it is undone
+        // view transform (zoom/pan). Coordinates everywhere else stay in
+        // reference units, so ink is never rewritten when the view changes.
+        this.zoom = MIN_ZOOM;
+        this.panX = 0;
+        this.panY = 0;
+        this._pan = null;            // active pan gesture
+        this._spaceDown = false;
     }
 
     init({ roomCode, identity, canDraw }) {
@@ -184,6 +197,7 @@ class WhiteboardImpl {
 
         this._bindToolbar();
         this._bindPages();
+        this._bindZoom();
         this._bindDrawing();
         this._bindKeys();
         this._connect(roomCode);
@@ -226,6 +240,164 @@ class WhiteboardImpl {
     /** CSS px → reference units (the canvas' internal coordinate system). */
     _sx() { return this._w() / REF_W; }
     _sy() { return this._h() / REF_H; }
+    /** Effective scale: fit-to-wrap × user zoom. */
+    _zsx() { return this._sx() * this.zoom; }
+    _zsy() { return this._sy() * this.zoom; }
+
+    // ------------------------------------------------------------ view (zoom)
+    /** Reference units → CSS px *inside the wrap* (laser dot, text editor). */
+    _worldToCss(p) {
+        return { x: p.x * this._zsx() + this.panX, y: p.y * this._zsy() + this.panY };
+    }
+
+    /**
+     * Keep the page covering the wrap: at 100 % there is nothing to pan, and
+     * when zoomed in the view may never wander off the page's edges. Without
+     * this a stray middle-drag leaves a blank board with no way back.
+     */
+    _clampPan() {
+        const w = this._w();
+        const h = this._h();
+        const z = this.zoom;
+        const minX = w - w * z;
+        const minY = h - h * z;
+        this.panX = Math.min(0, Math.max(minX, this.panX));
+        this.panY = Math.min(0, Math.max(minY, this.panY));
+        if (Math.abs(this.panX) < 0.5) this.panX = 0;
+        if (Math.abs(this.panY) < 0.5) this.panY = 0;
+    }
+
+    _applyTransform() {
+        if (!this.canvas) return;
+        const z = this.zoom;
+        this.canvas.setViewportTransform([this._sx() * z, 0, 0, this._sy() * z, this.panX, this.panY]);
+        this._applyCursorScale();
+        this._updateZoomUI();
+        this._render();
+    }
+
+    /** Zoom about a CSS point (default: the centre) so that point stays put. */
+    setZoom(next, cxCss, cyCss) {
+        if (!this.canvas) return;
+        const z = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Number(next) || MIN_ZOOM));
+        const cx = cxCss == null ? this._w() / 2 : cxCss;
+        const cy = cyCss == null ? this._h() / 2 : cyCss;
+        const zx = this._zsx();
+        const zy = this._zsy();
+        const worldX = zx ? (cx - this.panX) / zx : cx / (zx || 1);
+        const worldY = zy ? (cy - this.panY) / zy : cy / (zy || 1);
+        this.zoom = z;
+        this.panX = cx - worldX * this._zsx();
+        this.panY = cy - worldY * this._zsy();
+        this._clampPan();
+        this._applyTransform();
+    }
+
+    zoomBy(factor, cxCss, cyCss) { this.setZoom(this.zoom * factor, cxCss, cyCss); }
+
+    resetZoom() {
+        this.zoom = MIN_ZOOM;
+        this.panX = 0;
+        this.panY = 0;
+        this._applyTransform();
+    }
+
+    _updateZoomUI() {
+        const btn = document.getElementById('wb-zoom-reset');
+        const pct = Math.round(this.zoom * 100);
+        if (btn) {
+            btn.textContent = `٪${pct.toLocaleString('fa-IR')}`;
+            btn.classList.toggle('is-zoomed', this.zoom > MIN_ZOOM);
+        }
+        const out = document.getElementById('wb-zoom-out');
+        const inn = document.getElementById('wb-zoom-in');
+        if (out) out.disabled = this.zoom <= MIN_ZOOM + 0.001;
+        if (inn) inn.disabled = this.zoom >= MAX_ZOOM - 0.001;
+        this._wrapEl()?.classList.toggle('is-zoomed', this.zoom > MIN_ZOOM);
+    }
+
+    /** The floating pen ring is sized in field-of-view px, so scale it too. */
+    _applyCursorScale() {
+        const el = this._wrapEl()?.querySelector('.wb-cursor');
+        if (!el || el.classList.contains('hidden')) return;
+        const size = Math.max(6, this._toolWidth(this.tool) * this._zsy());
+        el.style.width = `${size}px`;
+        el.style.height = `${size}px`;
+    }
+
+    _bindZoom() {
+        const wrap = this._wrapEl();
+        if (!wrap || !this.canvas) return;
+        const surface = this.canvas.upperCanvasEl || this.canvas.wrapperEl;
+
+        // Wheel / trackpad: zoom at the pointer. Never while a stroke is in
+        // flight — a stray trackpad tick must not bend a line.
+        surface.addEventListener('wheel', (e) => {
+            if (!this._visible() || this.drawing) return;
+            e.preventDefault();
+            const rect = surface.getBoundingClientRect();
+            const factor = Math.exp(-(e.deltaY || 0) * WHEEL_ZOOM_RATE);
+            this.zoomBy(factor, e.clientX - rect.left, e.clientY - rect.top);
+        }, { passive: false });
+
+        // Middle-drag (or space + drag) pans. Captured on the wrap *before*
+        // fabric sees it, so the same gesture never starts a stroke.
+        wrap.addEventListener('pointerdown', (e) => {
+            if (!this._visible()) return;
+            const wantsPan = e.button === 1 || (e.button === 0 && this._spaceDown);
+            if (!wantsPan) return;
+            e.preventDefault();
+            e.stopPropagation();
+            this._pan = { id: e.pointerId, x: e.clientX, y: e.clientY, panX: this.panX, panY: this.panY };
+            wrap.classList.add('is-panning');
+            const move = (ev) => {
+                if (!this._pan || ev.pointerId !== this._pan.id) return;
+                this.panX = this._pan.panX + (ev.clientX - this._pan.x);
+                this.panY = this._pan.panY + (ev.clientY - this._pan.y);
+                this._clampPan();
+                this._applyTransform();
+            };
+            const up = (ev) => {
+                if (ev && ev.pointerId !== this._pan?.id) return;
+                window.removeEventListener('pointermove', move);
+                window.removeEventListener('pointerup', up);
+                window.removeEventListener('pointercancel', up);
+                this._pan = null;
+                wrap.classList.remove('is-panning');
+            };
+            window.addEventListener('pointermove', move);
+            window.addEventListener('pointerup', up);
+            window.addEventListener('pointercancel', up);
+        }, true);
+
+        document.getElementById('wb-zoom-in')?.addEventListener('click', () => this.zoomBy(ZOOM_STEP));
+        document.getElementById('wb-zoom-out')?.addEventListener('click', () => this.zoomBy(1 / ZOOM_STEP));
+        document.getElementById('wb-zoom-reset')?.addEventListener('click', () => this.resetZoom());
+
+        // Space is the "hand" modifier; released keys can be missed when focus
+        // leaves the page, so reset on blur too.
+        document.addEventListener('keydown', (e) => {
+            if (e.code === 'Space' && !this._isTyping(e.target)) {
+                this._spaceDown = true;
+                if (this._visible()) this._wrapEl()?.classList.add('is-pan-ready');
+            }
+        });
+        document.addEventListener('keyup', (e) => {
+            if (e.code === 'Space') {
+                this._spaceDown = false;
+                this._wrapEl()?.classList.remove('is-pan-ready');
+            }
+        });
+        window.addEventListener('blur', () => {
+            this._spaceDown = false;
+            this._wrapEl()?.classList.remove('is-pan-ready');
+        });
+    }
+
+    _isTyping(target) {
+        const t = target;
+        return Boolean(t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable));
+    }
 
     // ------------------------------------------------------------ transport
     _connect(roomCode) {
@@ -388,7 +560,7 @@ class WhiteboardImpl {
             this.width = Number(e.target.value);
             const cursor = this._wrapEl()?.querySelector('.wb-cursor');
             if (cursor) {
-                const size = Math.max(6, this._toolWidth(this.tool) * this._sy());
+                const size = Math.max(6, this._toolWidth(this.tool) * this._zsy());
                 cursor.style.width = `${size}px`;
                 cursor.style.height = `${size}px`;
             }
@@ -425,7 +597,7 @@ class WhiteboardImpl {
         const cursor = wrap?.querySelector('.wb-cursor');
         if (cursor) {
             cursor.classList.toggle('hidden', !['pen', 'highlighter', 'eraser'].includes(tool));
-            const size = Math.max(6, this._toolWidth(tool) * this._sy());
+            const size = Math.max(6, this._toolWidth(tool) * this._zsy());
             cursor.style.width = `${size}px`;
             cursor.style.height = `${size}px`;
             cursor.classList.toggle('is-eraser', tool === 'eraser');
@@ -483,8 +655,14 @@ class WhiteboardImpl {
         if (mod) {
             if (key === 'z' && !e.shiftKey) { e.preventDefault(); this.run('undo'); }
             else if (key === 'y' || (key === 'z' && e.shiftKey)) { e.preventDefault(); this.run('redo'); }
+            else if (key === '+' || key === '=') { e.preventDefault(); this.zoomBy(ZOOM_STEP); }
+            else if (key === '-' || key === '_') { e.preventDefault(); this.zoomBy(1 / ZOOM_STEP); }
+            else if (key === '0') { e.preventDefault(); this.resetZoom(); }   // browser zoom stays untouched
             return;
         }
+        if (key === '+' || key === '=') { e.preventDefault(); this.zoomBy(ZOOM_STEP); return; }
+        if (key === '-' || key === '_') { e.preventDefault(); this.zoomBy(1 / ZOOM_STEP); return; }
+        if (key === '0') { e.preventDefault(); this.resetZoom(); return; }
         const tools = { p: 'pen', h: 'highlighter', e: 'eraser', l: 'laser', t: 'text' };
         if (tools[key]) {
             e.preventDefault();
@@ -633,8 +811,30 @@ class WhiteboardImpl {
         const actx = art.getContext('2d');
         actx.save();
         actx.setTransform(outW / REF_W, 0, 0, outH / REF_H, 0, 0);
-        for (const obj of this.canvas.getObjects()) {
-            try { obj.render(actx); } catch (err) { console.warn('[whiteboard] export: object skipped', err); }
+        // The export is the whole page, so it must not depend on where the
+        // user happens to be looking: fabric skips objects outside the current
+        // viewport, which would silently crop a zoomed-in export.
+        const skipOffscreen = this.canvas.skipOffscreen;
+        const caching = [];
+        this.canvas.skipOffscreen = false;
+        try {
+            for (const obj of this.canvas.getObjects()) {
+                try {
+                    // Draw from the vector, not from fabric's bitmap cache: the
+                    // cache is sized from the canvas zoom (so a magnified board
+                    // exported after zooming came out clipped/faint) and it is
+                    // never as sharp as rendering at the export resolution.
+                    caching.push([obj, obj.objectCaching]);
+                    obj.objectCaching = false;
+                    obj.render(actx);
+                } catch (err) { console.warn('[whiteboard] export: object skipped', err); }
+            }
+        } finally {
+            this.canvas.skipOffscreen = skipOffscreen;
+            for (const [obj, flag] of caching) {
+                obj.objectCaching = flag;
+                obj.dirty = true;   // the next on-screen paint rebuilds its cache
+            }
         }
         actx.restore();
 
@@ -704,7 +904,7 @@ class WhiteboardImpl {
             el.classList.add('hidden');
             return;
         }
-        const size = Math.max(6, this._toolWidth(this.tool) * this._sy());
+        const size = Math.max(6, this._toolWidth(this.tool) * this._zsy());
         el.style.width = `${size}px`;
         el.style.height = `${size}px`;
         el.style.left = `${e.clientX - rect.left}px`;
@@ -774,8 +974,8 @@ class WhiteboardImpl {
         const last = this._lastDown;
         this._lastDown = { t: now, x: p.x, y: p.y };
         const doubleClick = !!last && now - last.t < 400
-            && Math.abs(p.x - last.x) * this._sx() < 8
-            && Math.abs(p.y - last.y) * this._sy() < 8;
+            && Math.abs(p.x - last.x) * this._zsx() < 8
+            && Math.abs(p.y - last.y) * this._zsy() < 8;
 
         if (this.tool === 'text' || (isLabel && doubleClick)) {
             // Clicking an existing label edits it in place; an empty spot
@@ -884,7 +1084,8 @@ class WhiteboardImpl {
             const p = this._pt(opt);
             const now = (window.performance || Date).now();
             // Feedback first (it is local and free), then maybe tell the room.
-            this._showLaser(p.x * this._sx(), p.y * this._sy());
+            const at = this._worldToCss(p);
+            this._showLaser(at.x, at.y);
             if (now - this._lastLaser < LASER_MIN_MS) return;
             this._lastLaser = now;
             if ((this.ws?.bufferedAmount || 0) > WS_BUFFER_LIMIT) return; // socket is behind: drop this frame
@@ -1061,12 +1262,13 @@ class WhiteboardImpl {
         // Measure first, then clamp: tapping near the right edge (or on a
         // phone) used to push the typing box outside the board.
         const bw = box.offsetWidth || 180;
-        const left = Math.max(2, Math.min(this._w() - bw - 2, point.x * this._sx()));
-        const top = Math.max(2, Math.min(this._h() - 24, point.y * this._sy()));
+        const at = this._worldToCss(point);
+        const left = Math.max(2, Math.min(this._w() - bw - 2, at.x));
+        const top = Math.max(2, Math.min(this._h() - 24, at.y));
         box.style.left = `${left}px`;
         box.style.top = `${top}px`;
         box.style.setProperty('--wb-text-color', replaceId ? (this._opById(replaceId)?.color || this.color) : this.color);
-        box.style.fontSize = `${Math.max(12, fontSizeWorld * this._sy())}px`;
+        box.style.fontSize = `${Math.max(12, fontSizeWorld * this._zsy())}px`;
         input.value = text;
         // Focus on the next task: the pointerdown that opened the editor is
         // still running, and the browser's default action for it moves focus
@@ -1301,11 +1503,14 @@ class WhiteboardImpl {
             if (!this._replaying && pg === this.page) {
                 let { x, y } = op;
                 if (op.norm) {
-                    // Normalised → this canvas' CSS pixels.
-                    x *= this._w(); y *= this._h();
+                    // Normalised → reference units → this view's CSS pixels.
+                    x *= REF_W; y *= REF_H;
+                } else {
+                    // (Legacy pixel ops are CSS pixels of the sender.)
+                    x *= REF_W / this._w(); y *= REF_H / this._h();
                 }
-                // (Legacy pixel ops are CSS pixels of the sender: use as-is.)
-                this._showLaser(x, y);
+                const at = this._worldToCss({ x, y });
+                this._showLaser(at.x, at.y);
             }
             return;
         }
@@ -1628,9 +1833,10 @@ class WhiteboardImpl {
         if (!changed) return;
         this.canvas.setDimensions({ width: rect.width, height: rect.height });
         // Nothing is re-drawn: the fixed reference surface is simply mapped
-        // onto the new size, so every stroke keeps its relative place.
-        this.canvas.setViewportTransform([rect.width / REF_W, 0, 0, rect.height / REF_H, 0, 0]);
-        this._render();
+        // onto the new size, so every stroke keeps its relative place. The
+        // user's zoom/pan is preserved (and re-clamped to the new size).
+        this._clampPan();
+        this._applyTransform();
     }
 
     setPermission(canDraw) {

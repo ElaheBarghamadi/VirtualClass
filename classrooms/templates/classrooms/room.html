@@ -321,6 +321,11 @@
                              eraser can really punch through to the page. -->
                         <div class="wb-bg" id="wb-bg-layer" aria-hidden="true"></div>
                         <canvas id="whiteboard-canvas" aria-label="تخته سفید"></canvas>
+                        <div class="wb-zoom" role="group" aria-label="بزرگ‌نمایی تخته">
+                            <button type="button" id="wb-zoom-out" title="کوچک‌نمایی (−)" aria-label="کوچک‌نمایی">−</button>
+                            <button type="button" id="wb-zoom-reset" class="wb-zoom-level" title="بزرگ‌نمایی ۱۰۰٪ — برای بازنشانی کلیک کنید (0)" aria-label="بازنشانی بزرگ‌نمایی">۱۰۰٪</button>
+                            <button type="button" id="wb-zoom-in" title="بزرگ‌نمایی (+)" aria-label="بزرگ‌نمایی">+</button>
+                        </div>
                         <div class="wb-text-edit hidden" id="wb-text-edit">
                             <input type="text" id="wb-text-input" maxlength="500" autocomplete="off" spellcheck="false" aria-label="متن روی تخته" placeholder="متن… (Enter برای ثبت، Esc برای لغو)">
                         </div>
