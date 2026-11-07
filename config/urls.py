@@ -1,8 +1,9 @@
 """Root URL configuration."""
 from django.conf import settings
-from django.conf.urls.static import static
 from django.contrib import admin
-from django.urls import include, path
+from django.urls import include, path, re_path
+
+from core.views import public_media
 
 urlpatterns = [
     path("admin/", admin.site.urls),
@@ -23,7 +24,13 @@ admin.site.site_title = "مدیریت کلاس آنلاین"
 admin.site.site_header = "پنل مدیریت کلاس آنلاین"
 admin.site.index_title = "مدیریت سامانه"
 
-# Development-only media serving (production: web server / object storage).
-if settings.DEBUG:
-    urlpatterns += static(f"{settings.MEDIA_URL.rstrip('/')}/classroom_logos/",
-                          document_root=settings.MEDIA_ROOT / "classroom_logos")
+# Public media (classroom logos) — served by the app in every environment, so
+# a deployment without nginx still shows them. Only the public subtree is
+# reachable: see core/views.py::public_media.
+urlpatterns += [
+    re_path(
+        rf"^{settings.MEDIA_URL.strip('/')}/(?P<path>.+)$",
+        public_media,
+        name="public_media",
+    ),
+]

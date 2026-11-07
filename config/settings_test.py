@@ -23,4 +23,8 @@ CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}
 CACHES = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}
 # Keep the suite fast: no password hashing, no emails to a real SMTP server.
 PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
+# The suite deliberately runs with DEBUG=false (that is what the test runner
+# does) and without Redis, so "production without a broker" is expected here —
+# core/tests_queue.py checks that warning directly instead.
+SILENCED_SYSTEM_CHECKS = ["deploy.W002"]
 EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"

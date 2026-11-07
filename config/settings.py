@@ -89,6 +89,11 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    # Serves /static/ straight from the app (compressed, cached), so a
+    # deployment needs no nginx rule — and static is never missing on a
+    # platform where you cannot edit one. Directly after SecurityMiddleware,
+    # before anything that needs the session.
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -399,10 +404,30 @@ PRUNE_CHAT_DAYS = int(os.environ.get("PRUNE_CHAT_DAYS", "0"))
 # ---------------------------------------------------------------------------
 STATIC_URL = "static/"
 STATICFILES_DIRS = [BASE_DIR / "static"]
-STATIC_ROOT = BASE_DIR / "staticfiles"
+# `collectstatic` target.  Overridable so a container can build the files into
+# the image and a bare-metal host can serve them from /var/www.
+STATIC_ROOT = Path(os.environ.get("STATIC_ROOT") or BASE_DIR / "staticfiles")
 
 MEDIA_URL = "media/"
-MEDIA_ROOT = BASE_DIR / "media"  # public assets only (e.g. classroom logos)
+# Public uploads (classroom logos).  On a container platform this MUST point at
+# a persistent volume, otherwise every deploy wipes the files.
+MEDIA_ROOT = Path(os.environ.get("MEDIA_ROOT") or BASE_DIR / "media")
+
+# WhiteNoise reads STATIC_ROOT; compressed variants are built by collectstatic.
+# Deliberately not the *manifest* storage: the templates already version their
+# URLs (config/assets.py), and a missing manifest would break a deployment
+# that forgot one collectstatic.
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {
+        "BACKEND": "whitenoise.storage.CompressedStaticFilesStorage",
+    },
+}
+# Static files rarely change and are served by the app: a short browser cache
+# keeps the room fast without pinning old CSS after a deploy.
+WHITENOISE_MAX_AGE = int(os.environ.get("WHITENOISE_MAX_AGE", "0" if DEBUG else "3600"))
+# `runserver` already serves static; collecting on every boot would be noise.
+WHITENOISE_AUTOREFRESH = DEBUG
 # Must be outside MEDIA_ROOT and any web-server static mapping.
 PRIVATE_MEDIA_ROOT = Path(os.environ.get("PRIVATE_MEDIA_ROOT") or BASE_DIR / "private_media").resolve()
 if (PRIVATE_MEDIA_ROOT == MEDIA_ROOT.resolve()

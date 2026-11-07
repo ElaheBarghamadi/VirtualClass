@@ -8,6 +8,7 @@ channels-redis>=4.2,<5
 redis>=6.1,<7           # channel layer + cache + Celery broker/result backend
                         # (kombu's Redis transport in celery 5.7 needs >=6.1)
 daphne>=4.1,<5          # ASGI server used by `runserver` for WebSockets
+whitenoise>=6.7,<7      # serves /static/ from the app itself (no nginx needed)
 
 # Background jobs — `celery -A config worker` / `beat`
 celery[redis]>=5.4,<6

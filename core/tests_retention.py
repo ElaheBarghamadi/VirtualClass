@@ -136,3 +136,60 @@ class PruneHistoryTaskTests(TestCase):
         report = prune_history(board_days=0, chat_days=0)
         self.assertTrue(ChatMessage.objects.filter(id=old.id).exists())
         self.assertIn("nothing to do", report)
+
+
+class HousekeepingCommandTests(TestCase):
+    """`manage.py housekeeping` = the three periodic jobs, for cron/platforms
+    that have no Celery beat."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="hk_owner", password="x")
+        self.classroom = create_classroom(self.owner, title="Housekeeping")
+
+    def test_it_runs_every_job(self):
+        from classrooms.models import ClassroomMember, ClassroomSession
+        from classrooms.services import join_classroom_guest
+
+        session = ClassroomSession.objects.create(
+            classroom=self.classroom, host=self.owner,
+            status=ClassroomSession.Status.LIVE,
+            started_at=timezone.now() - timedelta(hours=20),
+        )
+        guest = join_classroom_guest(self.classroom, "مهمان قدیمی")
+        ClassroomMember.objects.filter(pk=guest.pk).update(
+            is_active=False, joined_at=timezone.now() - timedelta(days=30),
+        )
+        old_message = ChatMessage.objects.create(
+            classroom=self.classroom, sender=self.owner, sender_name="o", message="m",
+        )
+        ChatMessage.objects.filter(id=old_message.id).update(
+            created_at=timezone.now() - timedelta(days=400)
+        )
+        out = StringIO()
+        call_command("housekeeping", "--chat-days", "180", stdout=out)
+        text = out.getvalue()
+
+        session.refresh_from_db()
+        self.assertEqual(session.status, ClassroomSession.Status.ENDED)
+        self.assertFalse(ClassroomMember.objects.filter(pk=guest.pk).exists())
+        self.assertFalse(ChatMessage.objects.filter(id=old_message.id).exists())
+        self.assertIn("sessions closed: 1", text)
+        self.assertIn("guest memberships deleted: 1", text)
+        self.assertIn("housekeeping done", text)
+
+    def test_disabled_windows_change_nothing(self):
+        from classrooms.models import ClassroomSession
+
+        session = ClassroomSession.objects.create(
+            classroom=self.classroom, host=self.owner,
+            status=ClassroomSession.Status.LIVE,
+            started_at=timezone.now() - timedelta(hours=99),
+        )
+        out = StringIO()
+        call_command(
+            "housekeeping", "--stale-hours", "0", "--guest-days", "0",
+            "--board-days", "0", "--chat-days", "0", stdout=out,
+        )
+        session.refresh_from_db()
+        self.assertEqual(session.status, ClassroomSession.Status.LIVE)
+        self.assertIn("nothing to do", out.getvalue())
