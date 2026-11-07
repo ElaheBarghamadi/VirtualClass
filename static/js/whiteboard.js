@@ -1845,7 +1845,16 @@ class WhiteboardImpl {
         // locked board (and a revoked one keeps drawing tools).
         this.canDraw = canDraw;
         this._syncDrawGate();
-        if (this.canvas) this.canvas.selection = canDraw;
+        // Never switch object selection on: the board has no movable objects,
+        // and fabric draws its group-selection marquee — a translucent blue
+        // rectangle — on every drag that starts on empty paper, i.e. right on
+        // top of the stroke the user is writing (bug report: «a purple
+        // rectangle appears and grows while I write»).
+        if (this.canvas) {
+            this.canvas.selection = false;
+            this.canvas._groupSelector = null;
+            this.canvas.discardActiveObject();
+        }
         this._syncEditState();
     }
 }
