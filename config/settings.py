@@ -100,6 +100,11 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    # Last: only ever fires when a WebSocket handshake reaches Django, which
+    # means the process is WSGI (under ASGI, asgi.py routes /ws/ to Channels
+    # before the HTTP stack). Answering 426 turns a flood of puzzling
+    # "Not Found: /ws/…" lines into one actionable error.
+    "core.middleware.ASGIOnlyWebSocketsMiddleware",
 ]
 
 ROOT_URLCONF = "config.urls"

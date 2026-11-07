@@ -26,6 +26,34 @@
 
 ---
 
+## ۰.۱) لاگِ سالم چه شکلی است؟
+
+هر دیپلوی (با ایمیجِ ما) با این دو خط شروع می‌شود — و اگر شروع نشود، همان‌جا مشکل را پیدا کرده‌اید:
+
+```text
+entrypoint: role=web port=8000
+deploy_check: server: asgi (daphne) | debug: False | database: postgresql | static: 179 files in /app/staticfiles
+```
+
+| در لاگ می‌بینید | یعنی | کار |
+|---|---|---|
+| `Starting gunicorn …` یا `Booting worker with pid` | پلتفرم به‌جای `CMD` ایمیج، **پروسهٔ WSGI خودش** را بالا آورده. گونیکورن WebSocket ندارد؛ `/ws/` هیچ‌وقت وصل نمی‌شود | Build settings را روی **Dockerfile** (`deploy/weblines/Dockerfile`) بگذارید. اگر فیلد «Start command» دارید، خالی‌اش کنید یا `/usr/local/bin/entrypoint` بگذارید |
+| `Not Found: /ws/classroom/…` پشت سر هم | همان مورد بالا: درخواست به جنگوی WSGI می‌رسد و هیچ مسیری برای `/ws/` نیست | همان. با کد فعلی، جای این ۴۰۴ها یک خط `websocket_under_wsgi` و پاسخ `426` می‌بینید |
+| `WSGI app sent body bytes on a no-body response` | هم گونیکورن (روی `HEAD` استاتیک) | با `daphne` خودبه‌خود می‌رود |
+| `no such table: accounts_user` | مایگریشن اجرا نشده **و/یا** دیتابیس SQLite داخل کانتینر که با هر دیپلوی پاک می‌شود | یک PostgreSQL لینک کنید (`DATABASE_URL`). `deploy_check` می‌نویسد `database: sqlite3` یا `postgresql` |
+| خط `deploy_check:` در لاگ نیست | entrypoint اجرا نشده، پس نه مایگریشن شده نه استاتیک ساخته شده | Start command را به `/usr/local/bin/entrypoint` برگردانید |
+| `static: 0 files in /app/staticfiles` | `collectstatic` در build اجرا نشده | مسیر Dockerfile را چک کنید و **FULL BUILD** بزنید |
+| `ImproperlyConfigured: Unsupported DATABASE_URL` | `DATABASE_URL` روی Redis/سرویس دیگری افتاده | متغیر را دستی روی DSN درست postgres بگذارید |
+
+برای دیدن همین گزارش داخل کانتینر (Shell پنل):
+
+```bash
+python manage.py deploy_check          # جدول کامل: دیتابیس، مسیرها، تعداد استاتیک، Redis
+python manage.py deploy_check --brief  # همان یک خط بالا
+```
+
+---
+
 ## الف) ابر وب‌لاینز
 
 پلتفرم بر پایهٔ کانتینر است و **build خودکارش فقط Node.js را می‌شناسد**؛ برای پایتون باید صریحاً Dockerfile بدهید. برای همین یک Dockerfile آمادهٔ **فقط-دیپلوی** در ریپو هست:
@@ -77,6 +105,8 @@ REDIS_URL = redis://:<رمز>@<میزبان داخلی>:6379/0
 | **Port** | **`8000`** (باید با `EXPOSE`/`PORT` ایمیج یکی باشد) |
 | **Build settings** | `Dockerfile` و مسیر: **`deploy/weblines/Dockerfile`** |
 | **Link database** | PostgreSQL (بند ۲) |
+
+> اگر پنل فیلد «Start command» / «Run command» دارد، آن را خالی بگذارید یا `/usr/local/bin/entrypoint` بنویسید؛ هر مقدار دیگری (مثل `gunicorn …`) و تمام کارِ entrypoint — مایگریشن، پورت، ASGI — را دور می‌زند. فایل `Procfile` در ریشهٔ ریپو هم همان دستور درست را برای پلتفرم‌هایی دارد که Procfile می‌خوانند.
 
 سپس **CREATE & DEPLOY**. build حدوداً چند دقیقه است (اگر `INSTALL_LIBREOFFICE=1` بخواهید، بیشتر).
 
@@ -268,12 +298,13 @@ curl -I https://class.example.com/static/css/main.css   # 200 + Content-Type: te
 | علامت | علت محتمل | کار |
 |---|---|---|
 | صفحهٔ سفید / `502` | پورت اپ با پورت پنل یکی نیست، یا پروسه بالا نیامده | لاگ کانتینر را ببینید؛ `Port=8000` و `daphne -p 8000` را هم‌خوان کنید |
+| لاگ `gunicorn` نشان می‌دهد (نه `daphne`) | پلتفرم `CMD` ایمیج را نادیده گرفته | بخش ۰.۱ — Start command را `/usr/local/bin/entrypoint` کنید |
 | `DisallowedHost` | دامنه در `ALLOWED_HOSTS` نیست | دامنهٔ دقیق را اضافه و redeploy کنید |
 | هر POST → `403 CSRF` | پروکسی HTTPS را تمام می‌کند ولی اپ آن را نمی‌داند | `TRUST_X_FORWARDED_PROTO=true` و `CSRF_TRUSTED_ORIGINS=https://دامنه` |
 | چت/تخته وصل نمی‌شود، بقیه کار می‌کند | WebSocket در لبهٔ شبکه پشتیبانی/آپگرید نمی‌شود | تست `curl` بخش ۷؛ اگر ۱۰۱ نشد، پلتفرم WS را پشتیبانی نمی‌کند → VPS |
 | ورود می‌شود ولی کاربر بعد از رفرش خارج است | چند پروسه بدون Redis | `REDIS_URL` را ست کنید (channel layer مشترک) |
 | آپلودها بعد از هر دیپلوی گم می‌شوند | کانتینر بی‌حالت است | volume روی `/data` + `MEDIA_ROOT=/data/media` |
-| `no such table: …` | مایگریشن اجرا نشده | `python manage.py migrate` (در ایمیج خودکار است) |
+| `no such table: …` | مایگریشن اجرا نشده یا دیتابیس SQLite موقتِ کانتینر | `DATABASE_URL` را لینک کنید؛ بعد `python manage.py migrate` (در ایمیج خودکار است). `deploy_check` موتور دیتابیس را نشان می‌دهد |
 | تبدیل Office کار نمی‌کند | LibreOffice نصب نیست | `INSTALL_LIBREOFFICE=1` (build مجدد) یا نصب بستهٔ سیستمی |
 | `ImproperlyConfigured: Unsupported DATABASE_URL` | `DATABASE_URL` روی Redis/MySQL ناشناخته افتاده | همان متغیر را با DSN درست postgres پر کنید |
 | صف کار نمی‌کند ولی اپ بالا است | Worker خاموش است یا `REDIS_URL` متفاوت | لاگ Worker؛ همان `REDIS_URL` در هر سه سرویس |

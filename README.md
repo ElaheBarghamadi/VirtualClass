@@ -840,6 +840,19 @@ python tests_e2e/run_e2e.py --room <CODE>
 | **سرور مجازی** (nginx + Daphne + systemd) | کنترل کامل، WebSocket تضمینی | [`deploy/nginx/virtualclass.conf`](deploy/nginx/virtualclass.conf) · [`deploy/systemd/`](deploy/systemd) |
 | **ابر وب‌لاینز** (PaaS) | بدون کار سرور، دامنه/SSL/دیتابیس از پنل | [`deploy/weblines/Dockerfile`](deploy/weblines/Dockerfile) · [`.env.production.example`](.env.production.example) |
 
+### علائم یک استقرار اشتباه (قبل از اینکه دنبال باگ بگردید)
+
+```bash
+python manage.py deploy_check        # دیتابیس، مسیرها، تعداد استاتیک، Redis، نوع سرور
+```
+
+| در لاگ می‌بینید | یعنی |
+|---|---|
+| `Starting gunicorn …` | پروسهٔ **WSGI** بالا آمده؛ `/ws/` (چت/تخته/اتاق) هیچ‌وقت وصل نمی‌شود — باید `daphne config.asgi:application` باشد |
+| `Not Found: /ws/classroom/…` تکرارشونده | همان مورد بالا (کد فعلی جای ۴۰۴ خط `websocket_under_wsgi` و پاسخ `426` می‌دهد) |
+| `no such table: accounts_user` | مایگریشن اجرا نشده یا SQLite موقتِ کانتینر (`deploy_check` → `database: sqlite3`) |
+| `static: 0 files` | `collectstatic` اجرا نشده |
+
 ### استاتیک در پروداکشن: چرا یک بار باید `collectstatic` بزنید
 
 با `DEBUG=false` جنگو دیگر فایل‌های `/static/` را سرو نمی‌کند و `daphne` هم این کار را نمی‌کند. این پروژه **WhiteNoise** دارد (در `MIDDLEWARE`، بلافاصله بعد از `SecurityMiddleware`)، پس کافی است فایل‌ها یک بار در `STATIC_ROOT` جمع شوند و خودِ اپ آن‌ها را با gzip و هدر کش سرو می‌کند — **بدون nginx**:

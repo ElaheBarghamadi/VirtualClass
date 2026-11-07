@@ -15,6 +15,10 @@ PORT="${PORT:-8000}"
 
 echo "entrypoint: role=${ROLE} port=${PORT}"
 
+# One line of evidence at the top of every deployment log: engine, static
+# files, broker. Never fatal — a diagnostic must not be the reason a boot fails.
+python manage.py deploy_check --brief 2>&1 | tail -1 || true
+
 # Data directories live on a mounted volume; Django writes into them but does
 # not create their roots for you.
 mkdir -p "${MEDIA_ROOT:-/app/media}" "${PRIVATE_MEDIA_ROOT:-/app/private_media}" 2>/dev/null || true

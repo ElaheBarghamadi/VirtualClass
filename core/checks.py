@@ -6,6 +6,8 @@ production without a real SECRET_KEY; these checks warn about the risky
 """
 from __future__ import annotations
 
+import os
+
 from django.conf import settings
 from django.core.checks import Warning as CheckWarning
 from django.core.checks import register
@@ -46,5 +48,33 @@ def queue_configuration(app_configs, **kwargs) -> list[CheckWarning]:
             hint="Run Redis and set REDIS_URL=redis://127.0.0.1:6379/0, then "
                  "start `celery -A config worker`. See README §۳.",
             id="deploy.W002",
+        ))
+    return issues
+
+
+@register()
+def database_is_not_ephemeral(app_configs, **kwargs) -> list[CheckWarning]:
+    """Warn when a production deployment keeps its data in the container.
+
+    A container's filesystem is replaced on every deploy (and on every restart
+    on most platforms), so SQLite there means the schema and every user are
+    gone the next morning — visible as ``no such table: accounts_user`` the
+    first time someone registers.
+    """
+    issues: list[CheckWarning] = []
+    if settings.DEBUG:
+        return issues
+    engine = settings.DATABASES.get("default", {}).get("ENGINE", "")
+    allow_sqlite = os.environ.get("ALLOW_SQLITE_IN_PRODUCTION", "").lower() in {
+        "1", "true", "yes", "on",
+    }
+    if engine.endswith("sqlite3") and not allow_sqlite:
+        issues.append(CheckWarning(
+            "DEBUG=false with the SQLite database: a container's filesystem is "
+            "wiped on redeploy, so accounts and classrooms disappear.",
+            hint="Link a PostgreSQL database (DATABASE_URL=postgres://…) or set "
+                 "ALLOW_SQLITE_IN_PRODUCTION=true on a single long-lived host. "
+                 "See deploy/DEPLOY.md.",
+            id="deploy.W003",
         ))
     return issues
