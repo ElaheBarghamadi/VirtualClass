@@ -484,13 +484,28 @@ cp .env.example .env
 | `DEBUG` | توسعه `true`، پروداکشن `false` |
 | `DATABASE_URL` | خالی = SQLite؛ پروداکشن `postgres://user:pass@host:5432/db` |
 | `REDIS_URL` | خالی = لایهٔ InMemory؛ پروداکشن `redis://127.0.0.1:6379/0` |
-| `ALLOWED_HOSTS` / `CSRF_TRUSTED_ORIGINS` | هاست‌ها و originهای مورد اعتماد |
+| `ALLOWED_HOSTS` / `CSRF_TRUSTED_ORIGINS` | هاست‌ها و originهای مورد اعتماد. پیش‌فرضِ توسعه `*` است: هر آدرس و پورتی جواب می‌دهد (پیش‌نمایش، IP لن، گوشی هم‌شبکه، تونل). با `DEBUG=false` مقدار `*` عمداً در بوت **رد می‌شود** و باید نام دامنهٔ واقعی را بنویسید |
 | `MEDIA_SERVER_URL` / `MEDIA_SERVER_API_KEY` / `MEDIA_SERVER_API_SECRET` | تنظیمات LiveKit — خالی بگذارید تا بدون مدیا اجرا شود |
 | `WEBRTC_ICE_SERVERS` | لیست JSON سرورهای STUN/TURN برای حالت mesh (مثال: coturn) |
 | `MESH_MAX_PARTICIPANTS` | آستانهٔ هشدار به میزبان در حالت mesh (پیش‌فرض ۱۲) |
 | `UPLOAD_RATE_LIMIT` / `UPLOAD_RATE_WINDOW` | محدودیت نرخ بارگذاری هر کاربر (پیش‌فرض ۱۰ بار در ۶۰۰ ثانیه) |
 | `MEDIA_TOKEN_TTL_MINUTES` | عمر توکن رسانه (پیش‌فرض ۱۲۰؛ کلاینت پس از قطع، توکن تازه می‌گیرد) |
 | `MAX_UPLOAD_MB` | حداکثر حجم آپلود (پیش‌فرض ۲۵) |
+
+### آدرس‌هایی که جواب می‌دهند
+
+در حالت توسعه (`DEBUG=true`) هیچ تنظیم اضافه‌ای برای هاست لازم نیست — `ALLOWED_HOSTS` پیش‌فرض `*` است، پس این‌ها همه کار می‌کنند:
+
+```text
+http://localhost:8000/            http://127.0.0.1:8000/
+http://192.168.1.20:8000/         (IP لن — با runserver 0.0.0.0:8000)
+http://192.168.1.20:8000/class/<code>/room/
+https://<port>-<sandbox>.e2b.app/ (پیش‌نمایش/پروکسی)
+```
+
+پروکسی پیش‌نمایش (و بیشتر پروکسی‌های محلی) TLS را تمام می‌کند و درخواست را با HTTP ساده فوروارد می‌کند؛ برای همین در حالت توسعه هدر `X-Forwarded-Proto` مورد اعتماد است (`TRUST_X_FORWARDED_PROTO=true`، پیش‌فرض با `DEBUG`). بدون آن، Django همهٔ درخواست‌ها را `http` می‌بیند، `Origin: https://…` مرورگر با هاست جور درنمی‌آید و **هر POST — از جمله ورود — با ۴۰۳ CSRF رد می‌شود**. با `DEBUG=false` این اعتماد پیش‌فرض خاموش است و فقط با `TRUST_X_FORWARDED_PROTO=true` روشن می‌شود.
+
+اگر POSTها از دامنه‌ای *جز* همان هاست رد شدند، آن origin را به `CSRF_TRUSTED_ORIGINS` اضافه کنید (پشتیبانی از wildcard فقط به شکل `https://*.example.com` است، نه `https://*`). در پروداکشن `ALLOWED_HOSTS=*` بوت را با `ImproperlyConfigured` متوقف می‌کند؛ نام دامنهٔ واقعی را بنویسید.
 
 ### مایگریشن، سوپریوزر، اجرا
 

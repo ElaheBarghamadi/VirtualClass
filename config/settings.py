@@ -39,7 +39,20 @@ SECRET_KEY = os.environ.get(
     _DEV_SECRET_KEY,
 )
 DEBUG = env_bool("DEBUG", "true")
-ALLOWED_HOSTS = env_list("ALLOWED_HOSTS", "localhost,127.0.0.1,[::1]")
+# Development default: accept any Host header, so the app answers on
+# localhost, a LAN IP, a phone on the same network and preview/proxy hosts
+# (host names such as ``<port>-<sandbox>.e2b.app``) without extra setup.
+# This is deliberately tied to DEBUG: with DEBUG off the default is strict and
+# a literal ``*`` is refused by the guard right below.
+ALLOWED_HOSTS = env_list("ALLOWED_HOSTS", "*" if DEBUG else "localhost,127.0.0.1,[::1]")
+
+if not DEBUG and "*" in ALLOWED_HOSTS:
+    # Fail fast: Host-header validation is what keeps password-reset links and
+    # cache keys bound to *our* domain.  A wildcard silently disables that.
+    raise ImproperlyConfigured(
+        "ALLOWED_HOSTS=* is only allowed while DEBUG=true. With DEBUG=false "
+        "list the real host names (e.g. ALLOWED_HOSTS=class.example.com)."
+    )
 
 if not DEBUG and SECRET_KEY == _DEV_SECRET_KEY:
     # Fail fast: a production deployment must never run on the public
@@ -322,6 +335,15 @@ CSRF_COOKIE_HTTPONLY = False  # must remain readable by JS templates (Django def
 SESSION_COOKIE_SAMESITE = "Lax"
 CSRF_COOKIE_SAMESITE = "Lax"
 CSRF_TRUSTED_ORIGINS = env_list("CSRF_TRUSTED_ORIGINS", "")
+# Preview/sandbox proxies (and most local reverse proxies) terminate TLS and
+# forward plain HTTP.  Without this, Django considers every request insecure,
+# so the browser's ``Origin: https://<host>`` never matches and every form POST
+# — login first of all — dies with 403 CSRF.  Only trusted by default while
+# DEBUG is on: in production the operator opts in explicitly, because a
+# spoofable header must never decide whether a request was secure.
+if env_bool("TRUST_X_FORWARDED_PROTO", "true" if DEBUG else "false"):
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
 if not DEBUG:
     SESSION_COOKIE_SECURE = env_bool("SESSION_COOKIE_SECURE", "true")
     CSRF_COOKIE_SECURE = env_bool("CSRF_COOKIE_SECURE", "true")
