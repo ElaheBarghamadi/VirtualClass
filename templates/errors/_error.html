@@ -1,0 +1,71 @@
+{% load static %}<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="color-scheme" content="light dark">
+    <meta name="robots" content="noindex">
+    <title>{% block title %}خطا{% endblock %} · کلاس آنلاین</title>
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+    <link href="https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css" rel="stylesheet">
+    {# Self-contained on purpose: these pages must render even when the app is
+       the thing that is broken (no base.html, no context processors). #}
+    <link rel="stylesheet" href="{% static 'css/tokens.css' %}?v={{ ASSET_V }}">
+    <link rel="stylesheet" href="{% static 'css/errors.css' %}?v={{ ASSET_V }}">
+</head>
+<body class="err-page" data-scene="{% block scene %}lost{% endblock %}">
+<div class="err-aurora" aria-hidden="true"><i></i><i></i><i></i></div>
+<div class="err-floor" aria-hidden="true"></div>
+
+<main class="err-shell">
+    <section class="err-art" aria-hidden="true">
+        <span class="err-art-glow"></span>
+        <span class="err-rings"><i></i><i></i><i></i></span>
+        <span class="err-orbit"><i></i><i></i><i></i></span>
+        <span class="err-code">{% block code %}404{% endblock %}</span>
+        <span class="err-badge">
+            <svg viewBox="0 0 24 24">{% block glyph %}{% endblock %}</svg>
+        </span>
+        <span class="err-sparks"><i></i><i></i><i></i><i></i><i></i></span>
+    </section>
+
+    <section class="err-copy">
+        <p class="err-kicker">{% block kicker %}خطا{% endblock %}</p>
+        <h1 class="err-title">{% block heading %}{% endblock %}</h1>
+        <p class="err-text">{% block message %}{% endblock %}</p>
+
+        <div class="err-actions">
+            <a class="err-btn err-btn--primary" href="/">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11.2 12 4.4l8 6.8"/><path d="M6.4 9.8V19a1 1 0 0 0 1 1h9.2a1 1 0 0 0 1-1V9.8"/></svg>
+                صفحهٔ اصلی
+            </a>
+            <button type="button" class="err-btn" data-back>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5 4 10l5 5"/><path d="M4 10h9.5a5.5 5.5 0 0 1 0 11H11"/></svg>
+                صفحهٔ قبل
+            </button>
+            {% if signed_in %}
+                <a class="err-btn err-btn--ghost" href="/dashboard/">داشبورد</a>
+            {% else %}
+                <a class="err-btn err-btn--ghost" href="/accounts/login/">ورود</a>
+            {% endif %}
+        </div>
+
+        {% block hint %}{% endblock %}
+    </section>
+</main>
+
+<script>
+(function () {
+    var back = document.querySelector('[data-back]');
+    if (!back) return;
+    // history.back() leaves the page instantly; if there is no history (a
+    // bookmark, a link opened in a new tab) it does nothing at all, so the
+    // button silently "did not work". Fall back to the home page.
+    back.addEventListener('click', function () {
+        if (window.history.length > 1) window.history.back();
+        else window.location.href = '/';
+    });
+})();
+</script>
+</body>
+</html>

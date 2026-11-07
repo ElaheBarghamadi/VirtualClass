@@ -1,0 +1,21 @@
+{% extends "errors/_error.html" %}
+
+{% block title %}درخواست نامعتبر{% endblock %}
+{% block scene %}lost{% endblock %}
+{% block code %}400{% endblock %}
+
+{% block glyph %}<path d="M12 3.2 21 19.4H3Z"/><path d="M12 9.6v4M12 16.4v.2"/>{% endblock %}
+
+{% block kicker %}درخواست ناخوانا{% endblock %}
+{% block heading %}این درخواست درست نبود{% endblock %}
+{% block message %}
+    مرورگر چیزی فرستاده که سرور نمی‌تواند بفهمد — معمولاً بعد از عقب‌رفتن در تاریخچه
+    یا ارسال دوبارهٔ یک فرم قدیمی. یک بار صفحه را از نو باز کنید.
+{% endblock %}
+
+{% block hint %}
+    <p class="err-foot">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 1 2.4 5.7"/><path d="M4 19v-4h4"/></svg>
+        اگر تکرار شد، کوکی‌های این سایت را پاک کنید و دوباره وارد شوید.
+    </p>
+{% endblock %}

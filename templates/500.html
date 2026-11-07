@@ -1,0 +1,21 @@
+{% extends "errors/_error.html" %}
+
+{% block title %}خطای سرور{% endblock %}
+{% block scene %}broken{% endblock %}
+{% block code %}500{% endblock %}
+
+{% block glyph %}<path d="M13.2 3.4 6 13.6h5l-.9 7 7.4-10.4h-5.1Z"/>{% endblock %}
+
+{% block kicker %}از سمت ما{% endblock %}
+{% block heading %}یک چیزی شکست{% endblock %}
+{% block message %}
+    خطای پیش‌بینی‌نشده‌ای رخ داد و درخواست شما کامل نشد. کارهایی که ذخیره شده‌اند از دست
+    نمی‌روند؛ چند لحظه بعد دوباره تلاش کنید.
+{% endblock %}
+
+{% block hint %}
+    <p class="err-foot">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.4 5.4 6.2v5.2c0 3.9 2.7 7.2 6.6 8.4 3.9-1.2 6.6-4.5 6.6-8.4V6.2Z"/><path d="m9.2 12 2 2 3.6-3.8"/></svg>
+        این خطا در سرور ثبت شد. اگر ادامه داشت، گزارش مشکل بدهید.
+    </p>
+{% endblock %}

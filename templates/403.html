@@ -1,18 +1,21 @@
-{% extends "base.html" %}
+{% extends "errors/_error.html" %}
+
 {% block title %}دسترسی غیرمجاز{% endblock %}
-{% block content %}
-<div class="card status-page">
-    <div class="status-icon" aria-hidden="true"><svg class="status-icon-ic" aria-hidden="true"><use href="#g-lock"/></svg></div>
-    <h1>دسترسی غیرمجاز</h1>
-    <p class="muted">
-        شما اجازهٔ انجام این عملیات یا مشاهدهٔ این صفحه را ندارید.
-        اگر فکر می‌کنید اشتباهی رخ داده، با میزبان کلاس تماس بگیرید.
+{% block scene %}locked{% endblock %}
+{% block code %}403{% endblock %}
+
+{% block glyph %}<rect x="4.4" y="10.4" width="15.2" height="9.6" rx="2.6"/><path d="M8.2 10.4V7.8a3.8 3.8 0 0 1 7.6 0v2.6"/><path d="M12 14.4v2.2"/>{% endblock %}
+
+{% block kicker %}در بسته است{% endblock %}
+{% block heading %}اجازهٔ ورود ندارید{% endblock %}
+{% block message %}
+    این صفحه یا این عملیات برای حساب شما مجاز نیست. اگر فکر می‌کنید اشتباهی رخ داده،
+    با میزبان کلاس تماس بگیرید تا دسترسی‌تان را بررسی کند.
+{% endblock %}
+
+{% block hint %}
+    <p class="err-foot">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.4 5.4 6.2v5.2c0 3.9 2.7 7.2 6.6 8.4 3.9-1.2 6.6-4.5 6.6-8.4V6.2Z"/></svg>
+        اگر با چند حساب وارد شده‌اید، ممکن است حساب دیگری فعال باشد.
     </p>
-    <div class="status-actions">
-        <a class="btn btn-primary" href="{% url 'home' %}">صفحهٔ اصلی</a>
-        {% if user.is_authenticated %}
-            <a class="btn btn-ghost" href="{% url 'dashboard' %}">داشبورد</a>
-        {% endif %}
-    </div>
-</div>
 {% endblock %}

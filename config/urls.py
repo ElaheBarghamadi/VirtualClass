@@ -3,6 +3,7 @@ from django.conf import settings
 from django.contrib import admin
 from django.urls import include, path, re_path
 
+from core.error_views import preview as preview_error
 from core.views import public_media
 
 urlpatterns = [
@@ -19,6 +20,17 @@ urlpatterns = [
     # JSON API
     path("api/", include("core.api_urls")),
 ]
+
+if settings.DEBUG:
+    # Design preview of the error pages: /__errors__/404/ … Only in DEBUG.
+    urlpatterns += [path("__errors__/<int:code>/", preview_error, name="preview_error")]
+
+# Error pages: our own handlers so the 404/403/400/500 scene renders without
+# context processors (a 500 must survive a broken database or cache).
+handler400 = "core.error_views.bad_request"
+handler403 = "core.error_views.permission_denied"
+handler404 = "core.error_views.page_not_found"
+handler500 = "core.error_views.server_error"
 
 admin.site.site_title = "مدیریت کلاس آنلاین"
 admin.site.site_header = "پنل مدیریت کلاس آنلاین"

@@ -2475,3 +2475,63 @@ body.class-is-over .room-side { pointer-events: none; }
     .reaction-bubble { animation: none; opacity: 0; }
     .caption-line, .caption-line.is-leaving { animation: none; }
 }
+
+/* ==========================================================================
+   Responsive pass — the room on a phone, measured in pixels we can spare
+   ========================================================================== */
+/* 100vw includes the vertical scrollbar and iOS's safe area; 100% does not. */
+.room { width: 100%; }
+
+@media (max-width: 700px) {
+    /* The header used to wrap onto a second line (title, role badge, LIVE,
+       lock, connection pill, clock), which cost the video ~44px of height on
+       a 667px-tall phone. Keep one row: title, connection, clock. */
+    .room-header {
+        flex-wrap: nowrap;
+        gap: .35rem .5rem;
+        padding: .5rem .65rem;
+        padding-top: max(.5rem, env(safe-area-inset-top, 0px));
+    }
+    .room-title { flex-wrap: nowrap; gap: .35rem; min-width: 0; flex: 1 1 auto; }
+    .room-title h1 { font-size: .9rem; }
+    /* The role is repeated in the participants panel; the lock badge stays —
+       it is a security state, not a label. */
+    .room-title > #role-badge { display: none; }
+    .room-logo { width: 26px; height: 26px; flex: none; }
+    .live-dot { font-size: .68rem; }
+
+    .room-header-actions { gap: .4rem; flex: none; }
+    .conn-pill { padding: .24rem .55rem; font-size: .72rem; }
+    .conn-pill .conn-text { max-width: 24vw; overflow: hidden; text-overflow: ellipsis; }
+    .room-clock { font-size: .82rem; }
+
+    /* breathing room for the stage and the floating control bar */
+    .room-main {
+        padding: .5rem .5rem
+                 calc(var(--bar-h) + 1rem + env(safe-area-inset-bottom, 0px));
+    }
+    .tiles { gap: .4rem; }
+    .stage-toolbar { top: .45rem; }
+}
+
+@media (max-width: 420px) {
+    .room-clock { display: none; }
+    .room-title h1 { max-width: 44vw; }
+}
+
+/* The drawer: a heavier sheet, with a grabber so it reads as a panel rather
+   than as a second page sliding in. */
+@media (max-width: 900px) {
+    .room-side { width: min(360px, 92vw); overscroll-behavior: contain; }
+    .room-side::before {
+        content: "";
+        position: absolute;
+        top: .5rem; left: 0; right: 0;
+        width: 42px; height: 4px;
+        margin-inline: auto;
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--room-muted) 42%, transparent);
+        pointer-events: none;
+    }
+    .side-tabs { padding-top: 1.05rem; }
+}

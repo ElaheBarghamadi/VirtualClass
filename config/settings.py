@@ -456,6 +456,9 @@ CSRF_TRUSTED_ORIGINS = env_list("CSRF_TRUSTED_ORIGINS", "")
 if env_bool("TRUST_X_FORWARDED_PROTO", "true" if DEBUG else "false"):
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
+# CSRF rejections render the same designed page as every other 403.
+CSRF_FAILURE_VIEW = "core.error_views.csrf_failure"
+
 if not DEBUG:
     SESSION_COOKIE_SECURE = env_bool("SESSION_COOKIE_SECURE", "true")
     CSRF_COOKIE_SECURE = env_bool("CSRF_COOKIE_SECURE", "true")
