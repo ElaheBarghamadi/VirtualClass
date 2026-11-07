@@ -1,0 +1,23 @@
+# Build context for deploy/weblines/Dockerfile.
+# Secrets, local state and anything that is rebuilt inside the image.
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+!.env.production.example
+.venv
+venv
+env
+__pycache__
+*.py[cod]
+*.sqlite3
+*.log
+staticfiles
+media
+private_media
+celerybeat-schedule*
+docs
+.github
+node_modules
+.DS_Store

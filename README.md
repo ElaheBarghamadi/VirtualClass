@@ -673,7 +673,10 @@ online_classroom/
 ├── core/queue.py            # dispatch(): صف‌کردن یا اجرای درون‌خطی یک تسک
 ├── core/tasks.py            # کارهای دوره‌ای (prune_history)
 ├── scripts/dev.py           # بالا آوردن وب + Redis + worker با یک دستور
+├── deploy/DEPLOY.md         # راهنمای استقرار (وب‌لاینز + سرور مجازی)
 ├── deploy/systemd/          # واحدهای web / worker / beat برای پروداکشن
+├── deploy/nginx/            # نمونهٔ nginx با WebSocket و آپلود بزرگ
+├── deploy/weblines/         # Dockerfile فقط-دیپلوی + entrypoint نقش‌محور
 ├── requirements.txt / .env.example / .gitignore
 └── README.md
 ```
@@ -828,7 +831,27 @@ python tests_e2e/run_e2e.py --room <CODE>
 
 ---
 
-## ۸. نکتهٔ استقرار پروداکشن
+## ۸. استقرار در پروداکشن
+
+برای اجرای لوکال **هیچ‌چیز** لازم نیست؛ این بخش فقط برای سرور است. راهنمای کامل گام‌به‌گام (دو مسیر: ابر وب‌لاینز و سرور مجازی، با عیب‌یابی و چک‌لیست) در **[`deploy/DEPLOY.md`](deploy/DEPLOY.md)** است. کوتاه‌ترین مسیر:
+
+| مسیر | واست | فایل‌های آماده |
+|---|---|---|
+| **سرور مجازی** (nginx + Daphne + systemd) | کنترل کامل، WebSocket تضمینی | [`deploy/nginx/virtualclass.conf`](deploy/nginx/virtualclass.conf) · [`deploy/systemd/`](deploy/systemd) |
+| **ابر وب‌لاینز** (PaaS) | بدون کار سرور، دامنه/SSL/دیتابیس از پنل | [`deploy/weblines/Dockerfile`](deploy/weblines/Dockerfile) · [`.env.production.example`](.env.production.example) |
+
+### استاتیک در پروداکشن: چرا یک بار باید `collectstatic` بزنید
+
+با `DEBUG=false` جنگو دیگر فایل‌های `/static/` را سرو نمی‌کند و `daphne` هم این کار را نمی‌کند. این پروژه **WhiteNoise** دارد (در `MIDDLEWARE`، بلافاصله بعد از `SecurityMiddleware`)، پس کافی است فایل‌ها یک بار در `STATIC_ROOT` جمع شوند و خودِ اپ آن‌ها را با gzip و هدر کش سرو می‌کند — **بدون nginx**:
+
+```bash
+python manage.py collectstatic --noinput     # → STATIC_ROOT (پیش‌فرض: ./staticfiles)
+curl -I https://<دامنه>/static/css/main.css # باید 200 + Content-Type: text/css بدهد
+```
+
+`STATIC_ROOT`، `MEDIA_ROOT` و `PRIVATE_MEDIA_ROOT` همه با متغیر محیطی قابل تغییرند (برای volume در کانتینر: `MEDIA_ROOT=/data/media`). اگر nginx دارید می‌توانید `location /static/` را هم نگاشت کنید؛ سریع‌تر است ولی **اجباری نیست**.
+
+### سه پروسه روی سرور مجازی
 
 سه پروسهٔ مستقل، همه از همان `.env` و همان virtualenv. هیچ سرویس کانتینری لازم نیست؛ کافی است سه واحد systemd بسازید (نمونه‌ها در [`deploy/systemd/`](deploy/systemd)):
 
@@ -849,9 +872,11 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now virtualclass-web virtualclass-worker virtualclass-beat
 ```
 
-چک‌لیست: `DEBUG=false` · `SECRET_KEY` تصادفی · `DATABASE_URL` روی PostgreSQL · `REDIS_URL` روی Redis (**بدونش** worker بالا نمی‌آید و کارها درون‌خطی اجرا می‌شوند) · `ALLOWED_HOSTS` و `CSRF_TRUSTED_ORIGINS` · `MEDIA_SERVER_*` (Django باید برای حذف/بی‌صدا کردن/بستن اتاق به API همان آدرس دسترسی داشته باشد) · پشت reverse proxy با پشتیبانی WebSocket (Nginx با `Upgrade`/`Connection` headers) · `MEDIA_ROOT` روی volume یا object storage · `python manage.py collectstatic` · نصب LibreOffice اگر تبدیل Office→PDF می‌خواهید.
+چک‌لیست: `DEBUG=false` · `SECRET_KEY` تصادفی · `DATABASE_URL` روی PostgreSQL · `REDIS_URL` روی Redis (**بدونش** worker بالا نمی‌آید و کارها درون‌خطی اجرا می‌شوند) · `ALLOWED_HOSTS` و `CSRF_TRUSTED_ORIGINS` · `TRUST_X_FORWARDED_PROTO=true` پشت پروکسی TLS · `MEDIA_SERVER_*` (Django باید برای حذف/بی‌صدا کردن/بستن اتاق به API همان آدرس دسترسی داشته باشد) · پشت reverse proxy با پشتیبانی WebSocket (Nginx با `Upgrade`/`Connection` headers) · `MEDIA_ROOT` و `PRIVATE_MEDIA_ROOT` روی volume یا object storage · `python manage.py collectstatic` (WhiteNoise سرو می‌کند) · نصب LibreOffice اگر تبدیل Office→PDF می‌خواهید.
 
 > ترتیب اجرا مهم است: Redis → worker/beat → وب. اگر Redis در دسترس نباشد، ارسال تسک با یک هشدار در لاگ به اجرای درون‌خطی برمی‌گردد و درخواست کاربر نمی‌شکند (`core/queue.py`)، ولی تبدیل فایل تا اتمامش درخواست آپلود را نگه می‌دارد.
+
+> نگهداری دوره‌ای در یک دستور: `python manage.py housekeeping` — همان سه کار beat (بستن جلسهٔ رهاشده، حذف مهمان قدیمی، `prune_history`) را یک‌جا اجرا می‌کند؛ برای پلتفرم‌هایی که beat ندارند در cron بگذاریدش. پنجره‌ها از `STALE_SESSION_HOURS`/`GUEST_RETENTION_DAYS`/`PRUNE_BOARD_DAYS`/`PRUNE_CHAT_DAYS` می‌آید و با `--stale-hours`/`--guest-days`/`--board-days`/`--chat-days` قابل تغییر است.
 
 ### نگهداری داده (retention)
 
