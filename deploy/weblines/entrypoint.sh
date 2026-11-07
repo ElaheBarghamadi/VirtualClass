@@ -30,8 +30,14 @@ case "$ROLE" in
       echo "entrypoint: applying migrations"
       python manage.py migrate --noinput
     fi
-    # Static files are baked into the image by `collectstatic` at build time
-    # and served by WhiteNoise, so there is no nginx rule to get wrong.
+    # Static files were baked into the image at build time and WhiteNoise
+    # serves them from there. If the operator pointed STATIC_ROOT somewhere
+    # else (e.g. a volume) the baked copy is ignored, so collect again — an
+    # empty STATIC_ROOT is the classic "the page has no CSS" deploy.
+    if [ -n "${STATIC_ROOT:-}" ]; then
+      echo "entrypoint: STATIC_ROOT=$STATIC_ROOT — collecting static files"
+      python manage.py collectstatic --noinput || true
+    fi
     exec daphne -b 0.0.0.0 -p "$PORT" --proxy-headers config.asgi:application
     ;;
   worker)
