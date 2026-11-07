@@ -273,8 +273,16 @@ DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "no-reply@classroom.lo
 if REDIS_URL:
     CACHES = {
         "default": {
-            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            # Same Redis, but a cache that degrades instead of raising: a
+            # restarted Redis must not 500 the login page (see core/cache.py).
+            "BACKEND": "core.cache.ResilientRedisCache",
             "LOCATION": REDIS_URL,
+            "OPTIONS": {
+                # Fail fast: a dead Redis should cost milliseconds, not a
+                # 20-second hang on every request that touches the cache.
+                "socket_connect_timeout": 1,
+                "socket_timeout": 2,
+            },
         }
     }
 else:
@@ -344,8 +352,11 @@ CELERY_ENABLE_UTC = True
 # Fail fast instead of hanging a request when the broker is unreachable;
 # ``core.queue.dispatch`` then runs the job inline.
 CELERY_BROKER_CONNECTION_TIMEOUT = int(
-    os.environ.get("CELERY_BROKER_CONNECTION_TIMEOUT", "4")
+    os.environ.get("CELERY_BROKER_CONNECTION_TIMEOUT", "2")
 )
+# One failed publish is enough: retrying hides the outage behind a slow
+# request.  ``core.queue.dispatch`` runs the job in-process instead.
+CELERY_TASK_PUBLISH_RETRY = False
 CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
 # A stuck conversion or an infinite loop in a job is killed, not left forever.
 CELERY_TASK_TIME_LIMIT = int(os.environ.get("CELERY_TASK_TIME_LIMIT", "600"))

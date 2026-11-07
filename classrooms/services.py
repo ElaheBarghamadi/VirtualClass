@@ -521,19 +521,39 @@ def active_members(classroom: Classroom) -> list[ClassroomMember]:
 # ---------------------------------------------------------------------------
 # Broadcasting helpers
 # ---------------------------------------------------------------------------
+def _send(group: str, message: dict, room_code: str) -> None:
+    """Push one message to a channel group, never failing the caller.
+
+    Delivery is a courtesy, not the operation: the database already changed
+    (a file was uploaded, a member was muted, a session ended).  If Redis/the
+    channel layer is unreachable, the action must still report success — the
+    clients pick the new state up when the layer is back (reconnect + snapshot
+    — see ``classrooms/consumers.py``).  Swallowing this silently would hide
+    real bugs, so it is logged.
+    """
+    try:
+        async_to_sync(get_channel_layer().group_send)(group, message)
+    except Exception:  # noqa: BLE001 — a socket layer must not 500 a host action
+        logger.exception("broadcast_failed", extra={"group": group, "room_code": room_code})
+
+
 def broadcast(room_code: str, payload: dict) -> None:
     """Send an event to everyone connected to the classroom."""
     payload = {**payload, "type": payload.get("type", "event")}
-    async_to_sync(get_channel_layer().group_send)(
-        classroom_group(room_code), {"type": "classroom.event", "payload": payload}
+    _send(
+        classroom_group(room_code),
+        {"type": "classroom.event", "payload": payload},
+        room_code,
     )
 
 
 def notify_member(room_code: str, member: ClassroomMember, payload: dict) -> None:
     """Send a targeted notification to a single participant (user or guest)."""
     payload = {**payload, "type": payload.get("type", "notification")}
-    async_to_sync(get_channel_layer().group_send)(
-        member_group(room_code, member.id), {"type": "classroom.notification", "payload": payload}
+    _send(
+        member_group(room_code, member.id),
+        {"type": "classroom.notification", "payload": payload},
+        room_code,
     )
 
 

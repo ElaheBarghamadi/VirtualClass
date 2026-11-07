@@ -94,7 +94,8 @@ class RedisSettingsTests(SimpleTestCase):
         self.assertEqual(probe["broker"], url)
         self.assertEqual(probe["backend"], url)
         self.assertEqual(probe["layer"], "channels_redis.core.RedisChannelLayer")
-        self.assertEqual(probe["cache"], "django.core.cache.backends.redis.RedisCache")
+        # Redis-backed, but the resilient flavour: a Redis restart must not 500.
+        self.assertEqual(probe["cache"], "core.cache.ResilientRedisCache")
 
     def test_eager_can_be_forced_even_with_redis(self):
         probe = _settings_probe({
@@ -146,13 +147,50 @@ class DispatchTests(SimpleTestCase):
         task.apply.assert_not_called()
 
     def test_broker_outage_degrades_to_inline_execution(self):
-        from core.queue import dispatch
+        from core.queue import dispatch, reset_broker_health
 
+        reset_broker_health()
         task = self._fake_task(eager=False, publish=ConnectionError("redis is down"))
         with self.assertLogs("core.queue", level="WARNING"):
             queued = dispatch(task, 42)
         self.assertFalse(queued)
         task.apply.assert_called_once_with(args=(42,), kwargs={})
+        reset_broker_health()
+
+    def test_a_known_bad_broker_is_not_retried_on_every_request(self):
+        """After one failure the next jobs skip the connection attempt."""
+        from core.queue import dispatch, reset_broker_health
+
+        reset_broker_health()
+        failing = self._fake_task(eager=False, publish=ConnectionError("down"))
+        with self.assertLogs("core.queue", level="WARNING"):
+            dispatch(failing, 1)
+
+        # same broker, new job: no publish attempt at all, no waiting, no log
+        healthy_but_skipped = self._fake_task(eager=False)
+        queued = dispatch(healthy_but_skipped, 2)
+        self.assertFalse(queued)
+        healthy_but_skipped.apply_async.assert_not_called()
+        healthy_but_skipped.apply.assert_called_once_with(args=(2,), kwargs={})
+
+        # ... until the cooldown expires, when queueing is tried again
+        reset_broker_health()
+        retried = self._fake_task(eager=False)
+        self.assertTrue(dispatch(retried, 3))
+        retried.apply_async.assert_called_once()
+
+    def test_the_cooldown_expires_on_its_own(self):
+        import core.queue as queue
+
+        queue.reset_broker_health()
+        task = self._fake_task(eager=False, publish=ConnectionError("down"))
+        with self.assertLogs("core.queue", level="WARNING"):
+            queue.dispatch(task, 1)
+        self.assertTrue(queue.broker_is_cooling_down())
+
+        # pretend BROKER_COOLDOWN seconds have passed
+        queue._broker_down_until = 0.0
+        self.assertFalse(queue.broker_is_cooling_down())
 
 
 class DeployCheckTests(SimpleTestCase):
