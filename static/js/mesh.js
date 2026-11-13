@@ -560,9 +560,11 @@ class MeshMedia {
             height: { ideal: tier.height },
             frameRate: { ideal: tier.fps, max: 30 },
             aspectRatio: { ideal: 16 / 9 },
-            // Keep the picture stable instead of re-framing wildly on a laptop
-            // camera; ignored by browsers that do not know it.
-            resizeMode: 'crop-and-scale',
+            // Never let the browser re-frame the shot to fit a constraint:
+            // `crop-and-scale` produced a slightly different crop per device,
+            // so the same camera looked like two different pictures.  Scaling
+            // down is still allowed (that is what the tier table is for).
+            resizeMode: 'none',
         };
         return deviceId ? { ...base, deviceId: { exact: deviceId } } : base;
     }

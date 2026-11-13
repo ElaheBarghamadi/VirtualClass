@@ -17,6 +17,9 @@ import {
     paintMic, paintTile, resetMic, startLevelLoop,
 } from './meter.js';
 
+/** Camera capture shared by both engines: 16:9, 720p, 30 fps. */
+const CAMERA_CAPTURE = { resolution: { width: 1280, height: 720, frameRate: 30 }, aspectRatio: 16 / 9 };
+
 const LivekitClient = window.LivekitClient;
 
 /** Fullscreen a tile's video (falls back to the tile itself). */
@@ -591,7 +594,14 @@ class LivekitMedia {
                 : 'شما اجازهٔ استفاده از دوربین را ندارید.', 'warning');
             return false;
         }
-        await this.room.localParticipant.setCameraEnabled(!this.cameraOn);
+        const turningOn = !this.cameraOn;
+        // Ask for a 16:9 capture on every device.  Without this, a phone and a
+        // laptop hand back frames with different aspect ratios and the same
+        // room looks like two different shots.
+        await this.room.localParticipant.setCameraEnabled(
+            turningOn,
+            turningOn ? CAMERA_CAPTURE : undefined,
+        );
         if (this.cameraOn) this._addTile(this.room.localParticipant);
         this._syncLocalUI();
         return true;

@@ -333,6 +333,53 @@ class PresentationEndTests(SimpleTestCase):
         self.assertIn(".file-present.is-stop", self.css)
 
 
+class CameraFrameTests(SimpleTestCase):
+    """The camera picture is one shape everywhere.
+
+    Everyone watches the same lesson from a phone, a tablet and a laptop.  A
+    tile that fills whatever grid cell it lands in, with ``object-fit: cover``,
+    crops a different part of the frame on each of them — a phone cut the sides,
+    a laptop cut the top — so the same person looked like two different shots.
+    """
+
+    def setUp(self):
+        self.css = read(CSS / "room.css")
+        self.media = read(JS / "media.js")
+        self.mesh = read(JS / "mesh.js")
+
+    def test_the_tile_letterboxes_instead_of_cropping(self):
+        video = rule(self.css, ".tile video")
+        self.assertIn("object-fit: contain;", video)
+        self.assertNotIn("object-fit: cover;", video)
+        # the band is a deliberate matte, not a hole in the card
+        self.assertIn("background: color-mix(", video)
+
+    def test_the_floating_camera_matches_the_grid_frame(self):
+        pip = rule(self.css, ".cam-pip video")
+        self.assertIn("aspect-ratio: 16 / 9;", pip)
+        self.assertIn("object-fit: contain;", pip)
+        self.assertNotIn("object-fit: cover;", pip)
+
+    def test_both_engines_capture_a_16_by_9_frame(self):
+        # LiveKit: an explicit 720p 16:9 capture, not whatever the OS defaults to
+        self.assertIn(
+            "const CAMERA_CAPTURE = { resolution: { width: 1280, height: 720, frameRate: 30 }, aspectRatio: 16 / 9 };",
+            self.media,
+        )
+        self.assertIn("setCameraEnabled(", self.media)
+        self.assertIn("turningOn ? CAMERA_CAPTURE : undefined", self.media)
+        # mesh: the same requirement, and no browser-side re-framing
+        video = rule(self.mesh, "    _videoConstraints(deviceId)")
+        self.assertIn("aspectRatio: { ideal: 16 / 9 },", video)
+        self.assertIn("resizeMode: 'none',", video)
+        # the comment explains the old behaviour; no *code* may use it
+        self.assertNotIn("resizeMode: 'crop-and-scale'", video)
+
+    def test_remote_video_elements_are_autoplaying_and_inline(self):
+        self.assertIn("video.autoplay = true;", self.mesh)
+        self.assertIn("video.playsInline = true;", self.mesh)
+
+
 class MicMeterTests(SimpleTestCase):
     """The meter must answer "am I being heard?" without shaking the page."""
 
@@ -482,7 +529,8 @@ class MediaTuningTests(SimpleTestCase):
         self.assertIn("width: { ideal: tier.width },", video)
         self.assertIn("height: { ideal: tier.height },", video)
         self.assertIn("frameRate: { ideal: tier.fps, max: 30 },", video)
-        self.assertIn("resizeMode: 'crop-and-scale',", video)
+        self.assertIn("resizeMode: 'none',", video)
+        self.assertIn("aspectRatio: { ideal: 16 / 9 },", video)
         audio = rule(self.src, "    _audioConstraints(deviceId)")
         self.assertIn("channelCount: 1,", audio)
         self.assertIn("sampleRate: 48000,", audio)
