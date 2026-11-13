@@ -1090,6 +1090,20 @@ function handleEvent(data) {
                     });
                 }
             }
+            if (data.settings?.chat_private !== undefined) {
+                // The owner flipped who reads student messages; the server
+                // already enforces it per message, this is the visible part.
+                const wasPrivate = ChatClient.mode === 'private';
+                ChatClient.setMode(data.settings.chat_private);
+                if (!PRIVILEGED && wasPrivate !== data.settings.chat_private) {
+                    toast(
+                        data.settings.chat_private
+                            ? 'از این پس پیام‌های شما فقط برای معلم دیده می‌شود.'
+                            : 'از این پس پیام‌های شما برای همهٔ کلاس دیده می‌شود.',
+                        'info',
+                    );
+                }
+            }
             if (updates.length) {
                 presence.scheduleRender();
             } else if (data.settings?.chat_disabled !== undefined) {
@@ -1243,6 +1257,7 @@ function handleNotification(data) {
 
 function applyClassroomState(state) {
     if (state.is_locked !== undefined) showLockBadge(state.is_locked);
+    if (typeof state.chat_private === 'boolean') ChatClient.setMode(state.chat_private);
     ChatClient.setSendEnabled(
         Boolean(PERMISSIONS.can_send_messages) || PRIVILEGED,
         state.chat_disabled ? 'گفتگو توسط میزبان قطع شده است.' : 'شما اجازهٔ ارسال پیام ندارید.',
@@ -2939,6 +2954,7 @@ if (SHOW_CHAT) {
 // Sockets come before anything optional: the roster, the participant count and
 // the media signal channel all depend on the presence socket.  Nothing below
 // is allowed to keep it from connecting.
+ChatClient.api = api;      // the owner's chat-mode switch posts through it
 safe('chat', () => ChatClient.connect(ROOM_CODE, IDENTITY, PRIVILEGED));
 safe('presence', () => presence.connect());
 // Instant recovery on network/tab wake instead of waiting out the backoff.

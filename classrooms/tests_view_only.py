@@ -243,13 +243,24 @@ class ViewOnlyRoomTests(TestCase):
         # ... but the tab itself stays: a student still answers live questions.
         self.assertContains(response, "سوالات")
 
-    def test_only_hosts_get_the_private_chat_switch(self):
+    def test_only_hosts_get_the_chat_mode_switch(self):
         owner_page = self._room(self.owner)
-        self.assertContains(owner_page, 'data-channel="private"')
+        self.assertContains(owner_page, 'id="chat-mode-toggle"')
         student_page = self._room(self.student_user)
-        self.assertNotContains(student_page, 'data-channel="private"')
-        # the composer is shared by everybody
+        self.assertNotContains(student_page, 'id="chat-mode-toggle"')
+        # ... but everybody is told what the current mode means, and everybody
+        # shares the same composer: privacy is the owner's decision.
+        self.assertContains(student_page, 'id="chat-mode-text"')
         self.assertContains(student_page, 'id="chat-form"')
+        self.assertNotContains(student_page, 'data-channel')
+
+    def test_the_mode_statement_follows_the_setting(self):
+        self.classroom.chat_private = True
+        self.classroom.save(update_fields=["chat_private"])
+        response = self._room(self.student_user)
+        self.assertContains(response, 'data-chat-private="1"')
+        self.assertContains(response, "پیام شما فقط برای معلم دیده می‌شود.")
+        self.assertTrue(response.context["classroom"].chat_private)
 
 
 class BoardOpenWebSocketTests(TransactionTestCase):

@@ -42,6 +42,7 @@ class ClassroomAdmin(admin.ModelAdmin):
                     "allow_student_whiteboard",
                     "allow_file_upload",
                     "chat_disabled",
+                    "chat_private",
                 )
             },
         ),

@@ -373,12 +373,6 @@ body.full-page .messages {
 /* Phones: the five essentials (mic, camera, chat, people, hand) have to fit
    without a swipe — chat in particular must never start off-screen. */
 @media (max-width: 620px) {
-    .room-controls { padding: 4px; }
-    .room-controls .ctrl-btn { width: 42px; height: 42px; }
-    .room-controls .ctrl-sep { margin: 0 1px; }
-}
-
-@media (max-width: 620px) {
     .stage-toolbar { gap: 0; padding: .2rem; border-radius: var(--radius-pill); }
     .stage-toolbar .lb-label { display: none; }
     .layout-btn { padding: .38rem .45rem; }
@@ -516,20 +510,40 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
 .tile-fs .ic { width: 15px; height: 15px; }
 .tile-icons .t-mic.off { opacity: .35; }
 
-/* live speaking-level bar at the bottom of every tile (real audio RMS,
-   set by mesh.js/media.js via the --lvl custom property) */
+/* Live level: three soft bars in the corner of a tile, driven by the real
+   audio samples (mesh.js sets --lvl on the tile).  It replaced a full-width
+   green bar glued to the bottom edge — same information, far quieter. */
 .tile-level {
-    position: absolute; bottom: 0; left: 0; right: 0; height: 4px;
-    background: color-mix(in srgb, var(--background) 35%, transparent);
+    position: absolute;
+    inset-block-start: 8px;
+    inset-inline-start: 8px;
+    display: inline-flex;
+    align-items: flex-end;
+    gap: 2px;
+    height: 13px;
+    padding: 2px 3px;
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--room-surface) 55%, transparent);
+    -webkit-backdrop-filter: blur(4px);
+    backdrop-filter: blur(4px);
     pointer-events: none;
+    opacity: 0;
+    transition: opacity .2s var(--ease);
 }
-.tile-level::after {
-    content: ''; display: block; height: 100%;
-    width: calc(var(--lvl, 0) * 100%);
-    background: var(--success);
-    border-radius: 0 2px 2px 0;
-    transition: width .12s linear;
+.tile.speaking .tile-level { opacity: 1; }
+.tile-level i {
+    display: block;
+    width: 2.5px;
+    height: 9px;
+    border-radius: 2px;
+    background: color-mix(in srgb, var(--accent) 62%, var(--room-surface));
+    transform-origin: bottom;
+    transition: transform .1s linear;
 }
+.tile-level i:nth-child(1) { transform: scaleY(calc(.2 + var(--lvl, 0) * 1.05)); }
+.tile-level i:nth-child(2) { transform: scaleY(calc(.34 + var(--lvl, 0) * .82)); }
+.tile-level i:nth-child(3) { transform: scaleY(calc(.14 + var(--lvl, 0) * 1.2)); }
+.tile.speaking .tile-level i { background: color-mix(in srgb, var(--accent) 78%, var(--room-surface)); }
 
 .stage-empty {
     position: absolute; inset: 0; display: flex; flex-direction: column;
@@ -1208,47 +1222,70 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
     stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round;
 }
 
-/* ---- channels: عمومی / خصوصی ---- */
-.chat-channels {
+/* ---- chat mode: the owner decides who reads student messages ---- */
+.chat-mode-bar {
     flex: none;
     display: flex;
-    gap: .3rem;
+    align-items: center;
+    gap: .5rem;
     margin: .55rem .65rem 0;
-    padding: .22rem;
+    padding: .3rem .45rem .3rem .6rem;
     border-radius: var(--radius-pill);
-    background: color-mix(in srgb, var(--room-muted) 9%, var(--room-surface));
-    border: 1px solid color-mix(in srgb, var(--room-border) 80%, transparent);
+    background: color-mix(in srgb, var(--room-muted) 7%, var(--room-surface));
+    border: 1px solid color-mix(in srgb, var(--room-border) 75%, transparent);
 }
-.chat-channel {
-    flex: 1 1 0;
+.chat-mode-label {
     display: inline-flex;
     align-items: center;
-    justify-content: center;
     gap: .35rem;
-    padding: .34rem .5rem;
-    border: 0;
-    border-radius: var(--radius-pill);
-    background: none;
-    color: var(--room-muted);
-    font: inherit;
-    font-size: .76rem;
-    font-weight: 700;
-    cursor: pointer;
-    transition: background var(--speed) var(--ease), color var(--speed) var(--ease), box-shadow var(--speed) var(--ease);
+    min-width: 0;
+    font-size: .72rem;
+    font-weight: 650;
+    color: color-mix(in srgb, var(--room-muted) 60%, var(--room-text));
 }
-.chat-channel .ic {
-    width: 14px; height: 14px;
+.chat-mode-label > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.chat-mode-label .ic {
+    width: 14px; height: 14px; flex: none;
     fill: none; stroke: currentColor; stroke-width: 1.8;
     stroke-linecap: round; stroke-linejoin: round;
 }
-.chat-channel:hover { color: var(--room-text); }
-.chat-channel.active {
-    background: var(--room-surface);
-    color: color-mix(in srgb, var(--accent) 55%, var(--room-text));
-    box-shadow: var(--shadow-xs);
+.chat-mode-bar.is-private { background: var(--warning-soft); border-color: color-mix(in srgb, var(--warning) 24%, transparent); }
+.chat-mode-bar.is-private .chat-mode-label { color: color-mix(in srgb, var(--warning) 55%, var(--room-text)); }
+
+/* A soft pill switch: pastel when on, quiet when off, no heavy shadow. */
+.chat-mode-switch {
+    flex: none;
+    margin-inline-start: auto;
+    position: relative;
+    width: 34px;
+    height: 19px;
+    padding: 0;
+    border: 0;
+    border-radius: var(--radius-pill);
+    background: color-mix(in srgb, var(--room-muted) 22%, transparent);
+    cursor: pointer;
+    transition: background var(--speed) var(--ease);
 }
-.chat-channel:focus-visible { outline: none; box-shadow: var(--focus-ring); }
-.chat-channel[data-channel="private"].active { color: color-mix(in srgb, var(--warning) 55%, var(--room-text)); }
+.chat-mode-switch:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.chat-mode-switch[aria-checked="true"] {
+    background: color-mix(in srgb, var(--warning) 62%, var(--room-surface));
+}
+.chat-mode-knob {
+    position: absolute;
+    inset-block-start: 2px;
+    inset-inline-start: 2px;
+    width: 15px;
+    height: 15px;
+    border-radius: 50%;
+    background: var(--room-surface);
+    transition: transform var(--speed) var(--ease);
+}
+.chat-mode-switch[aria-checked="true"] .chat-mode-knob { transform: translateX(-15px); }
+:dir(ltr) .chat-mode-switch[aria-checked="true"] .chat-mode-knob { transform: translateX(15px); }
 
 .chat-channel-hint {
     flex: none;
@@ -1262,7 +1299,7 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
 
 /* A private conversation tints the whole panel very slightly — a quiet cue
    that whatever is typed here does not reach the class. */
-.side-panel-chat.chat-private-view .chat-scroll {
+.side-panel-chat.is-private-view .chat-scroll {
     background: color-mix(in srgb, var(--warning) 4%, transparent);
 }
 
@@ -1652,10 +1689,10 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
 .file-list .file-name { text-decoration: none; }
 .file-list .file-info:hover .file-name { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
 
-/* ---------- control bar (floating, minimal) ---------- */
-/* NOTE: left:50% + translateX(-50%) would cap the shrink-to-fit width at
-   ~half the viewport (abs-pos available space), forcing an extra wrap row
-   on phones — anchor with left/right:0 + width:max-content instead. */
+/* ---------- control bar (minimal, calm, pastel) ---------- */
+/* The bar is deliberately quiet: a flat surface, one hairline, no drop shadow,
+   no glass blur.  Colour is reserved for *state* (mic on, hand up, recording),
+   and even then it is a pastel wash rather than a saturated slab. */
 .room-controls {
     /* The bar used to float *over* the video, pinned to the bottom edge of the
        stage: on a phone it covered the teacher's slide, and the drawer's
@@ -1664,24 +1701,30 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
        layout — always on screen, never on top of the content.
        Buttons never wrap: the rail scrolls sideways, so the bar is exactly one
        row tall on every screen size. */
-    --glass: color-mix(in srgb, var(--room-surface) 96%, transparent);
-    --glass-line: color-mix(in srgb, var(--room-border) 82%, transparent);
+    /* kept as tokens: the edge fades and the «⋯» menu read them */
+    --glass: var(--room-surface);
+    --glass-line: color-mix(in srgb, var(--room-border) 72%, transparent);
+    /* pastel state colours — a wash of the hue, never a solid block */
+    --p-accent: color-mix(in srgb, var(--accent) 14%, var(--room-surface));
+    --p-accent-ink: color-mix(in srgb, var(--accent) 72%, var(--room-text));
+    --p-mint: color-mix(in srgb, var(--success) 15%, var(--room-surface));
+    --p-mint-ink: color-mix(in srgb, var(--success) 62%, var(--room-text));
+    --p-amber: color-mix(in srgb, var(--warning) 16%, var(--room-surface));
+    --p-amber-ink: color-mix(in srgb, var(--warning) 68%, var(--room-text));
+    --p-rose: color-mix(in srgb, var(--danger) 13%, var(--room-surface));
+    --p-rose-ink: color-mix(in srgb, var(--danger) 62%, var(--room-text));
     position: relative;
     flex: none;
     width: 100%;
     max-width: none;
     margin: 0;
     z-index: 30;
-    padding: 4px;
+    padding: 5px 6px;
     background: var(--glass);
-    -webkit-backdrop-filter: blur(12px) saturate(140%);
-    backdrop-filter: blur(12px) saturate(140%);
     border: 1px solid var(--glass-line);
-    border-radius: 16px;
-    box-shadow:
-        0 1px 0 0 color-mix(in srgb, #fff 22%, transparent) inset,
-        0 1px 2px rgba(0, 0, 0, .08);
-    display: flex; align-items: center; gap: 3px;
+    border-radius: 20px;
+    box-shadow: none;
+    display: flex; align-items: center; gap: 2px;
     overflow: visible; /* the «⋯» menu pops out of the bar */
 }
 /* «⋯» and «خروج» live outside the scrolling rail: on a phone the rail is
@@ -1694,13 +1737,13 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
    it never reads as one more neutral tool next to the mic. */
 .room-controls .ctrl-exit {
     flex: none;
-    color: var(--danger);
-    background: color-mix(in srgb, var(--danger) 10%, transparent);
+    color: color-mix(in srgb, var(--danger) 55%, var(--room-muted));
+    background: none;
 }
 .room-controls .ctrl-exit:hover,
 .room-controls .ctrl-exit:focus-visible {
-    background: color-mix(in srgb, var(--danger) 18%, transparent);
-    color: var(--danger);
+    background: var(--p-rose);
+    color: var(--p-rose-ink);
 }
 /* Edge fades tell the user the rail continues past the screen. */
 .room-controls::before,
@@ -1716,7 +1759,7 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
 :dir(rtl) .room-controls::after  { background: linear-gradient(to right, var(--glass), transparent); }
 .room-controls.can-scroll-start::before { opacity: 1; }
 .room-controls.can-scroll-end::after { opacity: 1; }
-.room-controls.screen-active { border-color: var(--success); }
+.room-controls.screen-active { border-color: color-mix(in srgb, var(--accent) 42%, var(--room-border)); }
 
 .ctrl-scroll {
     display: flex; align-items: center; flex-wrap: nowrap;
@@ -1731,35 +1774,71 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
 }
 .ctrl-scroll::-webkit-scrollbar { display: none; }
 .ctrl-sep {
-    width: 1px; height: 24px; flex: none; margin: 0 2px;
-    background: color-mix(in srgb, currentColor 16%, transparent);
+    width: 1px; height: 18px; flex: none; margin: 0 3px;
+    background: color-mix(in srgb, var(--room-border) 85%, transparent);
     border-radius: 1px;
 }
 .ctrl-btn {
     position: relative;
-    width: 46px; height: 46px; flex: none;
+    width: 40px; height: 40px; flex: none;
     scroll-snap-align: center;
-    border-radius: 50%;
-    background: transparent; border: 1px solid transparent;
-    cursor: pointer; color: var(--room-text);
+    border-radius: 13px;
+    background: transparent; border: 0;
+    cursor: pointer;
+    color: color-mix(in srgb, var(--room-muted) 45%, var(--room-text));
     display: inline-flex; align-items: center; justify-content: center;
-    /* Apple-ish press physics: quick, springy, never sluggish. */
-    transition: background .16s var(--ease), color .16s var(--ease),
+    /* quick, springy, never sluggish */
+    transition: background .18s var(--ease), color .18s var(--ease),
                 transform .22s cubic-bezier(.16, 1, .3, 1), opacity .16s var(--ease);
 }
-/* unread chat while the panel is collapsed */
+.ctrl-btn:hover { background: color-mix(in srgb, var(--room-text) 6%, transparent); color: var(--room-text); }
+.ctrl-btn:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.ctrl-btn:active { transform: scale(.94); }
+/* An *active* tool is a pastel wash + its own ink colour: obviously on, never
+   loud.  Specific states below pick their hue. */
+.ctrl-btn.active,
+.ctrl-btn[aria-pressed="true"] {
+    background: var(--p-accent);
+    color: var(--p-accent-ink);
+}
+/* state hues */
+#btn-mic.active { background: var(--p-mint); color: var(--p-mint-ink); }
+#btn-camera.active { background: var(--p-accent); color: var(--p-accent-ink); }
+#btn-hand[aria-pressed="true"],
+#btn-hand.active { background: var(--p-amber); color: var(--p-amber-ink); }
+#btn-screen.active,
+#btn-whiteboard.active,
+#btn-reactions.active { background: var(--p-accent); color: var(--p-accent-ink); }
+#btn-record.active,
+.ctrl-btn.recording { background: var(--p-rose); color: var(--p-rose-ink); }
+.ctrl-btn.on-air { background: var(--p-accent); color: var(--p-accent-ink); }
+/* unread chat while the panel is collapsed: a small pastel dot, no alarm red */
 .ctrl-btn.has-unread::after {
     content: "";
-    position: absolute; inset-block-start: 8px; inset-inline-end: 9px;
-    width: 8px; height: 8px; border-radius: 50%;
-    background: var(--danger);
+    position: absolute; inset-block-start: 7px; inset-inline-end: 8px;
+    width: 7px; height: 7px; border-radius: 50%;
+    background: color-mix(in srgb, var(--accent) 78%, var(--room-surface));
     box-shadow: 0 0 0 2px var(--room-surface, var(--surface));
 }
 .ctrl-btn .ic {
-    width: 21px; height: 21px;
-    fill: none; stroke: currentColor; stroke-width: 1.8;
+    width: 19px; height: 19px;
+    fill: none; stroke: currentColor; stroke-width: 1.7;
     stroke-linecap: round; stroke-linejoin: round;
 }
+/* Mic on: a pastel halo that grows and fades with the real input level
+   (media.js/mesh.js write --mic-level on the button).  Silence means no ring. */
+#btn-mic.active::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--success) 52%, transparent);
+    opacity: calc(var(--mic-level, 0) * .85);
+    transform: scale(calc(1 + var(--mic-level, 0) * .05));
+    transition: opacity .1s linear, transform .1s linear;
+    pointer-events: none;
+}
+#btn-mic.active .ic { color: var(--p-mint-ink); }
 /* on/off icon states (mic/camera): aria-pressed + .active drive them,
    so the state never relies on colour alone */
 .ctrl-btn .icon-on { display: none; }
@@ -2954,10 +3033,10 @@ body.class-is-over .room-side { pointer-events: none; }
         gap: 2px;
         border-radius: 14px;
     }
-    .room-controls .ctrl-btn { width: 38px; height: 38px; border-radius: 11px; }
+    .room-controls .ctrl-btn { width: 38px; height: 38px; border-radius: 12px; }
     .room-controls .ctrl-btn .ic { width: 18px; height: 18px; }
     .room-controls .ctrl-sep { display: none; }
-    .room-controls .ctrl-exit { width: 40px; }
+    .room-controls .ctrl-exit { width: 38px; }
     .ctrl-scroll { gap: 2px; padding: 1px; }
 }
 

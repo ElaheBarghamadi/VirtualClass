@@ -2,16 +2,17 @@
  * chat.js — real-time classroom chat client.
  *
  * Flow: browser → WebSocket → Django Channels (chat consumer) → DB + broadcast.
- * The server enforces permissions, channel visibility and message limits; this
+ * The server enforces permissions, who may read what, and message limits; this
  * module renders, submits, tracks unread counts and applies moderator
  * deletions.
  *
- * Two channels
- *   • عمومی  — everybody in the room reads it;
- *   • خصوصی — the host team only, and only the host team can switch to it.  A
- *     student never receives a private row at all: the server filters both the
- *     history and the live broadcast (this file could not reveal it even if it
- *     tried).
+ * Who reads a message is the owner's decision (classroom.chat_private):
+ *   • off — a student's message is public: every member of the class reads it;
+ *   • on  — it is addressed to the host team and its author only, and nobody
+ *     else receives the row at all (the server filters both the history and
+ *     the live broadcast; this file could not reveal it even if it tried).
+ * The switch belongs to the owner, so the panel shows a plain mode statement
+ * for everybody and a small toggle only for the owner.
  *
  * Rendering rules (they are what makes a 330px panel readable):
  *   • a bubble belongs to whoever wrote it — others on the inline-start edge,
@@ -29,10 +30,17 @@ const COUNTER_FROM = 800;
 const BOTTOM_SLACK = 90;          // px from the end that still counts as "at the bottom"
 const GROUP_WINDOW = 5 * 60 * 1000; // same author within 5 min reads as one group
 
-const CHANNEL_HINTS = {
-    public: 'همهٔ اعضای کلاس این پیام‌ها را می‌بینند.',
-    private_host: 'فقط میزبان‌ها این پیام‌ها را می‌بینند؛ دانش‌آموزان حتی درخواست آن را دریافت نمی‌کنند.',
+const MODE_TEXT = {
+    public: {
+        label: 'پیام‌ها برای همهٔ کلاس',
+        hint: 'همهٔ اعضای کلاس این پیام‌ها را می‌بینند.',
+    },
+    private: {
+        label: 'پیام‌ها فقط برای معلم',
+        hint: 'پیام شما فقط برای معلم دیده می‌شود؛ همکلاسی‌ها آن را نمی‌بینند.',
+    },
 };
+const PRIVATE_PLACEHOLDER = 'پیام شما فقط برای معلم…';
 
 /** Stable, theme-agnostic avatar colour per participant. */
 function avatarHue(seed) {
@@ -53,14 +61,12 @@ function faNum(value) {
     return Number(value).toLocaleString('fa-IR');
 }
 
-/** Which channel a stored message belongs to. */
-function channelOf(m) {
-    return m.is_private ? 'private' : 'public';
-}
-
 class ChatClientImpl {
     constructor() {
         this.ws = null;
+        // Injected by room.js (`ChatClient.api = api`): the same JSON helper the
+        // rest of the room uses, so CSRF, errors and toasts behave identically.
+        this.api = async () => {};
         this.identity = null;
         this.privileged = false;
         this.messagesEl = document.getElementById('chat-messages');
@@ -81,11 +87,18 @@ class ChatClientImpl {
         this.replyTextEl = document.getElementById('chat-reply-text');
         this.replyCancelEl = document.getElementById('chat-reply-x');
         this.hintEl = document.getElementById('chat-channel-hint');
+        this.modeBarEl = document.getElementById('chat-mode-bar');
+        this.modeTextEl = document.getElementById('chat-mode-text');
+        this.modeToggleEl = document.getElementById('chat-mode-toggle');
         this.retryDelay = 1000;
         this.roomCode = null;
         this.unread = 0;
         this.pendingNew = 0;
-        this.channel = 'public';     // 'public' | 'private'
+        // The server renders the truth into the page; start from it so the
+        // first paint does not contradict the HTML.
+        this.mode = document.getElementById('classroom-root')?.dataset.chatPrivate === '1'
+            ? 'private'
+            : 'public';
         this.messages = [];          // every message this member may read
         this.replyTo = null;         // { id, sender_name, message } while composing
         this._lastEntry = null;      // { identity, at } of the previous bubble
@@ -98,7 +111,7 @@ class ChatClientImpl {
         // placeholder straight away instead of a blank white column.
         this.syncEmpty();
         this.syncComposer();
-        this.syncChannelHint();
+        this.syncMode();
     }
 
     /** Bring the newest message into view (used when the tab is opened). */
@@ -111,7 +124,7 @@ class ChatClientImpl {
         this.roomCode = roomCode;
         this.identity = identity;
         this.privileged = privileged;
-        this.syncChannelHint();
+        this.syncMode();
         // Never stack sockets: two open chat sockets would double every message.
         if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) return;
         const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -158,11 +171,6 @@ class ChatClientImpl {
     }
 
     _bindUi() {
-        // The private channel is a host tool: students never get the switch.
-        if (!this.privileged) {
-            document.querySelectorAll('.chat-channel[data-channel="private"]')
-                .forEach((btn) => btn.remove());
-        }
         if (!this._formBound) {
             this.formEl?.addEventListener('submit', (e) => {
                 e.preventDefault();
@@ -183,8 +191,14 @@ class ChatClientImpl {
                 }
             });
             this.replyCancelEl?.addEventListener('click', () => this.cancelReply());
-            document.querySelectorAll('.chat-channel').forEach((btn) => {
-                btn.addEventListener('click', () => this.setChannel(btn.dataset.channel));
+            // Only the owner gets the switch; the server enforces the setting
+            // anyway (``update_settings`` is owner-only).
+            this.modeToggleEl?.addEventListener('click', () => {
+                const next = this.mode !== 'private';
+                this.modeToggleEl.disabled = true;
+                this.api('/settings/', { settings: { chat_private: next } })
+                    .catch(() => {})
+                    .finally(() => { this.modeToggleEl.disabled = false; });
             });
             this._formBound = true;
         }
@@ -200,47 +214,58 @@ class ChatClientImpl {
         }
     }
 
-    // ------------------------------------------------------------- channels
-    setChannel(channel) {
-        const next = channel === 'private' && this.privileged ? 'private' : 'public';
-        if (next === this.channel) return;
-        this.channel = next;
-        document.querySelectorAll('.chat-channel').forEach((btn) => {
-            const on = btn.dataset.channel === next;
-            btn.classList.toggle('active', on);
-            btn.setAttribute('aria-selected', String(on));
-        });
-        // A reply only makes sense inside the channel it was started in.
+    // ------------------------------------------------------------ chat mode
+    /**
+     * The owner decides whether student messages are public or staff-only.
+     * Everything here is presentation: the consumer reads
+     * ``classroom.chat_private`` from the database for every message.
+     */
+    setMode(isPrivate, { quiet = true } = {}) {
+        const next = isPrivate ? 'private' : 'public';
+        if (next === this.mode) {
+            this.syncMode();
+            return;
+        }
+        this.mode = next;
+        // A reply must be re-evaluated: the same quote may now be private.
         if (this.replyTo) this.cancelReply();
-        this.syncChannelHint();
-        this.renderList();
-        this.resetUnread();
-        this.pendingNew = 0;
-        this._scroll(true);
+        this.syncMode();
+        if (!quiet) {
+            toast(next === 'private'
+                ? 'از این پس پیام دانش‌آموزان فقط برای شما دیده می‌شود.'
+                : 'از این پس همهٔ کلاس پیام‌ها را می‌بیند.', 'info');
+        }
     }
 
-    syncChannelHint() {
-        if (!this.hintEl) return;
-        const key = this.channel === 'private' ? 'private_host' : 'public';
-        this.hintEl.textContent = CHANNEL_HINTS[key];
-        this.hintEl.classList.toggle('is-private', this.channel === 'private');
-        document.getElementById('panel-chat')?.classList
-            .toggle('chat-private-view', this.channel === 'private');
-        if (this.inputEl) {
-            this.inputEl.placeholder = this.channel === 'private'
-                ? 'یادداشت خصوصی برای میزبان‌ها…'
+    syncMode() {
+        const privateMode = this.mode === 'private';
+        const text = MODE_TEXT[privateMode ? 'private' : 'public'];
+        if (this.modeTextEl) this.modeTextEl.textContent = text.label;
+        if (this.modeBarEl) this.modeBarEl.classList.toggle('is-private', privateMode);
+        document.getElementById('panel-chat')
+            ?.classList.toggle('is-private-view', privateMode);
+        if (this.modeToggleEl) {
+            this.modeToggleEl.setAttribute('aria-checked', String(privateMode));
+            this.modeToggleEl.title = privateMode
+                ? 'پیام دانش‌آموزان فقط برای میزبان — برای عمومی‌کردن بزنید'
+                : 'پیام دانش‌آموزان برای همه — برای خصوصی‌کردن بزنید';
+        }
+        if (this.hintEl) {
+            this.hintEl.textContent = text.hint;
+            this.hintEl.classList.toggle('is-private', privateMode);
+        }
+        if (this.inputEl && !this.inputEl.disabled) {
+            this.inputEl.placeholder = privateMode
+                ? 'پیام شما فقط برای معلم…'
                 : 'پیام خود را بنویسید…';
         }
-        const locked = this.channel === 'private';
-        this.emptyEl?.classList.toggle('is-private', locked);
+        this.emptyEl?.classList.toggle('is-private', privateMode);
         const emptyTitle = this.emptyEl?.querySelector('.chat-empty-title');
         const emptyText = this.emptyEl?.querySelector('.chat-empty-text');
-        if (emptyTitle) {
-            emptyTitle.textContent = locked ? 'هنوز پیام خصوصی‌ای نیست' : 'هنوز پیامی نیست';
-        }
+        if (emptyTitle) emptyTitle.textContent = 'هنوز پیامی نیست';
         if (emptyText) {
-            emptyText.textContent = locked
-                ? 'یادداشت‌های خصوصی تیم میزبان اینجا دیده می‌شود.'
+            emptyText.textContent = privateMode
+                ? 'اولین پیام را بنویسید؛ فقط معلم آن را می‌بیند.'
                 : 'اولین پیام را بفرستید تا گفتگوی کلاس شروع شود.';
         }
     }
@@ -267,7 +292,6 @@ class ChatClientImpl {
             return;
         }
         const payload = { action: 'send_message', message };
-        if (this.channel === 'private' && this.privileged) payload.private = true;
         if (this.replyTo) payload.reply_to = this.replyTo.id;
         this.ws.send(JSON.stringify(payload));
         this.inputEl.value = '';
@@ -347,26 +371,13 @@ class ChatClientImpl {
         }
     }
 
-    /** One incoming message: store it, render it only in its own channel. */
+    /** One incoming message: store it and paint it (the server already
+     *  decided this member is allowed to read it). */
     receive(m) {
         if (!m || m.id == null) return;
         if (this.messages.some((x) => x.id === m.id)) return;
         this.messages.push(m);
-        if (channelOf(m) === this.channel) {
-            this.renderMessage(m);
-            return;
-        }
-        // Other channel: no bubble, but the badge has to speak up.
-        const own = m.sender_identity === this.identity;
-        if (!own) {
-            this.unread += 1;
-            if (this.unreadEl) {
-                this.unreadEl.textContent = faNum(this.unread);
-                this.unreadEl.classList.remove('hidden');
-            }
-            document.getElementById('btn-chat')?.classList.add('has-unread');
-            this.syncChannelsBadge();
-        }
+        this.renderMessage(m);
     }
 
     /** A fresh list replaces the panel: forget the grouping state with it. */
@@ -374,9 +385,7 @@ class ChatClientImpl {
         if (this.messagesEl) this.messagesEl.innerHTML = '';
         this._lastEntry = null;
         this._lastDay = '';
-        this.messages
-            .filter((m) => channelOf(m) === this.channel)
-            .forEach((m) => this.renderMessage(m, { silent: true }));
+        this.messages.forEach((m) => this.renderMessage(m, { silent: true }));
         this.syncEmpty();
     }
 
@@ -513,7 +522,6 @@ class ChatClientImpl {
             this._scroll(own || atBottom);
             if (!own) this.syncJump();
         }
-        this.syncChannelsBadge();
     }
 
     /** The quoted strip inside a reply bubble. */
@@ -582,15 +590,6 @@ class ChatClientImpl {
         this.unreadEl?.classList.add('hidden');
         if (this.unreadEl) this.unreadEl.textContent = faNum(0);
         document.getElementById('btn-chat')?.classList.remove('has-unread');
-    }
-
-    /** Dot on the «خصوصی» chip when a private message is waiting there. */
-    syncChannelsBadge() {
-        const badge = document.getElementById('chat-private-badge');
-        if (!badge) return;
-        const pending = this.channel !== 'private'
-            && this.messages.some((m) => m.is_private && m.sender_identity !== this.identity);
-        badge.classList.toggle('hidden', !pending);
     }
 
     addSystemMessage(text) {
@@ -664,7 +663,7 @@ class ChatClientImpl {
         if (this.inputEl) {
             this.inputEl.disabled = !enabled;
             this.inputEl.placeholder = enabled
-                ? (this.channel === 'private' ? 'یادداشت خصوصی برای میزبان‌ها…' : 'پیام خود را بنویسید…')
+                ? (this.mode === 'private' ? PRIVATE_PLACEHOLDER : 'پیام خود را بنویسید…')
                 : (reason || 'ارسال پیام بسته است.');
         }
         this.syncComposer();

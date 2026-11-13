@@ -556,8 +556,14 @@ class ChatConsumerTests(TransactionTestCase):
         async_to_sync(scenario)()
 
 
-class PrivateChannelTests(TransactionTestCase):
-    """«خصوصی» is enforced on the server, not hidden in the UI."""
+class ChatPrivacyModeTests(TransactionTestCase):
+    """Who reads a student's message is the owner's call, not the student's.
+
+    »chat_private« on the classroom means: a student message is addressed to the
+    host team (and its author) and never leaves that circle.  Off means the
+    class reads it.  The consumer reads the setting from the database for every
+    message, so flipping it mid-lesson takes effect on the next line.
+    """
 
     def setUp(self):
         self.owner = User.objects.create_user(username="pv_owner", password="x")
@@ -575,83 +581,117 @@ class PrivateChannelTests(TransactionTestCase):
             f"/ws/classroom/{self.classroom.room_code}/chat/",
         )
 
-    def test_private_message_only_reaches_the_host_team(self):
+    def _set_mode(self, private: bool):
+        self.classroom.refresh_from_db()
+        self.classroom.chat_private = private
+        self.classroom.save(update_fields=["chat_private"])
+
+    def test_public_mode_reaches_the_whole_class(self):
         from chat.models import ChatMessage
 
         async def scenario():
-            owner_ws = self._ws(self.owner)
-            await owner_ws.connect()
-            await owner_ws.receive_json_from()  # history
+            owner_ws, student_ws, other_ws = self._ws(self.owner), self._ws(self.student), self._ws(self.other)
+            for ws in (owner_ws, student_ws, other_ws):
+                await ws.connect()
+                await ws.receive_json_from()  # history
 
-            student_ws = self._ws(self.student)
-            await student_ws.connect()
-            await student_ws.receive_json_from()
+            await student_ws.send_json_to({"action": "send_message", "message": "سلام"})
 
-            other_ws = self._ws(self.other)
-            await other_ws.connect()
-            history = await other_ws.receive_json_from()
+            host_copy = await owner_ws.receive_json_from()
+            assert host_copy["message"]["is_private"] is False
+            echo = await student_ws.receive_json_from()
+            assert echo["message"]["is_private"] is False
+            classmate = await other_ws.receive_json_from()
+            assert classmate["message"]["message"] == "سلام"
 
-            await owner_ws.send_json_to(
-                {"action": "send_message", "message": "یادداشت کارکنان", "private": True}
-            )
+            for ws in (owner_ws, student_ws, other_ws):
+                await ws.disconnect()
 
-            host_echo = await owner_ws.receive_json_from()
-            assert host_echo["type"] == "chat_message"
-            assert host_echo["message"]["is_private"] is True
-            assert host_echo["message"]["message"] == "یادداشت کارکنان"
+        async_to_sync(scenario)()
+        self.assertFalse(ChatMessage.objects.get().is_private)
 
-            # Neither student sees the bubble, the event or anything else.
-            assert await student_ws.receive_nothing(), "private chat leaked to a student"
-            assert await other_ws.receive_nothing(), "private chat leaked to a student"
+    def test_private_mode_only_reaches_the_host_team(self):
+        from chat.models import ChatMessage
 
-            await owner_ws.disconnect()
-            await student_ws.disconnect()
-            await other_ws.disconnect()
-            return history
+        self._set_mode(True)
 
-        history = async_to_sync(scenario)()
-        self.assertEqual(history["messages"], [])
+        async def scenario():
+            owner_ws, student_ws, other_ws = self._ws(self.owner), self._ws(self.student), self._ws(self.other)
+            for ws in (owner_ws, student_ws, other_ws):
+                await ws.connect()
+                await ws.receive_json_from()
+
+            await student_ws.send_json_to({"action": "send_message", "message": "نمره‌ام چند شد؟"})
+
+            host_copy = await owner_ws.receive_json_from()
+            assert host_copy["type"] == "chat_message"
+            assert host_copy["message"]["is_private"] is True
+            assert host_copy["message"]["message"] == "نمره‌ام چند شد؟"
+
+            echo = await student_ws.receive_json_from()
+            assert echo["message"]["is_private"] is True
+
+            # The classmate must not see the bubble, the event or anything else.
+            assert await other_ws.receive_nothing(), "private chat leaked to a classmate"
+
+            for ws in (owner_ws, student_ws, other_ws):
+                await ws.disconnect()
+
+        async_to_sync(scenario)()
         row = ChatMessage.objects.get()
         self.assertTrue(row.is_private)
-        self.assertFalse(row.is_deleted)
-        self.assertIsNone(row.audience_member)
+        self.assertEqual(row.audience_member.user, self.student)
 
-    def test_student_cannot_open_the_private_channel(self):
-        """«خصوصی» is the host team's mode — the server refuses a student's flag."""
+    def test_host_messages_stay_public_in_private_mode(self):
+        from chat.models import ChatMessage
+
+        self._set_mode(True)
+
+        async def scenario():
+            owner_ws, other_ws = self._ws(self.owner), self._ws(self.other)
+            for ws in (owner_ws, other_ws):
+                await ws.connect()
+                await ws.receive_json_from()
+
+            await owner_ws.send_json_to({"action": "send_message", "message": "شروع می‌کنیم"})
+            seen = await other_ws.receive_json_from()
+            assert seen["message"]["is_private"] is False
+            await owner_ws.receive_json_from()
+
+            await owner_ws.disconnect()
+            await other_ws.disconnect()
+
+        async_to_sync(scenario)()
+        self.assertFalse(ChatMessage.objects.get().is_private)
+
+    def test_flipping_the_mode_applies_to_the_next_message(self):
         from chat.models import ChatMessage
 
         async def scenario():
-            owner_ws = self._ws(self.owner)
-            await owner_ws.connect()
-            await owner_ws.receive_json_from()
-
             student_ws = self._ws(self.student)
             await student_ws.connect()
             await student_ws.receive_json_from()
 
-            await student_ws.send_json_to(
-                {"action": "send_message", "message": "خصوصی!", "private": True}
-            )
-            reply = await student_ws.receive_json_from()
-            assert reply["type"] == "error", reply
-            assert "خصوصی" in reply["message"]
-            assert await owner_ws.receive_nothing()
+            await student_ws.send_json_to({"action": "send_message", "message": "اول"})
+            first = await student_ws.receive_json_from()
+            assert first["message"]["is_private"] is False
 
-            # ... and a normal message still works afterwards.
-            await student_ws.send_json_to({"action": "send_message", "message": "عمومی"})
-            public = await owner_ws.receive_json_from()
-            assert public["message"]["is_private"] is False
+            # the owner flips the switch between two messages
+            from asgiref.sync import sync_to_async
+            await sync_to_async(self._set_mode)(True)
 
-            await owner_ws.disconnect()
+            await student_ws.send_json_to({"action": "send_message", "message": "دوم"})
+            second = await student_ws.receive_json_from()
+            assert second["message"]["is_private"] is True
             await student_ws.disconnect()
 
         async_to_sync(scenario)()
-        self.assertEqual(ChatMessage.objects.filter(is_private=True).count(), 0)
-        self.assertEqual(ChatMessage.objects.filter(is_private=False).count(), 1)
+        flags = list(ChatMessage.objects.order_by("id").values_list("is_private", flat=True))
+        self.assertEqual(flags, [False, True])
 
     def test_private_history_is_filtered_per_member(self):
-        from chat.models import ChatMessage
         from chat.consumers import _visible_messages
+        from chat.models import ChatMessage
         from classrooms.models import ClassroomMember
 
         student_member = ClassroomMember.objects.get(classroom=self.classroom, user=self.student)
@@ -659,17 +699,13 @@ class PrivateChannelTests(TransactionTestCase):
         owner_member = ClassroomMember.objects.get(classroom=self.classroom, user=self.owner)
 
         ChatMessage.objects.create(
-            classroom=self.classroom, sender=self.student, sender_member=student_member,
-            sender_name="دانش‌آموز", message="عمومی",
+            classroom=self.classroom, sender=self.owner, sender_member=owner_member,
+            sender_name="مالک", message="عمومی",
         )
         ChatMessage.objects.create(
             classroom=self.classroom, sender=self.student, sender_member=student_member,
             sender_name="دانش‌آموز", message="خصوصی", is_private=True,
             audience_member=student_member,
-        )
-        ChatMessage.objects.create(
-            classroom=self.classroom, sender=self.owner, sender_member=owner_member,
-            sender_name="مالک", message="یادداشت کارکنان", is_private=True,
         )
 
         def texts(member):
@@ -677,43 +713,42 @@ class PrivateChannelTests(TransactionTestCase):
 
         self.assertEqual(texts(student_member), ["عمومی", "خصوصی"])
         self.assertEqual(texts(other_member), ["عمومی"])
-        self.assertEqual(texts(owner_member), ["عمومی", "خصوصی", "یادداشت کارکنان"])
+        self.assertEqual(texts(owner_member), ["عمومی", "خصوصی"])
 
-    def test_host_reply_in_the_private_channel_stays_staff_only(self):
+    def test_host_reply_in_the_private_thread_stays_with_that_student(self):
         from chat.models import ChatMessage
 
+        self._set_mode(True)
+
         async def scenario():
-            owner_ws = self._ws(self.owner)
-            await owner_ws.connect()
+            owner_ws, student_ws, other_ws = self._ws(self.owner), self._ws(self.student), self._ws(self.other)
+            for ws in (owner_ws, student_ws, other_ws):
+                await ws.connect()
+                await ws.receive_json_from()
+
+            await student_ws.send_json_to({"action": "send_message", "message": "سوال خصوصی"})
+            asked = await student_ws.receive_json_from()
             await owner_ws.receive_json_from()
-
-            student_ws = self._ws(self.student)
-            await student_ws.connect()
-            await student_ws.receive_json_from()
-
-            await owner_ws.send_json_to(
-                {"action": "send_message", "message": "یادداشت اول", "private": True}
-            )
-            note = await owner_ws.receive_json_from()
-            assert await student_ws.receive_nothing()
+            await other_ws.receive_nothing()
 
             await owner_ws.send_json_to({
-                "action": "send_message", "message": "پیوست یادداشت",
-                "private": True, "reply_to": note["message"]["id"],
+                "action": "send_message", "message": "جواب شما",
+                "private": True, "reply_to": asked["message"]["id"],
             })
-            answer = await owner_ws.receive_json_from()
-            assert answer["message"]["reply_to"]["id"] == note["message"]["id"]
-            assert answer["message"]["reply_to"]["message"] == "یادداشت اول"
-            assert await student_ws.receive_nothing()
+            answer = await student_ws.receive_json_from()
+            assert answer["message"]["message"] == "جواب شما"
+            assert answer["message"]["is_private"] is True
+            assert answer["message"]["reply_to"]["id"] == asked["message"]["id"]
+            await owner_ws.receive_json_from()
+            assert await other_ws.receive_nothing(), "host reply leaked to a classmate"
 
-            await owner_ws.disconnect()
-            await student_ws.disconnect()
+            for ws in (owner_ws, student_ws, other_ws):
+                await ws.disconnect()
 
         async_to_sync(scenario)()
-
         reply = ChatMessage.objects.exclude(reply_to=None).get()
         self.assertTrue(reply.is_private)
-        self.assertIsNone(reply.audience_member)
+        self.assertEqual(reply.audience_member.user, self.student)
 
     def test_public_reply_carries_a_snippet(self):
         from chat.models import ChatMessage
@@ -725,7 +760,6 @@ class PrivateChannelTests(TransactionTestCase):
 
             await owner_ws.send_json_to({"action": "send_message", "message": "پیام اول"})
             first = await owner_ws.receive_json_from()
-            assert first["message"]["message"] == "پیام اول"
             assert first["message"]["reply_to"] is None
 
             await owner_ws.send_json_to({
@@ -736,7 +770,6 @@ class PrivateChannelTests(TransactionTestCase):
             quote = second["message"]["reply_to"]
             assert quote["id"] == first["message"]["id"]
             assert quote["message"] == "پیام اول"
-
             await owner_ws.disconnect()
 
         async_to_sync(scenario)()
@@ -746,7 +779,6 @@ class PrivateChannelTests(TransactionTestCase):
         from chat.models import ChatMessage
         from classrooms.models import ClassroomMember
 
-        student_member = ClassroomMember.objects.get(classroom=self.classroom, user=self.student)
         owner_member = ClassroomMember.objects.get(classroom=self.classroom, user=self.owner)
         secret = ChatMessage.objects.create(
             classroom=self.classroom, sender=self.owner, sender_member=owner_member,
@@ -768,19 +800,15 @@ class PrivateChannelTests(TransactionTestCase):
 
         async_to_sync(scenario)()
         self.assertEqual(ChatMessage.objects.filter(reply_to=secret).count(), 0)
-        self.assertTrue(student_member.id)
 
-    def test_private_mode_is_not_a_student_choice_for_visibility(self):
-        """A student marking a message private still cannot read host-only notes."""
-        from chat.models import ChatMessage
-        from chat.consumers import _can_read
-        from classrooms.models import ClassroomMember
+    def test_only_the_owner_can_flip_the_mode(self):
+        from classrooms.services import PermissionDenied, update_settings
 
-        owner_member = ClassroomMember.objects.get(classroom=self.classroom, user=self.owner)
-        student_member = ClassroomMember.objects.get(classroom=self.classroom, user=self.student)
-        staff_note = ChatMessage.objects.create(
-            classroom=self.classroom, sender=self.owner, sender_member=owner_member,
-            sender_name="مالک", message="یادداشت", is_private=True,
-        )
-        self.assertTrue(_can_read(staff_note, owner_member, host=True))
-        self.assertFalse(_can_read(staff_note, student_member, host=False))
+        with self.assertRaises(PermissionDenied):
+            update_settings(self.classroom, self.student, {"chat_private": True})
+        self.classroom.refresh_from_db()
+        self.assertFalse(self.classroom.chat_private)
+
+        update_settings(self.classroom, self.owner, {"chat_private": True})
+        self.classroom.refresh_from_db()
+        self.assertTrue(self.classroom.chat_private)

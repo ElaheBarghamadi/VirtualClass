@@ -510,6 +510,7 @@ class ClassroomConsumer(SafeJsonWebsocketConsumer):
         state = {
             "is_locked": classroom.is_locked,
             "chat_disabled": classroom.chat_disabled,
+            "chat_private": classroom.chat_private,
             "whiteboard_open": classroom.whiteboard_open,
             "current_file_id": classroom.current_file_id,
             "current_file_name": classroom.current_file.original_name if classroom.current_file else None,

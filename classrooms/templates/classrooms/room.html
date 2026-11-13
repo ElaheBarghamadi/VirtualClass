@@ -111,7 +111,8 @@
      data-ice-servers="{{ media.ice_servers_json }}"
      data-mesh-enabled="{{ media.mesh_enabled|yesno:'1,0' }}"
      data-mesh-max="{{ media.mesh_max_participants }}"
-     data-show-chat="{{ classroom.show_chat_default|yesno:'1,0' }}">
+     data-show-chat="{{ classroom.show_chat_default|yesno:'1,0' }}"
+     data-chat-private="{{ classroom.chat_private|yesno:'1,0' }}">
 
     <section class="class-ended hidden" id="class-ended" role="alertdialog" aria-labelledby="class-ended-title">
         <div class="class-ended-card">
@@ -564,22 +565,27 @@
 
             <!-- ===== chat ===== -->
             <section class="side-panel side-panel-chat" id="panel-chat" role="tabpanel" aria-label="گفتگو">
-                {% if can_control_board %}
-                {# the channel switch is a host tool: students only ever have «عمومی» #}
-                <div class="chat-channels" role="tablist" aria-label="کانال گفتگو">
-                    <button type="button" class="chat-channel active" data-channel="public" role="tab" aria-selected="true">
+                {% comment %}
+                Who reads what is the owner's decision, so this is a plain
+                statement of the current mode (and a switch only the owner
+                gets). Students cannot change it — the server reads the
+                setting per message.
+                {% endcomment %}
+                <div class="chat-mode-bar" id="chat-mode-bar">
+                    <span class="chat-mode-label" id="chat-mode-label">
                         <svg class="ic" aria-hidden="true"><use href="#i-users"/></svg>
-                        <span>عمومی</span>
-                    </button>
-                    <button type="button" class="chat-channel" data-channel="private" role="tab" aria-selected="false">
-                        <svg class="ic" aria-hidden="true"><use href="#i-lock"/></svg>
-                        <span>خصوصی</span>
-                        <span class="chat-private-badge hidden" id="chat-private-badge" aria-hidden="true"></span>
-                    </button>
+                        <span id="chat-mode-text">{% if classroom.chat_private %}پیام‌ها فقط برای معلم{% else %}پیام‌ها برای همهٔ کلاس{% endif %}</span>
+                    </span>
+                    {% if is_owner %}
+                        <button type="button" class="chat-mode-switch" id="chat-mode-toggle"
+                                role="switch" aria-checked="{% if classroom.chat_private %}true{% else %}false{% endif %}"
+                                title="تعیین اینکه پیام دانش‌آموزان را چه کسی ببیند">
+                            <span class="chat-mode-knob" aria-hidden="true"></span>
+                        </button>
+                    {% endif %}
                 </div>
-                {% endif %}
                 <p class="chat-channel-hint" id="chat-channel-hint" role="note">
-                    همهٔ اعضای کلاس این پیام‌ها را می‌بینند.
+                    {% if classroom.chat_private %}پیام شما فقط برای معلم دیده می‌شود.{% else %}همهٔ اعضای کلاس این پیام‌ها را می‌بینند.{% endif %}
                 </p>
                 <div class="chat-scroll" id="chat-scroll">
                     <div class="chat-messages" id="chat-messages" aria-live="polite" aria-label="پیام‌های گفتگو"></div>
@@ -825,6 +831,7 @@
             </p>
             <label class="switch-row"><input type="checkbox" name="allow_guests" {% if classroom.allow_guests %}checked{% endif %}><span class="switch-text">ورود مهمان با لینک (بدون حساب کاربری)</span></label>
             <label class="switch-row"><input type="checkbox" name="chat_disabled" {% if classroom.chat_disabled %}checked{% endif %}><span class="switch-text">قطع کامل گفتگو</span></label>
+            <label class="switch-row"><input type="checkbox" name="chat_private" {% if classroom.chat_private %}checked{% endif %}><span class="switch-text">پیام دانش‌آموزان فقط برای میزبان (خصوصی)</span></label>
             <label class="switch-row"><input type="checkbox" name="is_locked" {% if classroom.is_locked %}checked{% endif %}><span class="switch-text">قفل کردن کلاس (ورود اعضای جدید مسدود)</span></label>
         </div>
         <div class="app-dialog-actions">

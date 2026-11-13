@@ -74,6 +74,14 @@ class Classroom(models.Model):
     allow_student_whiteboard = models.BooleanField(default=False, verbose_name="تختهٔ دانش‌آموز")
     allow_file_upload = models.BooleanField(default=True, verbose_name="بارگذاری فایل (غیر مالک)")
     chat_disabled = models.BooleanField(default=False, verbose_name="قطع کامل گفتگو")
+    # Owner's call: do the messages *students* write reach the whole class, or
+    # only the host team?  Student messages inherit this; a host message is
+    # always public (a host answering a private question stays private to that
+    # student).  Enforced in chat/consumers.py, not in the browser.
+    chat_private = models.BooleanField(
+        default=False, verbose_name="پیام دانش‌آموزان فقط برای میزبان",
+        help_text="اگر روشن باشد، پیام دانش‌آموزان را فقط میزبان‌ها می‌بینند.",
+    )
 
     # -- phase 3: customization & guest access ----------------------------------
     allow_guests = models.BooleanField(default=True, verbose_name="ورود مهمان با لینک")

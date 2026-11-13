@@ -205,13 +205,155 @@ class ControlBarTests(SimpleTestCase):
         self.assertIn("setDrawer(false)", drawer)
 
     def test_bar_is_compact_on_a_phone(self):
-        self.assertTrue(any_media(
-            self.css, "(max-width: 700px)",
-            ".room-controls .ctrl-btn { width: 38px; height: 38px;",
-        ))
+        compact = rule(self.css, ".room-controls .ctrl-btn", needle="width: 38px; height: 38px;")
+        self.assertIn("border-radius: 12px;", compact)
+        dock = rule(self.css, ".room-controls", needle="border-radius: 14px;")
+        self.assertIn("padding: 3px;", dock)
+        # the rail stays one row: separators cost width, they go first
+        self.assertIn(".room-controls .ctrl-sep { display: none; }", self.css)
+
+    # -- «minimal, pastel, pretty»: the look is a contract too --------------
+    def test_bar_is_flat_quiet_and_shadowless(self):
+        bar = rule(self.css, ".room-controls", needle="--glass-line")
+        self.assertIn("background: var(--glass);", bar)
+        self.assertIn("border: 1px solid var(--glass-line);", bar)
+        self.assertIn("box-shadow: none;", bar)
+        self.assertNotIn("backdrop-filter", bar)
+        self.assertNotIn("var(--shadow)", bar)
+
+    def test_buttons_are_soft_squares_not_circles(self):
+        btn = rule(self.css, ".ctrl-btn")
+        self.assertIn("width: 40px; height: 40px;", btn)
+        self.assertIn("border-radius: 13px;", btn)
+        self.assertIn("background: transparent; border: 0;", btn)
+        self.assertNotIn("box-shadow", btn)
+        # a real button still answers the pointer and the keyboard
+        self.assertIn(".ctrl-btn:hover {", self.css)
+        self.assertIn(".ctrl-btn:active { transform: scale(.94); }", self.css)
+        self.assertIn(".ctrl-btn:focus-visible { outline: none; box-shadow: var(--focus-ring); }", self.css)
+
+    def test_an_active_control_changes_colour(self):
+        bar = rule(self.css, ".room-controls", needle="--glass-line")
+        for token in ("--p-accent:", "--p-mint:", "--p-amber:", "--p-rose:"):
+            self.assertIn(token, bar)
+        active = rule(self.css, '.ctrl-btn.active,\n.ctrl-btn[aria-pressed="true"]')
+        self.assertIn("background: var(--p-accent);", active)
+        self.assertIn("color: var(--p-accent-ink);", active)
+        # colour is also the state: each tool owns a different pastel, so two
+        # active buttons never read as the same thing
+        self.assertIn("var(--p-mint)", rule(self.css, "#btn-mic.active"))
+        self.assertIn("var(--p-amber)", rule(self.css, "#btn-hand.active", needle="--p-amber"))
+        self.assertIn("var(--p-rose)", rule(self.css, ".ctrl-btn.recording"))
+
+    def test_every_pastel_state_token_is_defined_before_it_is_used(self):
+        bar = rule(self.css, ".room-controls", needle="--glass-line")
+        for name in ("accent", "mint", "amber", "rose"):
+            self.assertIn(f"--p-{name}:", bar)
+            self.assertIn(f"--p-{name}-ink:", bar)
+
+    def test_mic_halo_breathes_with_the_live_level(self):
+        halo = rule(self.css, "#btn-mic.active::before")
+        self.assertIn("opacity: calc(var(--mic-level, 0) * .85);", halo)
+        self.assertIn("pointer-events: none;", halo)
+        self.assertIn("--mic-level", halo)
+        self.assertIn("pointer-events: none;", halo)
+        # the value comes from the real analyser, never from a timer guessing
+        self.assertIn("setProperty('--mic-level', level.toFixed(3))", read(JS / "mesh.js"))
+
+    def test_level_meter_is_three_bars_not_a_bottom_stripe(self):
+        css = read(CSS / "room.css")
+        meter = rule(css, ".tile-level")
+        self.assertIn("inset-block-start: 8px;", meter)
+        self.assertIn("inset-inline-start: 8px;", meter)
+        self.assertIn("opacity: 0;", meter)
+        self.assertNotIn("inset-block-end: 0", meter)
+        self.assertNotIn("height: 3px", meter)
+        self.assertIn(".tile.speaking .tile-level { opacity: 1; }", css)
+        for n in (1, 2, 3):
+            self.assertIn(f".tile-level i:nth-child({n}) {{ transform: scaleY(calc(", css)
+        # the markup matches the CSS: a <span> with three <i> bars
+        for source in (read(JS / "mesh.js"), read(JS / "media.js")):
+            self.assertIn("level.innerHTML = '<i></i><i></i><i></i>'", source)
 
     def test_popovers_never_grow_past_the_screen(self):
         pop = self.js[self.js.index("function anchorPopover("):]
         pop = pop[: pop.index("\n}\n")]
         self.assertIn("pop.style.maxHeight", pop)
         self.assertIn("overflowY", pop)
+
+class MediaTuningTests(SimpleTestCase):
+    """A mesh multiplies every upload by the size of the room.
+
+    Twelve cameras at 1280×720 is 12×1.6 Mbps leaving *each* laptop, which is
+    exactly the «بهم نریزه» case: the picture freezes, audio stutters, tiles go
+    black.  The fix is to shrink both the capture and the per-sender bitrate as
+    the room grows — never to fake the quality readout.
+    """
+
+    def setUp(self):
+        self.src = read(JS / "mesh.js")
+
+    def test_the_tier_table_shrinks_as_the_room_grows(self):
+        tier = rule(self.src, "    _qualityTier(size = this._roomSize())")
+        sizes = re.findall(r"size <= (\d+)\) return \{ width: (\d+), height: (\d+), fps: (\d+), bitrate: ([\d_]+)", tier)
+        self.assertEqual([int(s[0]) for s in sizes], [2, 4, 6])
+        widths = [int(s[1]) for s in sizes]
+        bitrates = [int(s[4].replace("_", "")) for s in sizes]
+        self.assertEqual(widths, sorted(widths, reverse=True))
+        self.assertEqual(bitrates, sorted(bitrates, reverse=True))
+        # and there is a floor for a big class, not «unlimited»
+        self.assertIn("return { width: 480, height: 270, fps: 18, bitrate: 320_000 };", tier)
+
+    def test_room_size_counts_the_local_participant(self):
+        self.assertIn("return this.links.size + 1;", rule(self.src, "    _roomSize()"))
+
+    def test_every_sender_gets_a_bitrate_and_framerate_cap(self):
+        tune = rule(self.src, "    _tuneLink(link)")
+        self.assertIn("params.encodings[0].maxBitrate = tier.bitrate;", tune)
+        self.assertIn("params.encodings[0].maxFramerate = tier.fps;", tune)
+        self.assertIn("params.degradationPreference = 'balanced';", tune)
+        # audio is capped too: a dozen Opus streams must not eat the video's
+        # bandwidth in a mesh
+        self.assertIn("params.encodings[0].maxBitrate = 40_000;", tune)
+        self.assertIn("track.contentHint = 'speech'", tune)
+
+    def test_tuning_can_never_break_a_call_on_safari(self):
+        # setParameters/getParameters throw on some Safari versions: a throw
+        # here used to abort the whole negotiation
+        tune = rule(self.src, "    _tuneLink(link)")
+        self.assertIn("try {", tune)
+        self.assertIn("} catch (e) {", tune)
+        self.assertIn(".catch(() => {})", tune)
+
+    def test_capture_follows_the_tier(self):
+        video = rule(self.src, "    _videoConstraints(deviceId)")
+        self.assertIn("width: { ideal: tier.width },", video)
+        self.assertIn("height: { ideal: tier.height },", video)
+        self.assertIn("frameRate: { ideal: tier.fps, max: 30 },", video)
+        self.assertIn("resizeMode: 'crop-and-scale',", video)
+        audio = rule(self.src, "    _audioConstraints(deviceId)")
+        self.assertIn("channelCount: 1,", audio)
+        self.assertIn("sampleRate: 48000,", audio)
+
+    def test_a_growing_room_shrinks_the_live_camera(self):
+        adapt = rule(self.src, "    _adaptCapture(tier = this._qualityTier())")
+        self.assertIn("applyConstraints", adapt)
+        self.assertIn("this._captureTier === tier.width", adapt)
+        # a camera that refuses the constraint keeps its old size
+        self.assertIn(".catch(() => {", adapt)
+
+    def test_retuning_is_a_no_op_unless_the_room_really_changed(self):
+        start = self.src.index("    _retuneAll(")
+        retune = self.src[self.src.index(") {", start):]
+        retune = retune[: retune.index("\n    }")]
+        self.assertIn("this._tunedTier === tier.width && this._tunedPeers === this.links.size", retune)
+        self.assertIn("if (!force", retune)
+        # a new track tunes its own link at once; joins/leaves retune the room
+        self.assertIn("this.mesh._tuneLink(this);", rule(self.src, "    addLocalTracks(stream)"))
+        for anchor in ("syncPeers(", "_removePeer("):
+            body = block_after(self.src, self.src.index(f"    {anchor}"))
+            self.assertIn("_retuneAll(", body, anchor)
+
+    def test_remote_media_is_autoplaying_and_inline(self):
+        self.assertIn("video.autoplay = true;", self.src)
+        self.assertIn("video.playsInline = true;", self.src)

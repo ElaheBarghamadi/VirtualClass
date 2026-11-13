@@ -122,40 +122,43 @@ class QuestionTabTests(SimpleTestCase):
         self.assertIn("this.statsMap = {};", started.group(1))
 
 
-class ChatChannelTests(SimpleTestCase):
+class ChatModeTests(SimpleTestCase):
+    """«خصوصی» is the owner's room-wide decision, not a per-message channel."""
+
     def setUp(self):
         self.room = read(TEMPLATES / "room.html")
         self.chat_js = read(JS / "chat.js")
         self.css = read(CSS / "room.css")
 
-    def test_private_switch_is_inside_the_host_block(self):
-        idx_switch = self.room.index('class="chat-channels"')
-        idx_guard = self.room.rindex("{% if can_control_board %}", 0, idx_switch)
+    def test_the_switch_is_the_owner_only(self):
+        idx_switch = self.room.index('id="chat-mode-toggle"')
+        idx_guard = self.room.rindex("{% if is_owner %}", 0, idx_switch)
         idx_end = self.room.index("{% endif %}", idx_guard)
         self.assertLess(idx_guard, idx_switch)
         self.assertLess(idx_switch, idx_end)
+        # everybody else still sees what the mode *is*
+        self.assertIn('id="chat-mode-text"', self.room)
+        self.assertIn('id="chat-channel-hint"', self.room)
 
-    def test_composer_is_shared_by_everybody(self):
+    def test_the_mode_is_rendered_from_the_server_value(self):
+        self.assertIn("{% if classroom.chat_private %}پیام شما فقط برای معلم دیده می‌شود.", self.room)
+        self.assertIn('data-chat-private="{{ classroom.chat_private|yesno:', self.room)
+        # the client boots from that attribute instead of assuming «عمومی»
+        self.assertIn("dataset.chatPrivate === '1'", self.chat_js)
+
+    def test_composer_is_shared_by_everybody_and_carries_no_channel(self):
         self.assertIn('id="chat-form"', self.room)
         self.assertIn('id="chat-input"', self.room)
         self.assertIn('id="chat-reply"', self.room)
+        # the client no longer picks a per-message privacy flag
+        self.assertNotIn("payload.private", self.chat_js)
+        self.assertNotIn("setChannel", self.chat_js)
 
-    def test_private_flag_only_leaves_a_privileged_client(self):
-        start = self.chat_js.index("send(text) {")
-        body = self.chat_js[start: self.chat_js.index("nudge(force = false)", start)]
-        self.assertIn("this.channel === 'private'", body)
-        self.assertIn("this.privileged", body)
-        self.assertIn("payload.private = true", body)
-
-    def test_students_lose_the_switch_and_cannot_switch_to_it(self):
-        self.assertIn(
-            'document.querySelectorAll(\'.chat-channel[data-channel="private"]\')',
-            self.chat_js,
-        )
-        self.assertIn(
-            "channel === 'private' && this.privileged ? 'private' : 'public'",
-            self.chat_js,
-        )
+    def test_owner_toggle_posts_a_real_setting(self):
+        self.assertIn("chat_private: next", self.chat_js)
+        self.assertIn("'/settings/'", self.chat_js)
+        self.assertIn('role="switch"', self.room)
+        self.assertIn('aria-checked=', self.room)
 
     def test_message_text_is_never_injected_as_html(self):
         self.assertIn("body.textContent = m.message;", self.chat_js)
@@ -173,3 +176,12 @@ class ChatChannelTests(SimpleTestCase):
     def test_reply_quote_styles_exist(self):
         for selector in (".chat-quote", ".chat-reply", ".chat-reply-name", ".chat-reply-x"):
             self.assertIn(selector, self.css)
+
+    def test_mode_bar_is_quiet_not_a_second_tab_strip(self):
+        bar = re.search(r"\.chat-mode-bar \{(.*?)\}", self.css, re.S)
+        self.assertIsNotNone(bar)
+        self.assertIn("border-radius: var(--radius-pill);", bar.group(1))
+        self.assertNotIn("box-shadow", bar.group(1))
+        # no leftover channel switcher in markup, CSS or JS
+        for leftover in ("chat-channels", "chat-channel\"", "data-channel"):
+            self.assertNotIn(leftover, self.room)

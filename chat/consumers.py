@@ -7,8 +7,9 @@ Flow:  browser WebSocket → Channels → this consumer → DB + group broadcast
 Authorization notes
 -------------------
 * membership + ``can_send_messages`` are re-evaluated **per message**
-  against the database — classroom settings (e.g. ``chat_disabled``) or
-  per-member flags changed mid-session take effect immediately;
+  against the database — classroom settings (e.g. ``chat_disabled`` or the
+  owner's ``chat_private`` mode) or per-member flags changed mid-session take
+  effect immediately;
 * ``delete_message`` is restricted to OWNER/MODERATOR and soft-deletes;
 * a modified client script can never grant extra rights.
 """
@@ -44,6 +45,8 @@ class ChatConsumer(SafeJsonWebsocketConsumer):
         self.group_name = f"classroom_chat_{self.room_code}"
         # Hosts get a second group: private messages are only ever delivered
         # there (plus the author/audience member groups), never to the room.
+        # Host team group: private messages are only ever delivered here (plus
+        # the author's member group and the student a thread is addressed to).
         self.private_group = f"classroom_chat_{self.room_code}_private"
         self.classroom = None
         self.member = None
@@ -119,16 +122,14 @@ class ChatConsumer(SafeJsonWebsocketConsumer):
             return
         message = message[:MAX_MESSAGE_LENGTH]
 
-        is_private = content.get("private") is True
-        if is_private and not await self._is_privileged_now():
-            # The private channel belongs to the host team: a student cannot
-            # open it, no matter what their browser sends.
-            await self.send_json({
-                "type": "error",
-                "message": "گفتگوی خصوصی فقط برای میزبان‌های کلاس است.",
-            })
-            return
+        # Privacy is the owner's room-wide decision, not a per-message switch a
+        # student could flip: when ``chat_private`` is on, a student's message
+        # is addressed to the host team (and to its author), and classmates
+        # never receive the row.  Host messages stay public.
         reply_to = _as_positive_int(content.get("reply_to"))
+        host = await self._is_privileged_now()
+        mode_private = await self._chat_is_private_now()
+        is_private = (mode_private and not host) or (host and content.get("private") is True)
 
         payload = await self._save_message(message, private=is_private, reply_to=reply_to)
         if payload is None:
@@ -143,9 +144,10 @@ class ChatConsumer(SafeJsonWebsocketConsumer):
         await self.channel_layer.group_send(
             self.private_group, {"type": "chat.message", "message": payload}
         )
-        # Every private message is written by a host, who already received it
-        # through ``private_group``; only a named student gets an extra copy.
-        targets: set[str] = set()
+        # Hosts received it through ``private_group``; the student who wrote it
+        # needs their own copy, and a thread addressed to a student reaches
+        # them too.  Classmates are never in any of these groups.
+        targets: set[str] = set() if host else {self.member_group_name}
         audience_member_id = await self._audience_member_id(payload)
         if audience_member_id:
             targets.add(member_group(self.room_code, audience_member_id))
@@ -230,6 +232,16 @@ class ChatConsumer(SafeJsonWebsocketConsumer):
         return effective_permissions(member, member.classroom)["can_send_messages"]
 
     @database_sync_to_async
+    def _chat_is_private_now(self) -> bool:
+        """Live read: the owner may flip the chat mode mid-sentence."""
+        return bool(
+            ClassroomMember.objects.filter(
+                id=self.member.id, is_active=True, in_waiting_room=False,
+                classroom__is_active=True, classroom__chat_private=True,
+            ).exists()
+        )
+
+    @database_sync_to_async
     def _is_privileged_now(self) -> bool:
         member = ClassroomMember.objects.filter(
             id=self.member.id, is_active=True, in_waiting_room=False,
@@ -265,12 +277,13 @@ class ChatConsumer(SafeJsonWebsocketConsumer):
         audience = None
         if private:
             if not host:
-                # A student's private note belongs to them and the hosts.
+                # A student's private message belongs to them and the hosts.
                 audience = member
-            elif parent is not None and parent.is_private and parent.audience_member_id:
-                # A host answering a student's private question keeps the thread
-                # private *to that student* instead of dropping back to staff-only.
-                audience = parent.audience_member
+            elif parent is not None and parent.is_private:
+                # A host answering a private message keeps the thread private
+                # *to that student* instead of dropping back to staff-only.
+                candidate = parent.audience_member or parent.sender_member
+                audience = candidate if candidate is not None and candidate.id != member.id else None
         return ChatMessage.objects.create(
             classroom=member.classroom,
             sender=member.user if member.user_id else None,

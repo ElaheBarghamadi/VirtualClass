@@ -892,6 +892,7 @@ SETTING_FIELDS = (
     "allow_file_upload",
     "allow_guests",
     "chat_disabled",
+    "chat_private",
     # Legacy, accepted so old clients do not start erroring: they are stored on
     # the row but no longer widen anything.  The whiteboard and screen sharing
     # are granted per member (participants panel), never room-wide — see

@@ -234,6 +234,7 @@ class LivekitMedia {
         const level = document.createElement('span');
         level.className = 'tile-level';
         level.setAttribute('aria-hidden', 'true');
+        level.innerHTML = '<i></i><i></i><i></i>';
 
         tile.append(video, placeholder, overlay, speaking, level);
         tile.addEventListener('click', () => this.togglePin(identity));

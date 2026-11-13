@@ -104,6 +104,9 @@ class PeerLink {
                 this.mesh._onPeerGone(this.peer.identity);
                 return;
             }
+            // `encodings` only exist after negotiation, so the bitrate cap is
+            // (re)applied when the link really comes up.
+            if (this._isUp(pc)) this.mesh._tuneLink(this);
             this._onConnectState(pc);
         };
         return pc;
@@ -215,6 +218,8 @@ class PeerLink {
         for (const track of stream.getTracks()) {
             if (!existing.has(track.kind)) this.pc.addTrack(track, stream);
         }
+        // Bitrate/framerate caps are per sender: set them as soon as we have one.
+        this.mesh._tuneLink(this);
     }
 
     close() {
@@ -283,8 +288,14 @@ class MeshMedia {
             emptyText.textContent = 'برای فعال کردن دوربین/میکروفون از دکمه‌های پایین استفاده کنید.';
         }
         // periodic real-stats quality + active-speaker evaluation
-        this._statsTimer = setInterval(() => this._evaluateQuality(), 4000);
-        this._speakerTimer = setInterval(() => this._evaluateSpeaker(), 700);
+        // A throwing iteration must not take the timer (and with it every
+        // level meter and the speaker focus) down for the rest of the lesson.
+        this._statsTimer = setInterval(() => {
+            try { this._evaluateQuality(); } catch (e) { console.warn('[mesh] stats tick failed', e); }
+        }, 4000);
+        this._speakerTimer = setInterval(() => {
+            try { this._evaluateSpeaker(); } catch (e) { console.warn('[mesh] level tick failed', e); }
+        }, 700);
         this._watchDevices();
     }
 
@@ -316,6 +327,8 @@ class MeshMedia {
         for (const identity of Array.from(this.links.keys())) {
             if (!seen.has(identity)) this._removePeer(identity);
         }
+        // More cameras → smaller frames for each of them (and vice versa).
+        this._retuneAll();
     }
 
     _removePeer(identity) {
@@ -333,6 +346,7 @@ class MeshMedia {
         if (this.activeSpeaker === identity) this.activeSpeaker = null;
         if (this._screenOwner === identity) this._hideScreenView();
         this._layout();
+        this._retuneAll();
     }
 
     _onPeerGone(identity) {
@@ -509,13 +523,107 @@ class MeshMedia {
 
     /** Classroom-grade audio processing — the same defaults Meet/Zoom rely on. */
     _audioConstraints(deviceId) {
-        const base = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+        const base = {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+            channelCount: 1,
+            sampleRate: 48000,
+        };
         return deviceId ? { ...base, deviceId: { exact: deviceId } } : base;
     }
 
+    /** Everybody we are sending to (self included). */
+    _roomSize() {
+        return this.links.size + 1;
+    }
+
+    /**
+     * A mesh multiplies our upload by the number of peers, so the *capture*
+     * has to shrink as the room grows — otherwise the third camera turns the
+     * class into a slideshow.  One tier table, used by both the capture
+     * constraints and the per-sender bitrate.
+     */
+    _qualityTier(size = this._roomSize()) {
+        if (size <= 2) return { width: 1280, height: 720, fps: 30, bitrate: 1_600_000 };
+        if (size <= 4) return { width: 960, height: 540, fps: 26, bitrate: 900_000 };
+        if (size <= 6) return { width: 640, height: 360, fps: 22, bitrate: 520_000 };
+        return { width: 480, height: 270, fps: 18, bitrate: 320_000 };
+    }
+
     _videoConstraints(deviceId) {
-        const base = { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } };
+        const tier = this._qualityTier();
+        const base = {
+            width: { ideal: tier.width },
+            height: { ideal: tier.height },
+            frameRate: { ideal: tier.fps, max: 30 },
+            aspectRatio: { ideal: 16 / 9 },
+            // Keep the picture stable instead of re-framing wildly on a laptop
+            // camera; ignored by browsers that do not know it.
+            resizeMode: 'crop-and-scale',
+        };
         return deviceId ? { ...base, deviceId: { exact: deviceId } } : base;
+    }
+
+    /**
+     * Tell one peer connection how much of our upload it may use.  Browsers
+     * only expose `encodings` after negotiation, so this is called again when
+     * the link comes up (and whenever the room grows or shrinks).
+     */
+    _tuneLink(link) {
+        if (!link || !link.pc) return;
+        const tier = this._qualityTier();
+        for (const sender of link.pc.getSenders()) {
+            const track = sender.track;
+            if (!track) continue;
+            try {
+                if (track.kind === 'video') {
+                    if ('contentHint' in track) track.contentHint = 'motion';
+                    const params = sender.getParameters();
+                    if (!params.encodings || !params.encodings.length) continue;
+                    params.encodings[0].maxBitrate = tier.bitrate;
+                    params.encodings[0].maxFramerate = tier.fps;
+                    params.degradationPreference = 'balanced';
+                    sender.setParameters(params).catch(() => {});
+                } else if (track.kind === 'audio') {
+                    if ('contentHint' in track) track.contentHint = 'speech';
+                    const params = sender.getParameters();
+                    if (!params.encodings || !params.encodings.length) continue;
+                    // Opus at ~40 kbps is transparent for speech and leaves
+                    // room for everybody else's video.
+                    params.encodings[0].maxBitrate = 40_000;
+                    sender.setParameters(params).catch(() => {});
+                }
+            } catch (e) {
+                // Safari/older browsers: parameters are read-only.  Capture
+                // constraints still keep the stream small.
+            }
+        }
+    }
+
+    _retuneAll({ force = false } = {}) {
+        const tier = this._qualityTier();
+        // The roster re-syncs on every media toggle in the room; retuning on
+        // each of those would just churn bitrate parameters, so only act when
+        // the tier or the peer count really changed.
+        if (!force && this._tunedTier === tier.width && this._tunedPeers === this.links.size) return;
+        this._tunedTier = tier.width;
+        this._tunedPeers = this.links.size;
+        for (const link of this.links.values()) this._tuneLink(link);
+        this._adaptCapture(tier);
+    }
+
+    /** Shrink/grow the live camera itself when the room changes size. */
+    _adaptCapture(tier = this._qualityTier()) {
+        const track = this.localStream && this.localStream.getVideoTracks()[0];
+        if (!track || typeof track.applyConstraints !== 'function') return;
+        if (this._captureTier === tier.width) return;
+        this._captureTier = tier.width;
+        track.applyConstraints({
+            width: { ideal: tier.width },
+            height: { ideal: tier.height },
+            frameRate: { ideal: tier.fps, max: 30 },
+        }).catch(() => { /* the camera may not support it — keep the old size */ });
     }
 
     async _acquire(constraints) {
@@ -613,8 +721,10 @@ class MeshMedia {
             }
             this._watchLocalTrack(track, 'video');
             this._mergeLocalTrack(track);
+            this._captureTier = null;      // re-apply the current tier below
             this.cameraOn = true;
             this._republishLocal();
+            this._retuneAll();
             this._afterLocalChange();
             return true;
         } finally {
@@ -1038,6 +1148,9 @@ class MeshMedia {
         // one an output-device change re-routes).  A second, unmuted copy of
         // the same track here would double every voice.
         video.muted = true;
+        video.playsInline = true;
+        video.setAttribute('playsinline', '');
+        video.autoplay = true;
         const overlay = document.createElement('div');
         overlay.className = 'tile-overlay';
         overlay.innerHTML = '<span class="tile-name"></span><span class="tile-icons"><i class="t-mic" title="میکروفون"><svg class="ic"><use href="#i-mic"/></svg></i></span>'
@@ -1061,9 +1174,11 @@ class MeshMedia {
         speaking.setAttribute('role', 'status');
         speaking.setAttribute('aria-label', 'در حال صحبت');
         speaking.setAttribute('aria-hidden', 'true');
-        const level = document.createElement('i');
+        // Three soft bars instead of a green strip along the bottom edge.
+        const level = document.createElement('span');
         level.className = 'tile-level';
         level.setAttribute('aria-hidden', 'true');
+        level.innerHTML = '<i></i><i></i><i></i>';
         tile.append(video, placeholder, overlay, speaking, level);
         overlay.querySelector('.tile-name').textContent = peer.name || peer.identity;
         this.tiles.set(peer.identity, tile);
