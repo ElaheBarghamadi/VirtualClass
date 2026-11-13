@@ -37,6 +37,10 @@ ALLOWED_HOSTS=virtualclass.weblines.ir
 CSRF_TRUSTED_ORIGINS=https://virtualclass.weblines.ir
 TRUST_X_FORWARDED_PROTO=true
 TIME_ZONE=Asia/Tehran
+# اختیاری ولی توصیه‌شده: اگر این را بگذارید، دامنه خودکار به
+# ALLOWED_HOSTS و CSRF_TRUSTED_ORIGINS اضافه می‌شود و خطای DisallowedHost
+# با عوض شدن دامنه دیگر پیش نمی‌آید.
+PUBLIC_URL=https://virtualclass.weblines.ir
 ```
 
 `SECRET_KEY` را با این دستور بسازید (۶۴ کاراکتر، بدون `$` و `#` که در بعضی پنل‌ها مشکل می‌سازند):
@@ -50,6 +54,7 @@ python -c "import secrets; print(secrets.token_urlsafe(48))"
 | `DEBUG=false` | بدونش traceback و تنظیمات عمومی می‌شود و کوکی‌ها `Secure` نیستند | صفحهٔ خطای کامل برای همه + کوکی ناامن |
 | `ALLOWED_HOSTS` | بدون `https://` و بدون `*` | هر درخواست `400 DisallowedHost` |
 | `CSRF_TRUSTED_ORIGINS` | **با** `https://` (چون مرورگر Origin می‌فرستد) | هر فرم، از جمله ورود، `403` |
+| `PUBLIC_URL` | نشانی عمومی سایت؛ خودکار به `ALLOWED_HOSTS` و `CSRF_TRUSTED_ORIGINS` اضافه می‌شود | اگر نباشد، هر بار عوض شدن env دستی باید `ALLOWED_HOSTS` را هم به‌روز کنید |
 | `TRUST_X_FORWARDED_PROTO=true` | پروکسی وب‌لاینز TLS را تمام می‌کند و `X-Forwarded-Proto: https` می‌فرستد | CSRF رد می‌شود یا ریدایرکت HTTPS حلقه می‌زند |
 
 > اگر روزی زیردامنهٔ دیگری هم اضافه کردید: `ALLOWED_HOSTS=virtualclass.weblines.ir,.weblines.ir`
