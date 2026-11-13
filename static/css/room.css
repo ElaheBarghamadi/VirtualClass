@@ -11,9 +11,13 @@
     --room-muted: var(--muted);
     display: flex;
     flex-direction: column;
-    /* full-viewport meeting layout (Skyroom-style): no chrome, no margins */
+    /* full-viewport meeting layout (Skyroom-style): no chrome, no margins.
+       --app-h is published by viewport.js and tracks the *visual* viewport, so
+       the composer stays above the mobile keyboard on Safari too (which never
+       resizes the layout viewport). */
     height: 100vh;
     height: 100dvh;
+    height: var(--app-h, 100dvh);
     width: 100vw;
     min-height: 0;
     background: var(--room-bg);
@@ -30,7 +34,15 @@
 }
 
 /* the room page drops the site chrome entirely */
-body.full-page { overflow: hidden; }
+/* The room owns the viewport: nothing scrolls and nothing pans.  Pinning the
+   body also stops iOS from sliding the whole page up to reveal a focused
+   composer and leaving it shifted there once the keyboard closes. */
+body.full-page {
+    overflow: hidden;
+    position: fixed;
+    inset: 0;
+    overscroll-behavior: none;
+}
 body.full-page > main { width: 100%; padding: 0; margin: 0; display: block; }
 body.full-page .messages {
     position: fixed; top: .75rem; inset-inline: 0; z-index: 60;
@@ -2534,4 +2546,34 @@ body.class-is-over .room-side { pointer-events: none; }
         pointer-events: none;
     }
     .side-tabs { padding-top: 1.05rem; }
+}
+
+/* --------------------------------------------------------------------------
+   iOS never zooms on focus when the field is at least 16px. Anything smaller
+   makes Safari zoom the whole page as the keyboard opens and zoom back out as
+   it closes — which reads as "the layout fell apart" after every message.
+   -------------------------------------------------------------------------- */
+@media (pointer: coarse) {
+    .chat-form input,
+    .participant-filters input,
+    .wb-text-edit input,
+    .field input,
+    .field select,
+    .field textarea,
+    .link-row input,
+    .link-box input,
+    dialog.app-dialog input,
+    dialog.app-dialog textarea,
+    dialog.app-dialog select,
+    input[type="search"],
+    input[type="text"],
+    input[type="email"],
+    input[type="password"],
+    input[type="number"],
+    input[type="url"],
+    input[type="tel"],
+    textarea,
+    select {
+        font-size: 16px;
+    }
 }

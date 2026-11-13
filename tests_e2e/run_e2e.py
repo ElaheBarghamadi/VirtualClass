@@ -436,7 +436,7 @@ def run(base: str, code: str) -> int:
         guest_initial = pg_o.is_checked('input[name=allow_guests]')
         pg_o.check('input[name=allow_guests]')
         pg_o.click("#settings-save"); pg_o.wait_for_timeout(1500)
-        msg = " | ".join(pg_o.locator(".toast .toast-text").all_text_contents())
+        msg = " | ".join(pg_o.locator(".toast .toast__text").all_text_contents())
         check("allow_guests saves via settings modal",
               pg_o.evaluate("() => document.getElementById('settings-dialog')?.open === false")
               and "ذخیره شد" in msg, msg.strip())

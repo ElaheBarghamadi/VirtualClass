@@ -2105,113 +2105,234 @@ dialog.app-dialog .field-help { margin: .2rem 0 0; font-size: .82rem; color: var
 }
 
 /* ==========================================================================
-   Toasts — the app's single status channel
+   Notifications — one stack, on the side, everywhere
 
-   Every action that cannot show its result in place reports through here:
-   a refused camera, a muted class, a sent report, a lost socket.  The box is
-   pinned to the viewport on purpose — inside the room `body.full-page` clips
-   overflow, and a statically positioned toast landed below the fold, i.e. the
-   button appeared to do nothing at all.
+   Every message the app can produce lands here: toasts raised by JS modules
+   and the flash messages Django renders after a redirect. The stack is docked
+   to the inline-end edge (left, in this RTL UI) and grows upward, so a burst
+   of messages reads as a list instead of a pile of boxes in the middle of the
+   screen. Each card can be closed with its own × and, on touch, swiped away;
+   the countdown pauses while the card is hovered or focused, because a message
+   you are reading should not vanish mid-sentence.
    ========================================================================== */
 .toast-container {
     position: fixed;
-    inset-inline: 0;
-    inset-block-start: max(0.85rem, env(safe-area-inset-top, 0px));
-    margin-inline: auto;
-    width: min(460px, calc(100% - 1.5rem));
+    z-index: 200;
+    inset-inline-start: auto;
+    inset-inline-end: 1rem;
+    inset-block-end: max(1rem, env(safe-area-inset-bottom, 0px));
     display: flex;
     flex-direction: column;
-    gap: 0.45rem;
-    z-index: 200;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    width: min(380px, calc(100vw - 2rem));
+    max-height: calc(var(--app-h, 100dvh) - 2rem);
     pointer-events: none;
+    /* where a card slides in from — mirrored for LTR */
+    --toast-shift: -112%;
+}
+html[dir="ltr"] .toast-container { --toast-shift: 112%; }
+
+/* Inside the room the floating dock owns the bottom edge and the chat rail
+   owns the inline-end side, so the stack moves to the other side — over the
+   stage, above the bar and above the first-run device test card. */
+body.full-page .toast-container {
+    inset-inline-start: 1rem;
+    inset-inline-end: auto;
+    --toast-shift: 112%;
+    inset-block-end: calc(var(--bar-h, 76px) + var(--dt-h, 0px) + 0.9rem + env(safe-area-inset-bottom, 0px));
+}
+html[dir="ltr"] body.full-page .toast-container { --toast-shift: -112%; }
+
+/* On phones that chat rail is a drawer with the composer pinned to its bottom,
+   so while it is open the stack lifts clear of the composer instead of sitting
+   on top of the input the user is typing into. */
+@media (max-width: 900px) {
+    body.full-page:has(.room-side.drawer-open) .toast-container {
+        inset-block-end: calc(
+            var(--bar-h, 76px) + var(--composer-h, 56px) + 0.9rem + env(safe-area-inset-bottom, 0px)
+        );
+    }
+    /* …and the keyboard adds its own slice on top of that. */
+    html.kb-open body.full-page:has(.room-side.drawer-open) .toast-container {
+        inset-block-end: calc(
+            var(--kb, 0px) + var(--bar-h, 76px) + var(--composer-h, 56px) + 0.9rem
+        );
+    }
 }
 
-/* In the room the header owns the top edge and the dock owns the bottom one,
-   so the stack floats just above the control bar. */
-body.full-page .toast-container {
-    inset-block-start: auto;
-    /* --dt-h is the first-run device-test card (room.js keeps it current), so a
-       toast never lands on top of «شروع تست». */
-    inset-block-end: calc(var(--bar-h, 76px) + var(--dt-h, 0px) + 1.5rem + env(safe-area-inset-bottom, 0px));
+/* While the mobile keyboard is up the visual viewport is shorter than the
+   layout viewport on Safari: lift the stack with it, or it hides. */
+html.kb-open .toast-container { inset-block-end: calc(var(--kb, 0px) + 0.8rem); }
+html.kb-open body.full-page .toast-container {
+    inset-block-end: calc(var(--kb, 0px) + var(--bar-h, 76px) + 0.8rem);
 }
 
 .toast {
+    --toast-accent: var(--primary);
     position: relative;
-    pointer-events: auto;
-    display: flex;
-    align-items: center;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: start;
     gap: 0.55rem;
-    padding-block: 0.6rem;
-    padding-inline: 0.95rem 0.5rem;
-    border-radius: var(--radius-md);
+    padding: 0.72rem 0.55rem 0.72rem 0.8rem;
+    border-radius: 16px;
     background: var(--surface-elevated, var(--surface));
     color: var(--text);
     border: 1px solid var(--border);
     box-shadow: var(--shadow-lg);
     font-size: var(--fs-sm);
-    line-height: 1.55;
+    line-height: 1.62;
     overflow: hidden;
+    max-height: 12rem;
+    pointer-events: auto;
+    touch-action: pan-y;
+    opacity: 0;
+    transform: translateX(var(--toast-shift)) scale(0.97);
+    transition:
+        opacity 0.24s var(--ease),
+        transform 0.34s var(--ease-spring),
+        max-height 0.26s var(--ease),
+        margin 0.26s var(--ease),
+        padding 0.26s var(--ease),
+        border-color 0.26s var(--ease);
+}
+.toast.is-in { opacity: 1; transform: none; }
+.toast.is-dragging { transition: none; }
+.toast.is-leaving {
+    opacity: 0;
+    transform: translateX(var(--toast-shift)) scale(0.96);
+    max-height: 0;
+    padding-block: 0;
+    margin-block-end: -0.5rem; /* swallow the flex gap while collapsing */
+    border-color: transparent;
+    pointer-events: none;
 }
 
-/* A 3px rail states the level without relying on the icon alone. */
-.toast::before {
-    content: "";
-    position: absolute;
-    inset-block: 0;
-    inset-inline-start: 0;
-    width: 3px;
-    background: var(--accent);
-}
-.toast-success::before { background: var(--success); }
-.toast-warning::before { background: var(--warning); }
-.toast-error::before { background: var(--danger); }
+.toast--success { --toast-accent: var(--success); }
+.toast--warning { --toast-accent: var(--warning); }
+.toast--error   { --toast-accent: var(--danger); }
 
-.toast-icon {
-    width: 18px;
-    height: 18px;
+.toast__icon {
     flex: none;
+    width: 30px;
+    height: 30px;
+    display: grid;
+    place-items: center;
+    border-radius: 10px;
+    color: var(--toast-accent);
+    background: color-mix(in srgb, var(--toast-accent) 13%, transparent);
+}
+.toast__glyph {
+    width: 17px;
+    height: 17px;
     fill: none;
     stroke: currentColor;
     stroke-width: 1.9;
     stroke-linecap: round;
     stroke-linejoin: round;
-    color: var(--accent);
 }
-.toast-success .toast-icon { color: var(--success); }
-.toast-warning .toast-icon { color: var(--warning); }
-.toast-error .toast-icon { color: var(--danger); }
 
-.toast-text {
-    flex: 1 1 auto;
+.toast__body {
     min-width: 0;
-    overflow-wrap: anywhere;
+    padding-block-start: 0.26rem;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.35rem;
 }
-
-.toast-close {
+.toast__text { margin: 0; overflow-wrap: anywhere; }
+.toast__count {
     flex: none;
-    width: 28px;
-    height: 28px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    line-height: 1.5;
+    padding-inline: 0.36rem;
+    border-radius: 999px;
+    color: var(--toast-accent);
+    background: color-mix(in srgb, var(--toast-accent) 14%, transparent);
+}
+.toast.is-bumped .toast__body { animation: toast-bump 0.3s var(--ease-spring); }
+
+.toast__close {
+    flex: none;
+    width: 26px;
+    height: 26px;
     display: grid;
     place-items: center;
     border: 0;
-    border-radius: var(--radius-pill);
+    border-radius: 999px;
     background: none;
     color: var(--muted);
-    font-size: 1.1rem;
-    line-height: 1;
     cursor: pointer;
-    transition: background var(--speed) var(--ease), color var(--speed) var(--ease);
+    transition: background 0.18s var(--ease), color 0.18s var(--ease), transform 0.18s var(--ease);
 }
-.toast-close:hover,
-.toast-close:focus-visible {
-    background: var(--surface-2);
+.toast__close:hover,
+.toast__close:focus-visible {
+    background: color-mix(in srgb, var(--text) 9%, transparent);
     color: var(--text);
     outline: none;
 }
+.toast__close:active { transform: scale(0.9); }
+.toast__x {
+    width: 14px;
+    height: 14px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+}
+
+/* The countdown rail doubles as the level colour. */
+.toast__timer {
+    position: absolute;
+    inset-block-end: 0;
+    inset-inline: 0;
+    height: 2px;
+    background: color-mix(in srgb, var(--toast-accent) 12%, transparent);
+}
+.toast__timer::after {
+    content: "";
+    display: block;
+    height: 100%;
+    background: var(--toast-accent);
+    opacity: 0.55;
+    transform-origin: left center;
+    animation: toast-timer var(--toast-ms, 4200ms) linear forwards;
+}
+html[dir="rtl"] .toast__timer::after { transform-origin: right center; }
+.toast.is-paused .toast__timer::after { animation-play-state: paused; }
+
+@keyframes toast-timer {
+    from { transform: scaleX(1); }
+    to   { transform: scaleX(0); }
+}
+@keyframes toast-bump {
+    0%   { transform: scale(1); }
+    45%  { transform: scale(1.06); }
+    100% { transform: scale(1); }
+}
+
+/* Phones: use the whole width, keep clear of the notch and the thumb zone. */
+@media (max-width: 560px) {
+    .toast-container {
+        inset-inline: 0.7rem;
+        width: auto;
+    }
+    .toast { border-radius: 14px; }
+}
 
 @media (prefers-reduced-motion: reduce) {
-    .toast { animation: none !important; }
+    .toast,
+    .toast.is-leaving { transition: none; transform: none; }
+    .toast { opacity: 1; }
+    .toast__timer::after,
+    .toast.is-bumped .toast__body { animation: none; }
 }
+[data-motion="reduced"] .toast,
+[data-motion="reduced"] .toast.is-leaving { transition: none; transform: none; }
+[data-motion="reduced"] .toast { opacity: 1; }
+[data-motion="reduced"] .toast__timer::after { animation: none; }
 
 
 /* ==========================================================================
@@ -2453,4 +2574,34 @@ html { scroll-padding-top: 76px; }
     /* `clip` rather than `hidden`: hidden would make <body> a scroll container
        and break the sticky header. Browsers without it simply ignore the rule. */
     body { overflow-x: clip; }
+}
+
+/* --------------------------------------------------------------------------
+   iOS never zooms on focus when the field is at least 16px. Anything smaller
+   makes Safari zoom the whole page as the keyboard opens and zoom back out as
+   it closes — which reads as "the layout fell apart" after every message.
+   -------------------------------------------------------------------------- */
+@media (pointer: coarse) {
+    .chat-form input,
+    .participant-filters input,
+    .wb-text-edit input,
+    .field input,
+    .field select,
+    .field textarea,
+    .link-row input,
+    .link-box input,
+    dialog.app-dialog input,
+    dialog.app-dialog textarea,
+    dialog.app-dialog select,
+    input[type="search"],
+    input[type="text"],
+    input[type="email"],
+    input[type="password"],
+    input[type="number"],
+    input[type="url"],
+    input[type="tel"],
+    textarea,
+    select {
+        font-size: 16px;
+    }
 }

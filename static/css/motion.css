@@ -216,7 +216,7 @@ body::after {
 dialog.app-dialog[open] { animation: drawer-in .32s var(--ease-spring) both; }
 dialog.app-dialog[open]::backdrop { animation: fade-in .28s var(--ease) both; }
 
-.toast { animation: slide-in-side .38s var(--ease-spring) both; }
+/* notifications animate themselves in main.css (slide + collapse) */
 .more-menu.show button { animation: fade-in .22s var(--ease) both; }
 .more-menu.show button:nth-child(2) { animation-delay: .03s; }
 .more-menu.show button:nth-child(3) { animation-delay: .06s; }

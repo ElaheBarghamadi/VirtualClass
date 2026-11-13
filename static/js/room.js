@@ -542,7 +542,10 @@ function placeRowMenu(anchor, menu) {
         let left = r.left + r.width / 2 - w / 2;
         left = Math.max(margin, Math.min(left, window.innerWidth - w - margin));
         let top = r.bottom + 6;
-        if (top + h > window.innerHeight - margin) top = Math.max(margin, r.top - h - 6);
+        const viewH = window.visualViewport
+            ? Math.min(window.innerHeight, window.visualViewport.height)
+            : window.innerHeight;
+        if (top + h > viewH - margin) top = Math.max(margin, r.top - h - 6);
         menu.style.left = `${Math.round(left)}px`;
         menu.style.top = `${Math.round(top)}px`;
     };
@@ -1381,11 +1384,31 @@ function trackControlBarHeight() {
 }
 
 // ---------------------------------------------------------------------------
+// Chat composer height → --composer-h
+//
+// On phones the side panel is a drawer whose composer is pinned to the bottom;
+// the toast stack lifts by this much so it never covers the field being typed
+// into.  A closed drawer is `display:none` on the desktop grid (and off-screen
+// when it is a drawer), so the measured height is the honest 0 there.
+// ---------------------------------------------------------------------------
+function trackComposerHeight() {
+    const form = document.querySelector('.room-side .chat-form');
+    if (!form) return;
+    const apply = () => {
+        document.documentElement.style.setProperty('--composer-h', `${Math.round(form.offsetHeight)}px`);
+    };
+    apply();
+    if (window.ResizeObserver) new ResizeObserver(apply).observe(form);
+    else window.addEventListener('resize', apply);
+}
+
+// ---------------------------------------------------------------------------
 // Device-test card height → --dt-h
 //
-// The first-run test card floats in the same corner as the toast stack, so the
-// toasts sit on top of it instead of covering its buttons.  A ResizeObserver on
-// a display:none card reports 0, which is exactly the offset we want.
+// The first-run test card floats over the bottom of the room, in the same
+// band the toast stack occupies, so the stack lifts by its height instead of
+// landing on its buttons.  A ResizeObserver on a display:none card reports 0,
+// which is exactly the offset we want.
 // ---------------------------------------------------------------------------
 function trackDeviceTestHeight() {
     const card = document.getElementById('device-test-card');
@@ -2723,12 +2746,26 @@ function initClock() {
 // The floating bar wraps to 1–3 rows depending on viewport; expose its real
 // occupied height (plus margin) as --bar-space so the stage, drawer and
 // camera PiP always reserve exactly the right amount of clearance.
+/** The height the user can actually see right now.
+ *
+ * `innerHeight` ignores the mobile keyboard on Safari: it keeps reporting the
+ * pre-keyboard height while the visible area has shrunk, and measuring the
+ * dock against it reserved a whole keyboard's worth of dead space — the stage,
+ * chat and camera preview all shrank and nothing recovered after the keyboard
+ * closed. `visualViewport.height` is the honest number there; on desktop both
+ * agree, so `min()` is safe everywhere.
+ */
+function visibleHeight() {
+    const viewport = window.visualViewport;
+    return viewport ? Math.min(window.innerHeight, viewport.height) : window.innerHeight;
+}
+
 function syncBarSpace() {
     const bar = document.querySelector('.room-controls');
     if (!bar) return;
     const r = bar.getBoundingClientRect();
     if (!r.height) return;
-    const gap = Math.max(0, window.innerHeight - r.top) + 12;
+    const gap = Math.max(0, visibleHeight() - r.top) + 12;
     document.documentElement.style.setProperty('--bar-space', `${Math.round(gap)}px`);
 }
 
@@ -2761,9 +2798,13 @@ safe('controls', initControls);
 safe('bar-space', () => {
     trackControlBarHeight();
     trackDeviceTestHeight();
+    trackComposerHeight();
     syncBarSpace();
     window.addEventListener('resize', syncBarSpace);
     window.addEventListener('load', syncBarSpace);
+    // Keyboard open/close (Safari fires no `resize` for it) and pinch-zoom.
+    window.addEventListener('app:viewport', syncBarSpace);
+    window.visualViewport?.addEventListener('resize', syncBarSpace);
     setTimeout(syncBarSpace, 400); // re-measure after webfonts settle
 });
 safe('layouts', initLayouts);
