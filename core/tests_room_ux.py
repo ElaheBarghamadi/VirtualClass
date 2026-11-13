@@ -554,6 +554,56 @@ class SpeakingHighlightTests(SimpleTestCase):
         self.assertIn(".tile.speaking .tile-speaking { display: inline-flex; }", self.css)
 
 
+class NetworkVerdictTests(SimpleTestCase):
+    """The device test now answers "will anyone else see this camera?".
+
+    A camera that turns on proves the *device*; ICE decides whether a frame ever
+    reaches another network.  The panel reports which candidate types this
+    browser could gather, in words a teacher can act on.
+    """
+
+    def setUp(self):
+        self.js = read(JS / "device-test.js")
+        self.room = read(JS / "room.js")
+        self.mesh = read(JS / "mesh.js")
+        self.tpl = read(TEMPLATES / "room.html")
+        self.css = read(CSS / "room.css")
+
+    def test_the_probe_reads_the_candidate_types(self):
+        self.assertIn("export async function gatherIceReport(", self.js)
+        self.assertIn("/typ (host|srflx|relay|prflx)/", self.js)
+        self.assertIn("pc.createDataChannel('probe');", self.js)
+        self.assertIn("setTimeout(finish, timeoutMs);", self.js)
+        # a probe must never leak a peer connection
+        self.assertIn("pc.close();", self.js)
+
+    def test_relay_is_the_only_all_networks_answer(self):
+        verdict = rule(self.js, "export function describeIceReport(report)")
+        self.assertIn("if (report.relay)", verdict)
+        self.assertIn("state: 'ok'", verdict)
+        self.assertIn("state: 'warn'", verdict)
+        self.assertIn("بدون سرور رله (TURN) یا LiveKit", verdict)
+
+    def test_it_runs_with_the_classroom_ice_servers(self):
+        self.assertIn(
+            "initDeviceTest({ roomCode: ROOM_CODE, iceServers: ICE_SERVERS })", self.room
+        )
+        self.assertIn("await gatherIceReport(iceServers)", self.js)
+
+    def test_the_panel_has_somewhere_to_say_it(self):
+        self.assertIn('id="dt-net"', self.tpl)
+        self.assertIn("netLine.dataset.state = verdict.state;", self.js)
+        net = rule(self.css, ".dt-net", "padding")
+        self.assertIn("border-radius", net)
+        self.assertIn('[data-state="warn"]', self.css)
+
+    def test_the_mesh_says_how_the_link_was_made(self):
+        self.assertIn("local=${localType} remote=${remoteType}", self.mesh)
+        self.assertIn("candidate-pair", self.mesh)
+        # and why it failed, in the same words as the tile
+        self.assertIn("no TURN relay configured (WEBRTC_ICE_SERVERS)", self.mesh)
+
+
 class WhoIsSpeakingTests(SimpleTestCase):
     """In a full grid the room must answer "who is that?" without guessing.
 

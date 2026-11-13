@@ -339,3 +339,66 @@ class HealthProbeHostTests(SimpleTestCase):
         from django.conf import settings
 
         self.assertEqual(settings.MIDDLEWARE[0], "core.middleware.HealthProbeHostMiddleware")
+
+
+class MediaPathTests(SimpleTestCase):
+    """«دوربین روشن می‌شود ولی بقیه نمی‌بینند» is a network fact, not a bug.
+
+    Two classmates on the same Wi-Fi connect directly; the same two on mobile
+    networks sit behind carrier-grade NAT, ICE finds no path, and the local
+    preview keeps looking perfect.  A production room needs an SFU or a TURN
+    relay, and its absence has to be visible at boot.
+    """
+
+    def _ids_for(self, **settings_kwargs):
+        with self.settings(**settings_kwargs):
+            return _ids(checks.media_can_reach_both_sides(None))
+
+    def test_peer_to_peer_without_turn_is_reported(self):
+        self.assertIn(
+            "deploy.W008",
+            self._ids_for(
+                DEBUG=False, MEDIA_SERVER_URL="", MESH_ENABLED=True,
+                WEBRTC_ICE_SERVERS=[{"urls": ["stun:stun.l.google.com:19302"]}],
+            ),
+        )
+
+    def test_an_empty_ice_list_is_the_same_warning(self):
+        self.assertIn(
+            "deploy.W008",
+            self._ids_for(DEBUG=False, MEDIA_SERVER_URL="", MESH_ENABLED=True, WEBRTC_ICE_SERVERS=[]),
+        )
+
+    def test_a_turn_server_silences_it(self):
+        self.assertNotIn(
+            "deploy.W008",
+            self._ids_for(
+                DEBUG=False, MEDIA_SERVER_URL="", MESH_ENABLED=True,
+                WEBRTC_ICE_SERVERS=[
+                    {"urls": ["stun:turn.example.com:3478"]},
+                    {"urls": ["turn:turn.example.com:3478?transport=udp"], "username": "u", "credential": "p"},
+                ],
+            ),
+        )
+
+    def test_livekit_silences_it(self):
+        self.assertEqual(
+            self._ids_for(
+                DEBUG=False, MEDIA_SERVER_URL="wss://livekit.example.com",
+                MESH_ENABLED=False, WEBRTC_ICE_SERVERS=[],
+            ),
+            set(),
+        )
+
+    def test_no_media_path_at_all_is_louder_and_distinct(self):
+        ids = self._ids_for(
+            DEBUG=False, MEDIA_SERVER_URL="", MESH_ENABLED=False, WEBRTC_ICE_SERVERS=[],
+        )
+        self.assertIn("deploy.W009", ids)
+        self.assertNotIn("deploy.W008", ids)
+
+    def test_development_is_quiet(self):
+        self.assertEqual(
+            self._ids_for(DEBUG=True, MEDIA_SERVER_URL="", MESH_ENABLED=True, WEBRTC_ICE_SERVERS=[]),
+            set(),
+        )

@@ -2422,6 +2422,21 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
 }
 
 .dt-status { margin: 0; font-size: .74rem; color: var(--room-muted); min-height: 1.2em; }
+/* The connection verdict: pastel, no shadow — a warning pill only when the
+   network really cannot reach classmates. */
+.dt-net {
+    margin: 0; font-size: .72rem; line-height: 1.7;
+    padding: .45rem .6rem; border-radius: 12px;
+    background: var(--surface-2); color: var(--room-muted);
+}
+.dt-net[data-state="ok"] {
+    background: color-mix(in srgb, var(--success) 10%, var(--room-surface));
+    color: color-mix(in srgb, var(--success) 70%, var(--room-text));
+}
+.dt-net[data-state="warn"] {
+    background: color-mix(in srgb, var(--warning, #d97706) 12%, var(--room-surface));
+    color: color-mix(in srgb, var(--warning, #d97706) 74%, var(--room-text));
+}
 
 .dt-actions { display: flex; align-items: center; gap: .4rem; }
 .dt-actions .btn { justify-content: center; }

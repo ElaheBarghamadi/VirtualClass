@@ -383,6 +383,10 @@
                 <video id="dt-video" playsinline muted aria-label="پیش‌نمایش دوربین"></video>
                 <div class="dt-meter" aria-label="سطح صدا"><div id="dt-level"></div></div>
                 <p class="dt-status" id="dt-status" role="status"></p>
+                <!-- Whether your camera reaches other people is a *network*
+                     question, not a device question: it is answered here, in
+                     the same panel, so nobody has to open a console. -->
+                <p class="dt-net" id="dt-net" role="status" hidden></p>
             </div>
             <div class="dt-actions">
                 <button type="button" class="btn btn-sm btn-primary" id="dt-start">شروع تست</button>

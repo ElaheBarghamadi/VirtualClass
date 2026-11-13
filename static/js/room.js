@@ -3021,7 +3021,7 @@ safe('conn-pill-retry', () => {
 });
 
 // Optional subsystems — each isolated, each optional.
-safe('device-test', () => initDeviceTest({ roomCode: ROOM_CODE }));
+safe('device-test', () => initDeviceTest({ roomCode: ROOM_CODE, iceServers: ICE_SERVERS }));
 safe('whiteboard', () => {
     const boardView = document.getElementById('view-whiteboard');
     Whiteboard.onSizeRequest = (preset) => {

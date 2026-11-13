@@ -47,6 +47,8 @@ TRUST_X_FORWARDED_PROTO=true               # اگر TLS را پروکسی تما
 | `deploy.W005` | `CSRF_TRUSTED_ORIGINS` خالی است → هر فرم (اول از همه ورود) `403` | `https://دامنه` را بگذارید |
 | `deploy.W006` | `MEDIA_ROOT`/`PRIVATE_MEDIA_ROOT` نیست یا نوشتنی نیست | volume در کانتینر، مالکیت در VPS |
 | `deploy.W007` | `SECURE_SSL_REDIRECT` روشن است ولی هدر پروکسی نه → حلقهٔ ریدایرکت | `TRUST_X_FORWARDED_PROTO=true` |
+| `deploy.W008` | mesh بدون TURN: تصویر/صدا بین شبکه‌های سخت‌گیر نمی‌رسد («دوربین روشن است ولی بقیه نمی‌بینند») | coturn در `WEBRTC_ICE_SERVERS` یا LiveKit |
+| `deploy.W009` | نه LiveKit نه mesh → رسانه در همهٔ اتاق‌ها خاموش است | `MEDIA_SERVER_*` یا `MESH_ENABLED=1` |
 | `deploy.W002` | بدون `REDIS_URL` → تک‌پروسه | Redis؛ در نصب تک‌پروسه پذیرفتنی است |
 | `deploy.W003` | SQLite با `DEBUG=false` | PostgreSQL، یا `ALLOW_SQLITE_IN_PRODUCTION=true` روی هاست دائمی |
 

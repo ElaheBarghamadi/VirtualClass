@@ -202,6 +202,64 @@ WEBRTC_ICE_SERVERS=[{"urls":["turn:turn.example.com:3478?transport=udp"],"userna
 
 ---
 
+## ۵.۱) «دوربین و میکروفون روشن می‌شود، ولی بقیه نمی‌بینند»
+
+این تقریباً همیشه **مشکل شبکه است، نه باگ اپ**:
+
+* پیش‌نمایش تصویر خودتان مستقیماً از دوربین می‌آید؛ پس دکمه و دوربین سالم‌اند.
+* رسیدن تصویر به هم‌کلاسی به **ICE** بستگی دارد: دو مرورگر باید یک مسیر مستقیم
+  (یا از طریق رله) پیدا کنند. پشت NAT سخت‌گیر / شبکهٔ موبایل (CGNAT) این مسیر
+  پیدا نمی‌شود و تصویر «روشن است ولی نمی‌رسد».
+* تنظیم فعلی این هاست: `MEDIA_SERVER_URL` خالی → حالت P2P، و `WEBRTC_ICE_SERVERS`
+  خالی → فقط STUN عمومی گوگل (که در بسیاری از شبکه‌های ایران جواب نمی‌دهد).
+
+**تأیید در ۳۰ ثانیه:** در اتاق، کارت «تست صدا و تصویر» → «شروع تست». حالا یک خط
+شبکه هم نشان می‌دهد:
+
+| پیام | یعنی | کار |
+|---|---|---|
+| «رلهٔ سرور (TURN) در دسترس است» | مسیر رله هست | مشکلی نیست |
+| «فقط با STUN جواب داد» | شبکه‌های باز کار می‌کند، NAT سخت نه | TURN یا LiveKit |
+| «هیچ آدرس عمومی برنگرداند» | هیچ مسیری نیست | TURN یا LiveKit |
+
+همین را در کنسول مرورگر هم می‌بینید: `[device-test] ice candidates: host,srflx` و
+برای هر لینک `[mesh] link up with … local=relay remote=srflx`.
+
+**راه‌حل الف — LiveKit (بدون سرور، مناسب همین هاست)**
+یک پروژهٔ LiveKit Cloud (پلن رایگان هم دارد) بسازید و سه مقدار را بگذارید؛ پلن
+Cloud روی TCP/443 کار می‌کند و نیازی به باز کردن پورت UDP ندارد:
+
+```env
+MEDIA_SERVER_URL=wss://your-project.livekit.cloud
+MEDIA_SERVER_API_KEY=APIxxxxxxxx
+MEDIA_SERVER_API_SECRET=****************
+MESH_ENABLED=0
+```
+
+**راه‌حل ب — TURN خودتان (سرور مجازی لازم است)**
+راهنمای آمادهٔ ریپو: [`deploy/coturn/`](coturn/). خلاصه: `coturn` را روی یک VPS نصب
+کنید، `turnserver.conf` را با `realm` و `user=classroom:<secret>` پر کنید، پورت‌های
+**3478/udp**, **3478/tcp** و **49152–65535/udp** را باز کنید، سپس:
+
+```env
+MESH_ENABLED=1
+WEBRTC_ICE_SERVERS=[{"urls":["stun:turn.example.com:3478"]},{"urls":["turn:turn.example.com:3478?transport=udp"],"username":"classroom","credential":"<secret>"}]
+```
+
+**آزمون سریع برای اثبات تشخیص (موقت، نه برای کلاس واقعی):** یک رلهٔ عمومی رایگان
+مثل Open Relay را موقتاً اضافه کنید؛ اگر تصویر بلافاصله رسید، مشکل قطعاً TURN بوده
+و فقط باید رلهٔ خودتان (یا LiveKit) را جایگزین کنید:
+
+```env
+WEBRTC_ICE_SERVERS=[{"urls":["turn:openrelay.metered.ca:80","turn:openrelay.metered.ca:443?transport=tcp"],"username":"openrelayproject","credential":"openrelayproject"}]
+```
+
+> `python manage.py check --deploy` این وضعیت را هم گزارش می‌کند:
+> `deploy.W008` = mesh بدون TURN (تصویر فقط بین شبکه‌های باز)،
+> `deploy.W009` = نه LiveKit نه mesh (رسانه کاملاً خاموش).
+
+---
+
 ## ۶) عیب‌یابی مخصوص همین دامنه
 
 | نشانه | علت | رفع |

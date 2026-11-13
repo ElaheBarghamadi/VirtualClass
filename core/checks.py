@@ -189,3 +189,48 @@ def https_redirect_without_a_proxy_header(app_configs, **kwargs) -> list[CheckWa
         id="deploy.W007",
     ))
     return issues
+
+
+@register()
+def media_can_reach_both_sides(app_configs, **kwargs) -> list[CheckWarning]:
+    """Warn when live media has no path that survives a strict NAT.
+
+    Two classmates on the same Wi-Fi connect directly and everything looks
+    perfect; the same two on mobile networks sit behind carrier-grade NAT, ICE
+    finds no path, and the camera "turns on" for nobody.  LiveKit relays through
+    an SFU and a TURN entry relays peer-to-peer traffic — without one of them a
+    production room is a coin flip, so say so at boot instead of in class.
+    """
+    issues: list[CheckWarning] = []
+    if settings.DEBUG:
+        return issues
+    if getattr(settings, "MEDIA_SERVER_URL", ""):
+        return issues
+    if not getattr(settings, "MESH_ENABLED", False):
+        # No SFU *and* no mesh: the room has no media at all.  Louder than a
+        # missing relay, and a different fix.
+        issues.append(CheckWarning(
+            "No media path: MEDIA_SERVER_URL is empty and MESH_ENABLED is off, "
+            "so camera/microphone are disabled in every room.",
+            hint="Configure LiveKit (MEDIA_SERVER_URL/API_KEY/SECRET) or set "
+                 "MESH_ENABLED=1. See deploy/DEPLOY.md §۵.",
+            id="deploy.W009",
+        ))
+        return issues
+    ice = getattr(settings, "WEBRTC_ICE_SERVERS", []) or []
+    has_turn = any(
+        str(url).startswith("turn")
+        for server in ice
+        for url in ([server.get("urls")] if isinstance(server.get("urls"), str) else server.get("urls") or [])
+    )
+    if not has_turn:
+        issues.append(CheckWarning(
+            "P2P media has no TURN relay (WEBRTC_ICE_SERVERS is empty or STUN "
+            "only): peers behind strict NAT/CGNAT will not see or hear each "
+            "other — the local camera preview still works, which makes it look "
+            "like a bug in the app.",
+            hint="Run coturn (deploy/coturn/) and list it in WEBRTC_ICE_SERVERS, "
+                 "or configure LiveKit. See deploy/DEPLOY.md §۵.",
+            id="deploy.W008",
+        ))
+    return issues

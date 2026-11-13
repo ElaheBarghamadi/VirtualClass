@@ -139,9 +139,40 @@ class PeerLink {
         clearTimeout(this._watchdog); this._watchdog = null;
         clearTimeout(this._recovery); this._recovery = null;
         this.retried = false;
+        this._logPath();
         if (this.failed) {
             this.failed = false;
             this.mesh._onPeerRecovered(this.peer);
+        }
+    }
+
+    /**
+     * One console line per established link: **how** the two browsers reached
+     * each other.  `relay` means a TURN server carried it (works everywhere),
+     * `srflx`/`prflx` a direct path through NAT, `host` a same-network link.
+     * This is the first thing to ask for when someone says «تصویر من به بقیه
+     * نمی‌رسد» — no guessing, no browser flags.
+     */
+    async _logPath() {
+        if (this._loggedPath) return;
+        this._loggedPath = true;
+        try {
+            const stats = await this.pc.getStats();
+            let pair = null;
+            stats.forEach((row) => {
+                if (row.type === 'candidate-pair' && row.state === 'succeeded') pair = row;
+            });
+            const local = pair && stats.get(pair.localCandidateId);
+            const remote = pair && stats.get(pair.remoteCandidateId);
+            const localType = (local && local.candidateType) || 'unknown';
+            const remoteType = (remote && remote.candidateType) || 'unknown';
+            console.info(
+                `[mesh] link up with ${this.peer.name || this.peer.identity} ` +
+                `local=${localType} remote=${remoteType}` +
+                (localType === 'relay' || remoteType === 'relay' ? ' (TURN)' : ''),
+            );
+        } catch (e) {
+            /* diagnostics must never break a call */
         }
     }
 
@@ -174,6 +205,12 @@ class PeerLink {
         clearTimeout(this._recovery); this._recovery = null;
         if (this.failed) return;
         this.failed = true;
+        console.warn(
+            `[mesh] could not connect to ${this.peer.name || this.peer.identity}: ` +
+            (hasTurnServer()
+                ? 'ICE failed even with a TURN server configured — check that it is reachable on 443/3478/5349.'
+                : 'no TURN relay configured (WEBRTC_ICE_SERVERS) — strict NATs/CGNAT cannot be traversed.'),
+        );
         this.mesh._onPeerFailed(this.peer);
     }
 
