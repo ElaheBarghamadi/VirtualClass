@@ -169,6 +169,51 @@ python manage.py check --deploy
 
 ---
 
+### ۴.۱) دستورهایی که در تب Shell می‌زنید (کپی‌پیست)
+
+داخل شلِ اپ، پوشهٔ کاری `/app` است و پکیج‌ها داخل ایمیج نصب‌اند؛ پس **بدون** `.venv`
+و فقط `python manage.py …`. این‌ها جایی ذخیره نمی‌شوند — هر `export` بعد از بستن شل
+می‌رود؛ متغیرها را در پنل Environment بگذارید.
+
+```bash
+# ۰) اول ببینید این کانتینر با چه تنظیماتی بالا آمده (DB، استاتیک، Redis، نوع سرور)
+python manage.py deploy_check
+
+# ۱) اگر مایگریشن‌ها اعمال نشده‌اند (entrypoint معمولاً خودش می‌زند)
+python manage.py migrate --noinput
+
+# ۲) فقط اگر STATIC_ROOT را دستی ست کرده‌اید (در کانتینر لازم نیست)
+python manage.py collectstatic --noinput
+
+# ۳) ساخت حساب مدیر — تعاملی
+python manage.py createsuperuser
+
+#    یا غیرتعاملی (اگر شل تعاملی نیست):
+DJANGO_SUPERUSER_USERNAME=admin DJANGO_SUPERUSER_EMAIL=admin@example.com DJANGO_SUPERUSER_PASSWORD='یک-رمز-قوی' python manage.py createsuperuser --noinput
+
+# ۴) بررسی تنظیمات پروداکشن (باید فقط W002/W021 یا W008 بدهد)
+python manage.py check --deploy
+
+# ۵) سلامت از داخل خودِ کانتینر
+curl -fsS http://127.0.0.1:8000/healthz?db=1
+
+# ۶) نگه‌داری دوره‌ای (اگر beat ندارید)
+python manage.py housekeeping
+```
+
+اگر لازم شد اپ را دستی بالا بیاورید (مثلاً Start command پنل خالی است و می‌خواهید
+تست کنید) — این موقتی است، چون با بستن شل پروسه می‌میرد:
+
+```bash
+daphne -b 0.0.0.0 -p 8000 --proxy-headers config.asgi:application
+```
+
+> Worker و Beat را در شل اجرا نکنید؛ هر کدام یک **سرویس جدا** با همان ایمیج و
+> `ROLE=worker` / `ROLE=beat` هستند (بخش ۳).
+
+> ⚠️ اگر `deploy_check` نوشت `database: sqlite3`، هر کاری در شل (از جمله ساخت
+> سوپرکاربر) با دیپلوی بعدی پاک می‌شود. اول PostgreSQL را لینک کنید، بعد این دستورها.
+
 ## ۵) دوربین و میکروفون: یکی از دو مسیر را انتخاب کنید
 
 با `DEBUG=false` حالت P2P خودش خاموش می‌شود (`MESH_ENABLED` پیش‌فرض `0`) تا کلاس روی
