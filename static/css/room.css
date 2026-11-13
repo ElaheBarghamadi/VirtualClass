@@ -23,10 +23,10 @@
     background: var(--room-bg);
     color: var(--room-text);
     overflow: hidden;
-    /* Height of the floating control bar.  It wraps to several rows on
-       phones, so room.js measures it and the layout reserves the same
-       space — nothing hides underneath it. */
-    --bar-h: 76px;
+    /* Height of the docked control bar.  room.js measures the real thing and
+       the floating pieces (PiP camera, toasts, the mobile drawer) position
+       themselves against it. */
+    --bar-h: 56px;
     margin: 0;
     border: none;
     border-radius: 0;
@@ -184,13 +184,14 @@ body.full-page .messages {
 @media (max-width: 900px) { .side-collapse { display: none; } }
 /* position:relative → the mobile drawer/backdrop anchor below the room
    header (their top edge starts at the body, not at the top of .room) */
-/* bottom padding keeps content clear of the floating control bar — --bar-h
-   is synced to the bar's real measured height by room.js */
 .room-main {
-    padding: .85rem .9rem calc(var(--bar-h) + 1.4rem);
-    min-width: 0; display: flex;
-    /* the floating control bar is a child of this column, so it centres over
-       the stage instead of over the stage + chat panel */
+    /* The control bar is docked at the end of this column (see .room-controls),
+       so nothing has to reserve the bar's height any more: the stage simply
+       takes the space that is left. */
+    padding: .85rem .9rem calc(.85rem + env(safe-area-inset-bottom, 0px));
+    min-width: 0; min-height: 0; display: flex;
+    flex-direction: column;
+    gap: .6rem;
     position: relative;
 }
 .stage { flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; position: relative; }
@@ -745,7 +746,15 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
 .wb-canvas-wrap.is-pan-ready .upper-canvas { cursor: grab; }
 .wb-canvas-wrap.is-panning .upper-canvas { cursor: grabbing; }
 .wb-canvas-wrap.is-panning .wb-cursor { display: none; }
-.wb-canvas-wrap { flex: 1; min-height: 0; min-width: 0; position: relative; overflow: hidden; background: var(--surface); border-radius: var(--radius); }
+/* The page has a FIXED 12:7 shape (see whiteboard.js `_fit()`), so the wrapper
+   around it is a "desk": a neutral surface the letterbox margins sit on.  It is
+   deliberately not the page colour — that is what makes the fixed size visible
+   instead of the paper appearing to be as wide as whatever screen it is on. */
+.wb-canvas-wrap {
+    flex: 1; min-height: 0; min-width: 0; position: relative; overflow: hidden;
+    background: color-mix(in srgb, var(--room-bg) 90%, var(--room-text) 6%);
+    border-radius: var(--radius);
+}
 /* Fabric.js stacks TWO canvases: .lower-canvas (the painted artwork) and
    .upper-canvas (a transparent interaction layer on top).  A `background`
    on both — as this rule used to do — paints an opaque sheet over the
@@ -760,9 +769,14 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
        layer instead of drawing a fake stroke in the page colour;
      * changing the colour/grid is one CSS write, not a canvas repaint. */
 .wb-bg {
+    /* Placed under the reference page by whiteboard.js (`_applyBgLayer`), so the
+       inset/edges here are only fallbacks for the first frame. */
     position: absolute; inset: 0; border-radius: var(--radius);
     pointer-events: none; background-color: #fff; background-repeat: repeat;
     background-size: 28px 28px; --wb-line: #d9dee7;
+    box-shadow:
+        0 0 0 1px color-mix(in srgb, var(--room-border) 78%, transparent),
+        0 22px 44px -30px rgb(2 6 18 / .55);
 }
 .wb-bg.grid {
     background-image:
@@ -1443,30 +1457,32 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
    ~half the viewport (abs-pos available space), forcing an extra wrap row
    on phones — anchor with left/right:0 + width:max-content instead. */
 .room-controls {
-    /* iOS-style floating "island": frosted glass, hairline border, layered
-       shadow.  Buttons never wrap — the rail scrolls sideways instead, so
-       the bar is exactly one row tall on every screen size. */
+    /* The bar used to float *over* the video, pinned to the bottom edge of the
+       stage: on a phone it covered the teacher's slide, and the drawer's
+       backdrop sat on top of it, so the class could end up with no reachable
+       button at all («یهو هیچ دکمه‌ای نیست»).  It is now a real row in the room
+       layout — always on screen, never on top of the content.
+       Buttons never wrap: the rail scrolls sideways, so the bar is exactly one
+       row tall on every screen size. */
     --glass: color-mix(in srgb, var(--room-surface) 96%, transparent);
     --glass-line: color-mix(in srgb, var(--room-border) 82%, transparent);
-    position: absolute;
-    bottom: calc(.9rem + env(safe-area-inset-bottom, 0px));
-    left: 0; right: 0;
-    margin-inline: auto;
-    width: fit-content;
-    max-width: calc(100% - .75rem);
+    position: relative;
+    flex: none;
+    width: 100%;
+    max-width: none;
+    margin: 0;
     z-index: 30;
-    padding: 5px;
+    padding: 4px;
     background: var(--glass);
     -webkit-backdrop-filter: blur(12px) saturate(140%);
     backdrop-filter: blur(12px) saturate(140%);
-    border: .5px solid var(--glass-line);
-    border-radius: 28px;
+    border: 1px solid var(--glass-line);
+    border-radius: 16px;
     box-shadow:
         0 1px 0 0 color-mix(in srgb, #fff 22%, transparent) inset,
-        0 1px 2px rgba(0, 0, 0, .10),
-        0 10px 34px rgba(0, 0, 0, .18);
+        0 1px 2px rgba(0, 0, 0, .08);
     display: flex; align-items: center; gap: 3px;
-    overflow: visible; /* the "more" menu pops out of the bar */
+    overflow: visible; /* the «⋯» menu pops out of the bar */
 }
 /* «⋯» and «خروج» live outside the scrolling rail: on a phone the rail is
    wider than the screen, and a menu you have to swipe to find is a hidden
@@ -1664,7 +1680,7 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
     .room-side {
         position: absolute;
         top: 0;
-        bottom: 0;
+        bottom: calc(var(--bar-h, 56px) + .6rem + env(safe-area-inset-bottom, 0px));
         left: 0;
         width: min(340px, 88vw);
         z-index: 42;
@@ -1681,7 +1697,12 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
 
     .drawer-backdrop {
         position: absolute;
+        /* Stop above the docked control bar: while the drawer is open the bar
+           stays visible and tappable, so the room can never become a screen
+           with «no buttons».  Tapping the bar (or the strip around the drawer)
+           closes the drawer. */
         inset: 0;
+        inset-block-end: calc(var(--bar-h, 56px) + .6rem + env(safe-area-inset-bottom, 0px));
         z-index: 41;
         background: color-mix(in srgb, #04060f 45%, transparent);
         opacity: 0;
@@ -1720,6 +1741,17 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
 }
 
 .more-menu { width: max-content; min-width: 236px; max-width: min(92vw, 420px); }
+/* Anchored popovers get a max-height from anchorPopover(); keep the scroll
+   inside the panel and out of the page (which cannot scroll in the room). */
+.more-menu, .row-menu, .rec-tray, .reaction-tray {
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+}
+.more-menu::-webkit-scrollbar, .row-menu::-webkit-scrollbar { width: 6px; }
+.more-menu::-webkit-scrollbar-thumb, .row-menu::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--room-muted, var(--muted)) 45%, transparent);
+    border-radius: 999px;
+}
 
 /* A twelve-row menu is its own kind of crowd: the rows are short, so lay the
    groups out two-up and halve the height. */
@@ -2191,6 +2223,16 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
     will-change: transform, opacity;
     animation: reaction-float var(--rd, 2.6s) var(--ease) forwards;
 }
+/* Reduced motion: the bubble still appears (and still disappears on the JS
+   timer) — it just does not float.  Setting opacity to 0 here, as the first
+   version did, made reactions invisible for anyone who asked for less motion,
+   which reads as a broken button. */
+.reaction-bubble.is-still {
+    animation: none;
+    opacity: 1;
+    inset-block-end: 16%;
+    box-shadow: var(--shadow-lg);
+}
 .reaction-bubble svg {
     width: 22px; height: 22px;
     fill: none; stroke: currentColor; stroke-width: 1.8;
@@ -2484,7 +2526,9 @@ body.class-is-over .room-side { pointer-events: none; }
 .quiz-status .btn { margin-top: .25rem; }
 
 @media (prefers-reduced-motion: reduce) {
-    .reaction-bubble { animation: none; opacity: 0; }
+    /* Keep the bubble visible even if JS has not tagged it `is-still` yet:
+       feedback that disappears is worse than feedback that does not move. */
+    .reaction-bubble { animation: none; opacity: 1; inset-block-end: 16%; }
     .caption-line, .caption-line.is-leaving { animation: none; }
 }
 
@@ -2517,18 +2561,67 @@ body.class-is-over .room-side { pointer-events: none; }
     .conn-pill .conn-text { max-width: 24vw; overflow: hidden; text-overflow: ellipsis; }
     .room-clock { font-size: .82rem; }
 
-    /* breathing room for the stage and the floating control bar */
+    /* Breathing room for the stage; the control bar is a layout row now, so it
+       needs no reserved space of its own. */
     .room-main {
-        padding: .5rem .5rem
-                 calc(var(--bar-h) + 1rem + env(safe-area-inset-bottom, 0px));
+        padding: .5rem .5rem calc(.5rem + env(safe-area-inset-bottom, 0px));
+        gap: .45rem;
     }
     .tiles { gap: .4rem; }
     .stage-toolbar { top: .45rem; }
+
+    /* Compact dock: one row, thumb-sized, nothing wasted. */
+    .room-controls {
+        padding: 3px;
+        gap: 2px;
+        border-radius: 14px;
+    }
+    .room-controls .ctrl-btn { width: 38px; height: 38px; border-radius: 11px; }
+    .room-controls .ctrl-btn .ic { width: 18px; height: 18px; }
+    .room-controls .ctrl-sep { display: none; }
+    .room-controls .ctrl-exit { width: 40px; }
+    .ctrl-scroll { gap: 2px; padding: 1px; }
 }
 
 @media (max-width: 420px) {
     .room-clock { display: none; }
     .room-title h1 { max-width: 44vw; }
+}
+
+/* Popovers on a phone: compact panels above the dock, never a sheet over the
+   lesson.  Rows stay thumb-sized; the panel scrolls if the menu is long. */
+@media (max-width: 700px) {
+    .more-menu { width: min(94vw, 330px); min-width: 0; padding: .26rem; border-radius: 14px; }
+    .more-menu button, .row-menu-item { padding: .48rem .5rem; font-size: .8rem; gap: .45rem; }
+    .more-menu .menu-group.menu-grid { gap: 1px 2px; }
+    .more-menu .menu-group.menu-grid button { padding: .46rem .4rem; font-size: .78rem; }
+    .more-menu .menu-group.menu-links button { padding: .32rem .45rem; font-size: .74rem; }
+    .more-menu .mi { width: 16px; height: 16px; }
+    .row-menu { min-width: 0; width: min(90vw, 280px); }
+    .rec-tray { width: min(92vw, 320px); }
+    .reaction-tray { gap: .1rem; padding: .24rem .3rem; }
+    .reaction-tray button { width: 42px; height: 42px; }
+    .reaction-tray button svg { width: 22px; height: 22px; }
+}
+
+/* A finger is not a mouse pointer: 44px is the smallest honest target. */
+@media (pointer: coarse) {
+    .reaction-tray button { width: 46px; height: 46px; }
+}
+
+/* Landscape phones: 390px of height for a header, a dock and a lesson is not
+   much.  Give the stage every pixel that is not a control. */
+@media (max-width: 900px) and (max-height: 480px) {
+    .room-header {
+        padding-block: .25rem;
+        padding-inline: .6rem;
+    }
+    .room-title h1 { font-size: .8rem; }
+    .room-title > .live-dot, .room-logo { display: none; }
+    .room-main { padding: .35rem .4rem calc(.35rem + env(safe-area-inset-bottom, 0px)); gap: .3rem; }
+    .room-controls { padding: 2px; border-radius: 12px; }
+    .room-controls .ctrl-btn { width: 34px; height: 34px; }
+    .room-controls .ctrl-btn .ic { width: 17px; height: 17px; }
 }
 
 /* The drawer: a heavier sheet, with a grabber so it reads as a panel rather
@@ -2545,7 +2638,25 @@ body.class-is-over .room-side { pointer-events: none; }
         background: color-mix(in srgb, var(--room-muted) 42%, transparent);
         pointer-events: none;
     }
-    .side-tabs { padding-top: 1.05rem; }
+    /* The tab strip carries the only «بستن» button in the drawer, so it stays
+       pinned to the top: scrolled-away chrome is how a phone ends up looking
+       like it has no way out. */
+    .side-tabs {
+        padding-top: 1.05rem;
+        position: sticky;
+        top: 0;
+        z-index: 3;
+        flex: none;
+        background: var(--room-surface);
+    }
+    .drawer-close {
+        position: sticky;
+        inset-inline-end: 0;
+        width: 42px;
+        height: 42px;
+        border-radius: 12px;
+    }
+    .drawer-close .ic { width: 18px; height: 18px; }
 }
 
 /* --------------------------------------------------------------------------

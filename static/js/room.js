@@ -1187,6 +1187,8 @@ function handleEvent(data) {
             Media.handleSignal(data);
             break;
         case 'reaction':
+            // Skip the echo of a bubble we already painted when sending.
+            if (_isOwnReactionEcho(data.reaction, data.member_id)) break;
             showReaction(data.reaction, data.name);
             break;
         case 'caption':
@@ -1334,9 +1336,10 @@ function initTabs() {
 // ---------------------------------------------------------------------------
 // Control-bar height → --bar-h
 //
-// The floating bar wraps to several rows on narrow screens (a host sees up
-// to 14 controls).  The stage and the PiP reserve exactly that much room so
-// nothing — tiles, chat input, camera preview — hides underneath it.
+// The dock is a layout row, but its height still changes with the viewport
+// (a host sees up to 14 controls, a phone gets the compact 38px variant), and
+// the floating pieces — PiP camera, toast stack, mobile drawer — are positioned
+// against it.  So it is measured, not assumed.
 // ---------------------------------------------------------------------------
 function trackControlBarHeight() {
     const bar = document.querySelector('.room-controls');
@@ -1485,6 +1488,16 @@ function initDrawer() {
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') setDrawer(false);
     });
+    // The docked control bar stays live while the drawer is open (it is not
+    // under the backdrop), so it doubles as the way out: any control except the
+    // two toggles closes the panel instead of acting on a covered stage.
+    document.querySelector('.room-controls')?.addEventListener('click', (e) => {
+        const toggle = e.target.closest('#btn-chat, #btn-people');
+        if (toggle) return;
+        if (document.getElementById('room-side')?.classList.contains('drawer-open')) {
+            setDrawer(false);
+        }
+    }, true);
     // Rotating or resizing back to the docked layout must not leave a
     // stale full-screen drawer (and its backdrop) over the stage.
     const reset = () => {
@@ -1656,9 +1669,20 @@ function initControls() {
 function anchorPopover(anchor, pop, gap = 8) {
     const place = () => {
         const rect = anchor.getBoundingClientRect();
-        const half = (pop.offsetWidth || 200) / 2;
         const margin = 8;
-        const left = Math.max(half + margin, Math.min(rect.left + rect.width / 2, window.innerWidth - half - margin));
+        const vw = window.innerWidth;
+        const vh = window.innerHeight;
+        // Cap the popover to the space that actually exists above its anchor.
+        // Without this a tall menu simply grew past the top edge of a phone
+        // screen — the first rows were unreachable, and the panel read as a
+        // sheet that had eaten the whole page.
+        const above = Math.round(rect.top - gap - margin);
+        const maxH = Math.max(140, Math.min(above, Math.round(vh * 0.72)));
+        pop.style.maxHeight = `${maxH}px`;
+        pop.style.overflowY = 'auto';
+        pop.style.overscrollBehavior = 'contain';
+        const half = (pop.offsetWidth || 200) / 2;
+        const left = Math.max(half + margin, Math.min(rect.left + rect.width / 2, vw - half - margin));
         pop.style.left = `${Math.round(left)}px`;
         pop.style.top = `${Math.round(rect.top - gap)}px`;
     };
@@ -2171,14 +2195,45 @@ const REACTION_ICONS = {
     star: '#i-star', question: '#i-question',
 };
 
+/**
+ * Locally rendered reactions, so the sender sees their own bubble immediately
+ * instead of waiting for the server to echo it back — and so a dropped socket
+ * can never look like "the button does nothing".
+ * `{ key, at }` — used to ignore the echo of our own reaction.
+ */
+const _recentReactions = [];
+
+function _noteLocalReaction(key) {
+    const now = Date.now();
+    _recentReactions.push({ key, at: now });
+    while (_recentReactions.length > 12) _recentReactions.shift();
+    return now;
+}
+
+/** True when this echo belongs to a bubble we already painted ourselves. */
+function _isOwnReactionEcho(key, memberId) {
+    if (Number(memberId) !== MEMBER_ID) return false;
+    const now = Date.now();
+    for (let i = _recentReactions.length - 1; i >= 0; i--) {
+        const item = _recentReactions[i];
+        if (now - item.at > 2500) { _recentReactions.splice(i, 1); continue; }
+        if (item.key === key) { _recentReactions.splice(i, 1); return true; }
+    }
+    return false;
+}
+
 function showReaction(key, name) {
     const icon = REACTION_ICONS[key];
     const layer = document.getElementById('reaction-layer');
     if (!icon || !layer) return;
-    if (document.documentElement.getAttribute('data-motion') === 'reduced') return;
+    // Reduced motion means *less movement*, never *less feedback*: this used to
+    // return early, so on any phone with "Reduce Motion" (or in the reduced
+    // theme) the reaction silently vanished — the report was «واکنش می‌دهم،
+    // هیچ چیز روی صفحه نمی‌آید».
+    const still = document.documentElement.getAttribute('data-motion') === 'reduced';
 
     const bubble = document.createElement('span');
-    bubble.className = `reaction-bubble reaction-${key}`;
+    bubble.className = `reaction-bubble reaction-${key}${still ? ' is-still' : ''}`;
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     svg.setAttribute('viewBox', '0 0 24 24');
     const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
@@ -2193,7 +2248,27 @@ function showReaction(key, name) {
     if (name) bubble.title = name;
 
     layer.appendChild(bubble);
-    bubble.addEventListener('animationend', () => bubble.remove(), { once: true });
+    if (still) {
+        // No keyframes to end: a plain timer keeps the layer clean.
+        window.setTimeout(() => bubble.remove(), 1900);
+    } else {
+        bubble.addEventListener('animationend', () => bubble.remove(), { once: true });
+    }
+}
+
+/** Send a reaction and paint it here first — the source of truth is the echo. */
+function sendReaction(key) {
+    if (!REACTION_ICONS[key]) return false;
+    const sent = presence.send({ action: 'reaction', reaction: key });
+    if (sent) {
+        _noteLocalReaction(key);
+        showReaction(key, root.dataset.participantName || '');
+        return true;
+    }
+    // Offline: say so instead of swallowing the tap.  (The bubble is not shown
+    // here on purpose — nobody else would see it.)
+    toast('اتصال قطع است؛ واکنش فرستاده نشد. چند لحظه بعد دوباره امتحان کنید.', 'warning', 3200);
+    return false;
 }
 
 function initReactions() {
@@ -2230,8 +2305,11 @@ function initReactions() {
     window.addEventListener('scroll', reposition, true);
 
     tray.querySelectorAll('[data-reaction]').forEach((item) => {
-        item.addEventListener('click', () => {
-            presence.send({ action: 'reaction', reaction: item.dataset.reaction });
+        item.addEventListener('click', (e) => {
+            // The document-level handler below would otherwise run for this
+            // same tap and could close a tray the user just re-opened.
+            e.stopPropagation();
+            sendReaction(item.dataset.reaction);
             close();
         });
     });
@@ -2295,7 +2373,7 @@ function initShortcuts() {
         else if (key === 'c') { e.preventDefault(); document.getElementById('btn-chat')?.click(); }
         else if (key === 'p' && !boardOpen) { e.preventDefault(); document.getElementById('btn-people')?.click(); }
         else if (key === 's') { e.preventDefault(); Media.toggleScreenShare(); }
-        else if (key === 'r') { e.preventDefault(); presence.send({ action: 'reaction', reaction: 'heart' }); }
+        else if (key === 'r') { e.preventDefault(); sendReaction('heart'); }
         else if (key === 'd' && e.shiftKey) { e.preventDefault(); document.getElementById('btn-captions')?.click(); }
     });
 }

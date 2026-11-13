@@ -9,13 +9,15 @@
  *
  * Geometry
  * --------
- * The canvas has a FIXED internal coordinate system (``REF_W × REF_H``)
- * and a viewport transform that maps it onto whatever size the wrapper
- * has.  A stroke therefore keeps its place when the window is resized,
- * the side panel opens or the stage goes fullscreen — without repainting
- * a single object (a resize is one matrix write instead of a full
- * history replay).  Coordinates on the wire are normalised (0..1) with
- * ``norm: 1``, so they mean the same thing on every screen.
+ * The page is a FIXED rectangle (``REF_W × REF_H``, 12:7) and it keeps that
+ * shape on *every* device: the viewport transform is a single uniform scale
+ * (``_fit()``, the smaller of the two axes) and the leftover space becomes an
+ * even letterbox on both sides.  Scaling x and y independently — the old
+ * behaviour — stretched the board to whatever the wrapper happened to be, so
+ * the same lesson looked 1.7:1 on a laptop and 0.6:1 on a phone and a stroke
+ * drawn on one looked wrong on the other.  A resize is still one matrix write
+ * (no repaint, no history replay) and nothing on the wire changes: coordinates
+ * are normalised (0..1) with ``norm: 1``.
  *
  * Background
  * ----------
@@ -239,40 +241,70 @@ class WhiteboardImpl {
 
     _w() { return (this.canvas && this.canvas.getWidth()) || 1; }
     _h() { return (this.canvas && this.canvas.getHeight()) || 1; }
-    /** CSS px → reference units (the canvas' internal coordinate system). */
-    _sx() { return this._w() / REF_W; }
-    _sy() { return this._h() / REF_H; }
-    /** Effective scale: fit-to-wrap × user zoom. */
-    _zsx() { return this._sx() * this.zoom; }
-    _zsy() { return this._sy() * this.zoom; }
+
+    /**
+     * The one scale both axes share: the page is *contained* in the wrapper,
+     * never stretched to fit it.  This is what keeps the board's dimensions
+     * identical on a phone, a tablet and a projector.
+     */
+    _fit() {
+        const s = Math.min(this._w() / REF_W, this._h() / REF_H);
+        return s > 0 ? s : 1;
+    }
+    /** Letterbox margins: where the page starts inside the wrapper. */
+    _ox() { return (this._w() - REF_W * this._fit()) / 2; }
+    _oy() { return (this._h() - REF_H * this._fit()) / 2; }
+    /** Effective scale: fit-to-page × user zoom. */
+    _zs() { return this._fit() * this.zoom; }
+    /** The page itself, in CSS px inside the wrapper (what ink may cover). */
+    _pageRect() {
+        const s = this._zs();
+        return {
+            x: this._ox() + this.panX,
+            y: this._oy() + this.panY,
+            w: REF_W * s,
+            h: REF_H * s,
+        };
+    }
+    /** CSS px → reference units. Uniform now, so both axes call the same one. */
+    _sx() { return this._fit(); }
+    _sy() { return this._fit(); }
+    _zsx() { return this._zs(); }
+    _zsy() { return this._zs(); }
 
     // ------------------------------------------------------------ view (zoom)
     /** Reference units → CSS px *inside the wrap* (laser dot, text editor). */
     _worldToCss(p) {
-        return { x: p.x * this._zsx() + this.panX, y: p.y * this._zsy() + this.panY };
+        const s = this._zs();
+        return { x: this._ox() + p.x * s + this.panX, y: this._oy() + p.y * s + this.panY };
     }
 
     /**
-     * Keep the page covering the wrap: at 100 % there is nothing to pan, and
-     * when zoomed in the view may never wander off the page's edges. Without
+     * Keep the page in view.  At 100 % the page is smaller than (or equal to)
+     * the wrapper on at least one axis, so that axis is simply centred; when
+     * zoomed in, panning may never expose the area outside the page — without
      * this a stray middle-drag leaves a blank board with no way back.
      */
     _clampPan() {
         const w = this._w();
         const h = this._h();
-        const z = this.zoom;
-        const minX = w - w * z;
-        const minY = h - h * z;
-        this.panX = Math.min(0, Math.max(minX, this.panX));
-        this.panY = Math.min(0, Math.max(minY, this.panY));
+        const s = this._zs();
+        const ox = this._ox();
+        const oy = this._oy();
+        const pw = REF_W * s;
+        const ph = REF_H * s;
+        // page-left ∈ [w - pw, 0] and page-left = ox + panX
+        this.panX = pw >= w ? Math.min(-ox, Math.max(w - pw - ox, this.panX)) : 0;
+        this.panY = ph >= h ? Math.min(-oy, Math.max(h - ph - oy, this.panY)) : 0;
         if (Math.abs(this.panX) < 0.5) this.panX = 0;
         if (Math.abs(this.panY) < 0.5) this.panY = 0;
     }
 
     _applyTransform() {
         if (!this.canvas) return;
-        const z = this.zoom;
-        this.canvas.setViewportTransform([this._sx() * z, 0, 0, this._sy() * z, this.panX, this.panY]);
+        const s = this._zs();
+        this.canvas.setViewportTransform([s, 0, 0, s, this._ox() + this.panX, this._oy() + this.panY]);
+        this._applyBgLayer();
         this._applyCursorScale();
         this._updateZoomUI();
         this._render();
@@ -284,13 +316,13 @@ class WhiteboardImpl {
         const z = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Number(next) || MIN_ZOOM));
         const cx = cxCss == null ? this._w() / 2 : cxCss;
         const cy = cyCss == null ? this._h() / 2 : cyCss;
-        const zx = this._zsx();
-        const zy = this._zsy();
-        const worldX = zx ? (cx - this.panX) / zx : cx / (zx || 1);
-        const worldY = zy ? (cy - this.panY) / zy : cy / (zy || 1);
+        const s = this._zs();
+        const worldX = (cx - this._ox() - this.panX) / s;
+        const worldY = (cy - this._oy() - this.panY) / s;
         this.zoom = z;
-        this.panX = cx - worldX * this._zsx();
-        this.panY = cy - worldY * this._zsy();
+        const ns = this._zs();
+        this.panX = cx - this._ox() - worldX * ns;
+        this.panY = cy - this._oy() - worldY * ns;
         this._clampPan();
         this._applyTransform();
     }
@@ -795,14 +827,40 @@ class WhiteboardImpl {
         el.style.setProperty('--wb-line', this._shade(color, -26));
         el.classList.toggle('grid', mode === 'grid');
         el.classList.toggle('dots', mode === 'dots');
+        this._applyBgLayer();
+    }
+
+    /**
+     * The page colour/grid layer is a DOM box, not canvas pixels — so it has to
+     * be *placed* like one: exactly under the reference page, letterbox margins
+     * included and the grid cell scaled by the same uniform factor as the ink.
+     * Left at `inset: 0` it painted a full-bleed white rectangle behind the
+     * letterbox, i.e. it hid the fact that the page has a fixed size at all.
+     */
+    _applyBgLayer() {
+        const el = this._ensureBgLayer();
+        if (!el) return;
+        const page = this._pageRect();
+        const s = this._zs();
+        const cell = Math.max(6, Math.round(28 * s));
+        el.style.inset = 'auto';
+        el.style.left = '0';
+        el.style.top = '0';
+        el.style.width = `${Math.max(1, page.w)}px`;
+        el.style.height = `${Math.max(1, page.h)}px`;
+        el.style.transform = `translate3d(${page.x}px, ${page.y}px, 0)`;
+        el.style.backgroundSize = `${cell}px ${cell}px`;
     }
 
     /** Export the visible page as a downloadable PNG (background included). */
     exportPNG() {
         if (!this.canvas) return;
         const mult = 2;
-        const outW = Math.max(1, Math.round(this._w() * mult));
-        const outH = Math.max(1, Math.round(this._h() * mult));
+        // Fixed output — 1200×700 at 2× — like the page itself.  Sizing the
+        // export from the wrapper meant the "same" board saved as 2×1920×1080
+        // on a laptop and a tall sliver on a phone.
+        const outW = REF_W * mult;
+        const outH = REF_H * mult;
         // Ink goes on its own transparent layer first: eraser strokes are
         // `destination-out`, so they must punch holes in the ink only — if the
         // page background were already under them, they would erase it too.
@@ -908,8 +966,12 @@ class WhiteboardImpl {
         const size = Math.max(6, this._toolWidth(this.tool) * this._zsy());
         el.style.width = `${size}px`;
         el.style.height = `${size}px`;
-        el.style.left = `${e.clientX - rect.left}px`;
-        el.style.top = `${e.clientY - rect.top}px`;
+        // The ring follows the *ink*, not the raw pointer: over the letterbox
+        // margin the stroke is clamped to the page edge, and a ring floating
+        // outside the paper would promise a stroke that lands somewhere else.
+        const page = this._pageRect();
+        el.style.left = `${Math.min(page.x + page.w, Math.max(page.x, e.clientX - rect.left))}px`;
+        el.style.top = `${Math.min(page.y + page.h, Math.max(page.y, e.clientY - rect.top))}px`;
         el.classList.toggle('is-eraser', this.tool === 'eraser');
         el.classList.remove('hidden');
     }
@@ -955,9 +1017,25 @@ class WhiteboardImpl {
      */
     _pt(opt) {
         const abs = opt?.absolutePointer;
-        if (abs) return { x: abs.x, y: abs.y };
+        if (abs) return this._clampToPage({ x: abs.x, y: abs.y });
         const p = opt?.pointer || { x: 0, y: 0 };
-        return { x: p.x * (REF_W / this._w()), y: p.y * (REF_H / this._h()) };
+        const s = this._zs();
+        return this._clampToPage({
+            x: (p.x - this._ox() - this.panX) / s,
+            y: (p.y - this._oy() - this.panY) / s,
+        });
+    }
+
+    /**
+     * Ink never leaves the paper: a pointer inside the letterbox margin (or the
+     * empty strip when a fixed page does not fill the wrapper) is pulled to the
+     * nearest edge of the page, so a stroke that starts on the "desk" does not
+     * begin off-canvas and then jump.
+     */
+    _clampToPage(p) {
+        const x = Math.min(REF_W, Math.max(0, Number.isFinite(p.x) ? p.x : 0));
+        const y = Math.min(REF_H, Math.max(0, Number.isFinite(p.y) ? p.y : 0));
+        return { x, y };
     }
 
     _down(opt) {
@@ -1261,11 +1339,13 @@ class WhiteboardImpl {
         box.style.left = '0px';
         box.style.top = '0px';
         // Measure first, then clamp: tapping near the right edge (or on a
-        // phone) used to push the typing box outside the board.
+        // phone) used to push the typing box outside the board.  The bounds are
+        // the *page*, not the wrapper, so the editor always sits on the paper.
         const bw = box.offsetWidth || 180;
         const at = this._worldToCss(point);
-        const left = Math.max(2, Math.min(this._w() - bw - 2, at.x));
-        const top = Math.max(2, Math.min(this._h() - 24, at.y));
+        const page = this._pageRect();
+        const left = Math.max(page.x + 2, Math.min(page.x + page.w - bw - 2, at.x));
+        const top = Math.max(page.y + 2, Math.min(page.y + page.h - 24, at.y));
         box.style.left = `${left}px`;
         box.style.top = `${top}px`;
         box.style.setProperty('--wb-text-color', replaceId ? (this._opById(replaceId)?.color || this.color) : this.color);
