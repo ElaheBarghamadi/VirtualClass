@@ -12,7 +12,10 @@
  */
 import { toast } from './toast.js';
 import { MeshMedia } from './mesh.js';
-import { analyserLevel, createAnalyser, disposeAnalyser } from './meter.js';
+import {
+    createAnalyser, createLevelTracker, createSpeakingGate, disposeAnalyser,
+    paintMic, paintTile, resetMic, startLevelLoop,
+} from './meter.js';
 
 const LivekitClient = window.LivekitClient;
 
@@ -344,21 +347,27 @@ class LivekitMedia {
         }
     }
 
+    /**
+     * LiveKit reports its own active-speaker list; paint it with the same
+     * stability rules as the mesh engine.
+     *
+     * * a speaker stays "speaking" for a short hold after the last frame that
+     *   reported them, so the ring and the badge do not blink between words;
+     * * our own tile is left alone — the local analyser loop owns it, and two
+     *   painters arguing over one tile is exactly the flicker this replaces.
+     */
     _setActiveSpeakers(participants = []) {
         const speakers = new Set((participants || []).map((p) => p?.identity).filter(Boolean));
         this.activeSpeaker = participants?.[0]?.identity || null;
+        const now = performance.now();
+        this._speakingUntil = this._speakingUntil || new Map();
         this.tiles.forEach((tile, identity) => {
-            const speaking = speakers.has(identity);
-            tile.classList.toggle('speaking', speaking);
-            tile.querySelector('.tile-speaking')?.setAttribute('aria-hidden', String(!speaking));
-            if (!speaking) tile.style.setProperty('--lvl', '0');
-            else {
-                const participant = identity === this.currentIdentity
-                    ? this.localParticipant
-                    : this.room?.remoteParticipants?.get(identity);
-                const reported = Number(participant?.audioLevel) || 0;
-                tile.style.setProperty('--lvl', Math.max(0.16, Math.min(1, reported)).toFixed(3));
-            }
+            if (identity === this.currentIdentity) return;
+            if (speakers.has(identity)) this._speakingUntil.set(identity, now + 700);
+            const speaking = now < (this._speakingUntil.get(identity) || 0);
+            const participant = this.room?.remoteParticipants?.get(identity);
+            const reported = Number(participant?.audioLevel) || 0;
+            paintTile(tile, speaking ? Math.max(0.22, Math.min(1, reported)) : 0, speaking);
         });
         this._layout();
         this.updatePip(this.currentView); // pip follows the speaker
@@ -412,6 +421,13 @@ class LivekitMedia {
     }
 
     // ------------------------------------------------- local mic meter
+    /**
+     * Meter our own microphone from real samples.
+     *
+     * The shaping (RMS → dB → envelope → quantisation) and the speaking gate
+     * live in meter.js so the LiveKit engine and the mesh engine behave
+     * identically; this method only owns the analyser and the frame loop.
+     */
     _startLocalLevel() {
         this._stopLocalLevel();
         const pub = this.localParticipant
@@ -420,39 +436,30 @@ class LivekitMedia {
         if (!track) return;
         this._localAnalyser = createAnalyser(new MediaStream([track]));
         if (!this._localAnalyser) return;
-        const tick = () => {
+        const tracker = createLevelTracker(this._localAnalyser);
+        const gate = createSpeakingGate();
+        this._localTracker = tracker;
+        this._localGate = gate;
+        this._stopLevelLoop = startLevelLoop((now) => {
             if (!this.micOn) return;
-            const level = analyserLevel(this._localAnalyser);
-            const btn = document.getElementById('btn-mic');
-            if (btn) btn.style.setProperty('--mic-level', level.toFixed(3));
-            const tile = this.localParticipant && this.tiles.get(this.localParticipant.identity);
-            if (tile) {
-                tile.style.setProperty('--lvl', level.toFixed(3));
-                const now = performance.now();
-                if (level > 0.03) this._localSpeakingUntil = now + 750;
-                const speaking = now < this._localSpeakingUntil;
-                tile.classList.toggle('speaking', speaking);
-                tile.querySelector('.tile-speaking')?.setAttribute('aria-hidden', String(!speaking));
-            }
-            this._localLevelRaf = requestAnimationFrame(tick);
-        };
-        this._localLevelRaf = requestAnimationFrame(tick);
+            const level = tracker.read();
+            const speaking = gate.update(level, now);
+            paintMic(level, speaking);
+            const identity = this.localParticipant && this.localParticipant.identity;
+            if (identity) paintTile(this.tiles.get(identity), level, speaking);
+        });
     }
 
     _stopLocalLevel() {
-        if (this._localLevelRaf) cancelAnimationFrame(this._localLevelRaf);
-        this._localLevelRaf = null;
+        if (this._stopLevelLoop) this._stopLevelLoop();
+        this._stopLevelLoop = null;
         disposeAnalyser(this._localAnalyser);
         this._localAnalyser = null;
-        this._localSpeakingUntil = 0;
-        const btn = document.getElementById('btn-mic');
-        if (btn) btn.style.setProperty('--mic-level', '0');
-        const tile = this.localParticipant && this.tiles.get(this.localParticipant.identity);
-        if (tile) {
-            tile.style.setProperty('--lvl', '0');
-            tile.classList.remove('speaking');
-            tile.querySelector('.tile-speaking')?.setAttribute('aria-hidden', 'true');
-        }
+        this._localTracker = null;
+        this._localGate = null;
+        resetMic();
+        const identity = this.localParticipant && this.localParticipant.identity;
+        if (identity) paintTile(this.tiles.get(identity), 0, false);
     }
 
     togglePin(identity) {

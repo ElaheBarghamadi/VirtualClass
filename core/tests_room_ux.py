@@ -252,14 +252,21 @@ class ControlBarTests(SimpleTestCase):
             self.assertIn(f"--p-{name}:", bar)
             self.assertIn(f"--p-{name}-ink:", bar)
 
-    def test_mic_halo_breathes_with_the_live_level(self):
-        halo = rule(self.css, "#btn-mic.active::before")
-        self.assertIn("opacity: calc(var(--mic-level, 0) * .85);", halo)
-        self.assertIn("pointer-events: none;", halo)
-        self.assertIn("--mic-level", halo)
-        self.assertIn("pointer-events: none;", halo)
-        # the value comes from the real analyser, never from a timer guessing
-        self.assertIn("setProperty('--mic-level', level.toFixed(3))", read(JS / "mesh.js"))
+    def test_the_mic_ring_is_stable_not_level_scaled(self):
+        # Scaling the halo by the raw level every frame is what made the bar
+        # look like it was shaking.  The ring is now a state, and the level is
+        # a separate bar.
+        ring = rule(self.css, '#btn-mic.active::before')
+        self.assertIn('opacity: 0;', ring)
+        self.assertNotIn('calc(var(--mic-level', ring)
+        self.assertIn('#btn-mic.active[data-speaking="1"]::before { opacity: 1; }', self.css)
+
+    def test_the_mic_has_a_level_bar(self):
+        bar = rule(self.css, '#btn-mic.active::after')
+        self.assertIn('transform: scaleX(var(--mic-level, 0));', bar)
+        self.assertIn('transition: transform .14s linear;', bar)
+        self.assertIn('pointer-events: none;', bar)
+        self.assertIn('#btn-mic:not(.active)::after { content: none; }', self.css)
 
     def test_level_meter_is_three_bars_not_a_bottom_stripe(self):
         css = read(CSS / "room.css")
@@ -324,6 +331,84 @@ class PresentationEndTests(SimpleTestCase):
         self.assertIn("var(--p-rose", btn)
         self.assertIn("color-mix(", btn)
         self.assertIn(".file-present.is-stop", self.css)
+
+
+class MicMeterTests(SimpleTestCase):
+    """The meter must answer "am I being heard?" without shaking the page."""
+
+    def setUp(self):
+        self.meter = read(JS / "meter.js")
+        self.media = read(JS / "media.js")
+        self.mesh = read(JS / "mesh.js")
+        self.css = read(CSS / "room.css")
+
+    def test_level_is_rms_mapped_through_a_speech_window(self):
+        self.assertIn("export function analyserRms(analyser)", self.meter)
+        self.assertIn("const db = 20 * Math.log10(rms);", self.meter)
+        self.assertIn("LEVEL_FLOOR_DB = -58", self.meter)
+        self.assertIn("LEVEL_CEIL_DB = -12", self.meter)
+        # peak-only reading is still exported for the coarse focus scan
+        self.assertIn("export function analyserLevel(analyser)", self.meter)
+
+    def test_the_level_has_an_envelope_and_is_quantised(self):
+        tracker = self.meter[self.meter.index("export function createLevelTracker("):]
+        tracker = tracker[: tracker.index("\n}\n")]
+        self.assertIn("const k = target > value ? attack : release;", tracker)
+        self.assertIn("Math.round(value / step) * step", tracker)
+        self.assertIn("step = 0.02", tracker)
+
+    def test_speaking_uses_hysteresis_and_a_hold(self):
+        gate = self.meter[self.meter.index("export function createSpeakingGate("):]
+        gate = gate[: gate.index("\n}\n")]
+        self.assertIn("if (level >= on)", gate)
+        self.assertIn("if (level <= off)", gate)
+        self.assertIn("now - quietSince >= holdMs", gate)
+        # rising is harder than staying: on > off
+        self.assertIn("on = 0.2, off = 0.08, holdMs = 520", gate)
+
+    def test_the_dom_is_written_only_when_the_value_changes(self):
+        paint = self.meter[self.meter.index("export function paintMic("):]
+        paint = paint[: paint.index("\n}\n")]
+        self.assertIn("if (btn.dataset.level !== key)", paint)
+        self.assertIn("if (btn.dataset.speaking !== flag)", paint)
+        tile = self.meter[self.meter.index("export function paintTile("):]
+        tile = tile[: tile.index("\n}\n")]
+        self.assertIn("if (tile.dataset.level !== key)", tile)
+        self.assertIn("if (tile.classList.contains('speaking') !== Boolean(speaking))", tile)
+
+    def test_one_shared_loop_paints_both_engines(self):
+        self.assertIn("export function startLevelLoop(tick, fps = 20)", self.meter)
+        for source in (self.media, self.mesh):
+            self.assertIn("startLevelLoop(", source)
+            self.assertIn("paintMic(", source)
+            self.assertIn("paintTile(", source)
+            self.assertNotIn("style.setProperty('--mic-level'", source)
+            self.assertNotIn("style.setProperty('--lvl'", source)
+        # a throwing tick must not kill every meter for the rest of the lesson
+        loop = self.meter[self.meter.index("export function startLevelLoop("):]
+        self.assertIn("try { tick(t); } catch (err)", loop)
+
+    def test_the_mesh_speaker_scan_no_longer_paints(self):
+        scan = self.mesh[self.mesh.index("    _evaluateSpeaker() {"):]
+        scan = scan[: scan.index("\n    }\n")]
+        self.assertNotIn("classList.toggle('speaking'", scan)
+        self.assertNotIn("--lvl", scan)
+
+    def test_a_livekit_speaker_holds_before_the_ring_drops(self):
+        body = self.media[self.media.index("    _setActiveSpeakers(participants = []) {"):]
+        body = body[: body.index("\n    }\n")]
+        self.assertIn("now + 700", body)
+        self.assertIn("if (identity === this.currentIdentity) return;", body)
+        self.assertIn("paintTile(", body)
+
+    def test_a_tile_with_an_open_mic_keeps_its_meter(self):
+        self.assertIn(".tile:has(.t-mic:not(.off)) .tile-level { opacity: 1; }", self.css)
+
+    def test_the_level_bar_is_under_the_mic_icon_not_scaled_over_it(self):
+        bar = rule(self.css, '#btn-mic.active::after')
+        self.assertIn("inset-block-end: 4px;", bar)
+        self.assertIn("height: 2.5px;", bar)
+        self.assertIn("transform-origin: center;", bar)
 
 
 class SpeakingHighlightTests(SimpleTestCase):

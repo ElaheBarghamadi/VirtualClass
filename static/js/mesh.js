@@ -20,7 +20,10 @@
  * - Fine for small classrooms; large rooms should configure LiveKit.
  */
 import { toast } from './toast.js';
-import { analyserLevel, createAnalyser, disposeAnalyser } from './meter.js';
+import {
+    analyserLevel, createAnalyser, createLevelTracker, createSpeakingGate, disposeAnalyser,
+    paintMic, paintTile, resetMic, startLevelLoop,
+} from './meter.js';
 
 // Deployment-configurable (WEBRTC_ICE_SERVERS → data-ice-servers on the
 // room root → Media.init).  Default is public Google STUN, which has no
@@ -260,7 +263,6 @@ class MeshMedia {
         this._speakerTimer = null;
         this._localAnalyser = null;
         this._localLevelRaf = null;
-        this._localSpeakingUntil = 0;
         this.currentView = 'media';
         this._micDeviceId = null;         // remembered across acquisitions
         this._camDeviceId = null;
@@ -802,47 +804,68 @@ class MeshMedia {
         this.updatePip(this.currentView);
     }
 
-    // ------------------------------------------------- local mic meter
-    /** Live volume bar on the mic button + our tile, from REAL samples. */
+    // ------------------------------------------------- level meters
+    /**
+     * One frame loop for every meter in the mesh: our own microphone (the bar
+     * under the mic button + the ring) and every remote speaker's tile.
+     *
+     * Levels are shaped in meter.js (RMS, dB window, attack/release, a speaking
+     * gate with hysteresis), and each track keeps its own tracker so a pause in
+     * one voice never borrows another's decay.
+     */
     _startLocalLevel() {
         this._stopLocalLevel();
         const track = this.localStream && this.localStream.getAudioTracks()[0];
         if (!track) return;
         this._localAnalyser = createAnalyser(new MediaStream([track]));
         if (!this._localAnalyser) return;
-        const tick = () => {
-            if (!this.micOn) return;
-            const level = analyserLevel(this._localAnalyser);
-            const btn = document.getElementById('btn-mic');
-            if (btn) btn.style.setProperty('--mic-level', level.toFixed(3));
-            const tile = this.tiles.get(this.self.identity);
-            if (tile) {
-                tile.style.setProperty('--lvl', level.toFixed(3));
-                const now = performance.now();
-                if (level > 0.03) this._localSpeakingUntil = now + 750;
-                const speaking = now < this._localSpeakingUntil;
-                tile.classList.toggle('speaking', speaking);
-                tile.querySelector('.tile-speaking')?.setAttribute('aria-hidden', String(!speaking));
+        this._localTracker = createLevelTracker(this._localAnalyser);
+        this._localGate = createSpeakingGate();
+        this._remoteTrackers = new Map();     // identity → { tracker, gate }
+        this._stopLevelLoop = startLevelLoop((now) => this._paintLevels(now));
+    }
+
+    /** Paint our mic button and every visible remote tile (≈20 fps). */
+    _paintLevels(now) {
+        if (this.micOn && this._localTracker) {
+            const level = this._localTracker.read();
+            const speaking = this._localGate.update(level, now);
+            paintMic(level, speaking);
+            paintTile(this.tiles.get(this.self.identity), level, speaking);
+        }
+        for (const [identity, link] of this.links) {
+            const stream = link.remoteStream;
+            const audio = stream && stream.getAudioTracks()[0];
+            const tile = this.tiles.get(identity);
+            if (!audio || !audio.enabled || audio.muted || audio.readyState !== 'live') {
+                this._remoteTrackers?.delete(identity);
+                paintTile(tile, 0, false);
+                continue;
             }
-            this._localLevelRaf = requestAnimationFrame(tick);
-        };
-        this._localLevelRaf = requestAnimationFrame(tick);
+            let entry = this._remoteTrackers?.get(identity);
+            if (!entry) {
+                const analyser = createAnalyser(stream);
+                if (!analyser) continue;
+                entry = { analyser, tracker: createLevelTracker(analyser), gate: createSpeakingGate() };
+                this._remoteTrackers.set(identity, entry);
+            }
+            const level = entry.tracker.read();
+            const speaking = entry.gate.update(level, now);
+            paintTile(tile, level, speaking);
+        }
     }
 
     _stopLocalLevel() {
-        if (this._localLevelRaf) cancelAnimationFrame(this._localLevelRaf);
-        this._localLevelRaf = null;
+        if (this._stopLevelLoop) this._stopLevelLoop();
+        this._stopLevelLoop = null;
+        this._remoteTrackers?.forEach((entry) => disposeAnalyser(entry.analyser));
+        this._remoteTrackers = null;
         disposeAnalyser(this._localAnalyser);
         this._localAnalyser = null;
-        this._localSpeakingUntil = 0;
-        const btn = document.getElementById('btn-mic');
-        if (btn) btn.style.setProperty('--mic-level', '0');
-        const tile = this.tiles.get(this.self.identity);
-        if (tile) {
-            tile.style.setProperty('--lvl', '0');
-            tile.classList.remove('speaking');
-            tile.querySelector('.tile-speaking')?.setAttribute('aria-hidden', 'true');
-        }
+        this._localTracker = null;
+        this._localGate = null;
+        resetMic();
+        paintTile(this.tiles.get(this.self.identity), 0, false);
     }
 
     async toggleScreenShare() {
@@ -1321,12 +1344,6 @@ class MeshMedia {
             const tile = this.tiles.get(identity);
             const audioTrack = stream && stream.getAudioTracks()[0];
             if (!audioTrack || !audioTrack.enabled || audioTrack.muted || audioTrack.readyState !== 'live') {
-                if (tile) {
-                    tile.style.setProperty('--lvl', '0');
-                    tile._speakingUntil = 0;
-                    tile.classList.remove('speaking');
-                    tile.querySelector('.tile-speaking')?.setAttribute('aria-hidden', 'true');
-                }
                 continue;
             }
             let analyser = this.levels.get(identity);
@@ -1335,15 +1352,9 @@ class MeshMedia {
                 if (!analyser) continue;
                 this.levels.set(identity, analyser);
             }
+            // Painting (levels, ring, badge) belongs to the 20 fps level loop;
+            // this slower scan only picks who to focus / mirror in the PiP.
             const level = analyserLevel(analyser);
-            if (tile) {
-                tile.style.setProperty('--lvl', level.toFixed(3));
-                const now = performance.now();
-                if (level > 0.03) tile._speakingUntil = now + 900;
-                const speaking = now < (tile._speakingUntil || 0);
-                tile.classList.toggle('speaking', speaking);
-                tile.querySelector('.tile-speaking')?.setAttribute('aria-hidden', String(!speaking));
-            }
             if (level > bestLevel) { bestLevel = level; best = identity; }
         }
         if (best !== this.activeSpeaker) {
