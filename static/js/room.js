@@ -2640,10 +2640,22 @@ function initFiles() {
             toast(err.message, 'error');
         }
     };
+    const stopPresentation = (trigger) => {
+        if (!PERMISSIONS.can_present) {
+            toast('شما اجازهٔ پایان ارائه را ندارید.', 'warning', 2500);
+            return;
+        }
+        // file_id null is the server's «nothing is presented» state.
+        api('/presentation/', { file_id: null, page: 1 }).catch(() => {});
+        if (trigger) trigger.blur();
+    };
+    window.__stopPresentation = stopPresentation;
     list.addEventListener('click', (e) => {
         const del = e.target.closest('.file-delete');
         if (del) { deleteFile(del); return; }
         if (e.target.closest('a[download]')) return; // explicit download only
+        const stop = e.target.closest('[data-stop-presentation]');
+        if (stop) { stopPresentation(stop); return; }
         const present = e.target.closest('[data-present]');
         if (present) { presentFile(present); return; }
         const preview = e.target.closest('[data-preview]');
@@ -2651,11 +2663,13 @@ function initFiles() {
     });
     list.addEventListener('keydown', (e) => {
         if (e.key !== 'Enter' && e.key !== ' ') return;
+        const stop = e.target.closest('[data-stop-presentation]');
         const present = e.target.closest('[data-present]');
         const preview = e.target.closest('[data-preview]');
-        if (!present && !preview) return;
+        if (!stop && !present && !preview) return;
         e.preventDefault();
-        if (present) presentFile(present);
+        if (stop) stopPresentation(stop);
+        else if (present) presentFile(present);
         else previewFile(preview);
     });
 }
@@ -2685,8 +2699,23 @@ function updateFileEmpty() {
 /** Highlight the row of the file currently being presented (null clears). */
 function syncPresentingBadge(fileId) {
     document.querySelectorAll('#file-list .file-item').forEach((li) => {
-        li.classList.toggle('presenting', fileId != null && Number(li.dataset.fileId) === Number(fileId));
+        const live = fileId != null && Number(li.dataset.fileId) === Number(fileId);
+        li.classList.toggle('presenting', live);
+        // A row that is already on everybody's screen offers the way *out*,
+        // otherwise re-clicking it would only restart page 1.
+        const btn = li.querySelector('.file-present');
+        if (!btn) return;
+        if (live) btn.setAttribute('data-stop-presentation', '1');
+        else btn.removeAttribute('data-stop-presentation');
+        btn.classList.toggle('is-stop', live);
+        btn.title = live ? 'اتمام ارائه برای همه' : 'ارائهٔ این فایل برای همه';
+        btn.setAttribute('aria-label', live ? 'اتمام ارائه' : 'ارائهٔ این فایل');
+        btn.innerHTML = live
+            ? '<svg class="ic" aria-hidden="true"><use href="#i-stop"/></svg><span>اتمام ارائه</span>'
+            : '<svg class="ic" aria-hidden="true"><use href="#i-play"/></svg>';
     });
+    const stopBar = document.getElementById('btn-stop-presentation');
+    if (stopBar) stopBar.classList.toggle('hidden', fileId == null);
     syncPresReturnChip();
 }
 
@@ -2755,6 +2784,9 @@ function addFileItem(file) {
     }
     list.prepend(li);
     updateFileEmpty();
+    // A new row must know whether its file is already the one on screen (then
+    // its button is «اتمام ارائه», not «ارائه»).
+    syncPresentingBadge(livePresentation?.file_id ?? null);
 }
 
 function removeFileItem(fileId) {

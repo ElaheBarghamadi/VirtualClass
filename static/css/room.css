@@ -640,6 +640,27 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
     .pres-tools .wb-width { display: none; }
 }
 .screen-header { gap: .6rem; flex-wrap: wrap; }
+/* «اتمام ارائه» — the one action that returns the whole class to the videos.
+   Pastel rose: unmistakably an ending, still quieter than a red slab. */
+.pres-stop {
+    flex: none;
+    background: var(--p-rose, var(--danger-soft));
+    color: var(--p-rose-ink, var(--danger));
+    border: 1px solid color-mix(in srgb, var(--danger) 26%, transparent);
+    font-weight: 700;
+}
+.pres-stop:hover, .pres-stop:focus-visible {
+    background: color-mix(in srgb, var(--danger) 20%, var(--room-surface));
+    color: color-mix(in srgb, var(--danger) 80%, var(--room-text));
+}
+.pres-stop:disabled { opacity: .55; cursor: default; }
+/* The files panel: the row that is on the big screen offers the way out. */
+.file-present.is-stop {
+    background: var(--p-rose, var(--danger-soft));
+    color: var(--p-rose-ink, var(--danger));
+    border-color: color-mix(in srgb, var(--danger) 26%, transparent);
+}
+.file-present.is-stop .ic { transform: none; }
 
 /* ---------- whiteboard ---------- */
 /* ---------- whiteboard toolbar ----------

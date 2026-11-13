@@ -627,7 +627,26 @@ class PresentationImpl {
         }
     }
 
+    /**
+     * End the shared presentation for everybody.
+     *
+     * «بازگشت» is local (this browser looks at the videos while the class is
+     * still on the slide); this is the presenter's room-wide action, and it is
+     * the only way out of a PDF/image on the big screen.
+     */
+    endRoomPresentation() {
+        if (!this.canPresent) return this._deny();
+        const btn = document.getElementById('btn-stop-presentation');
+        if (btn) btn.disabled = true;
+        this.api?.('/presentation/', { file_id: null, page: 1 })
+            .catch(() => { /* api() already toasted the reason */ })
+            .finally(() => { if (btn) btn.disabled = false; });
+    }
+
     _bindNav() {
+        document.getElementById('btn-stop-presentation')?.addEventListener('click', () => {
+            this.endRoomPresentation();
+        });
         document.getElementById('pres-prev')?.addEventListener('click', () => {
             if (this.canPresent) this.go(this.page - 1);
             else this.showLocalPage(Math.max(1, this.page - 1));

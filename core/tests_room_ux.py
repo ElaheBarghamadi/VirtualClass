@@ -24,6 +24,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 STATIC = REPO_ROOT / "static"
 JS = STATIC / "js"
 CSS = STATIC / "css"
+TEMPLATES = REPO_ROOT / "classrooms" / "templates" / "classrooms"
 
 
 def read(path: Path) -> str:
@@ -280,6 +281,50 @@ class ControlBarTests(SimpleTestCase):
         pop = pop[: pop.index("\n}\n")]
         self.assertIn("pop.style.maxHeight", pop)
         self.assertIn("overflowY", pop)
+
+class PresentationEndTests(SimpleTestCase):
+    """A PDF or an image on the big screen needs a visible way out."""
+
+    def setUp(self):
+        self.room = read(TEMPLATES / "room.html")
+        self.pres = read(JS / "presentation.js")
+        self.room_js = read(JS / "room.js")
+        self.css = read(CSS / "room.css")
+
+    def test_the_presentation_header_has_an_end_button(self):
+        idx = self.room.index('id="btn-stop-presentation"')
+        guard = self.room.rindex("{% if permissions.can_present %}", 0, idx)
+        self.assertLess(guard, idx)
+        self.assertLess(idx, self.room.index("{% endif %}", guard))
+        self.assertIn("اتمام ارائه", self.room)
+        # the local «back» stays: leaving the view is not ending the sharing
+        self.assertIn('id="btn-exit-presentation"', self.room)
+
+    def test_ending_is_a_room_wide_action(self):
+        end = self.pres[self.pres.index("endRoomPresentation()"):]
+        end = end[: end.index("\n    }\n")]
+        self.assertIn("'/presentation/'", end)
+        self.assertIn("file_id: null", end)
+        self.assertIn("this.canPresent", end)
+        self.assertIn("btn-stop-presentation", self.pres)
+
+    def test_the_presenting_file_row_turns_into_a_stop_button(self):
+        sync = self.room_js[self.room_js.index("function syncPresentingBadge("):]
+        sync = sync[: sync.index("\n}\n")]
+        self.assertIn("data-stop-presentation", sync)
+        self.assertIn("is-stop", sync)
+        self.assertIn("#i-stop", sync)
+        self.assertIn("اتمام ارائه", sync)
+        # the click handler posts the same null file_id
+        self.assertIn("stopPresentation", self.room_js)
+        self.assertIn("api('/presentation/', { file_id: null, page: 1 })", self.room_js)
+
+    def test_the_stop_button_is_a_pastel_rose_not_a_red_slab(self):
+        btn = rule(self.css, ".pres-stop")
+        self.assertIn("var(--p-rose", btn)
+        self.assertIn("color-mix(", btn)
+        self.assertIn(".file-present.is-stop", self.css)
+
 
 class SpeakingHighlightTests(SimpleTestCase):
     """Who is talking is information, not an alarm."""

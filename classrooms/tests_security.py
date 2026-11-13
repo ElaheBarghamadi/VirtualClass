@@ -466,6 +466,47 @@ class PresentationHardeningTests(TestCase):
         self.classroom.refresh_from_db()
         self.assertEqual(self.classroom.current_page, 9999)
 
+    def _share(self, name="slides.pdf"):
+        from django.core.files.base import ContentFile
+
+        from .models import SharedFile
+
+        shared = SharedFile.objects.create(
+            classroom=self.classroom, uploader=self.owner,
+            original_name=name, size=10, content_type="application/pdf",
+        )
+        shared.file.save(name, ContentFile(b"%PDF-1.4 test"), save=True)
+        return shared
+
+    def test_the_presenter_can_end_the_presentation_for_everybody(self):
+        from .services import set_presentation
+
+        shared = self._share()
+        set_presentation(self.classroom, self.owner, shared.id, 4)
+        self.classroom.refresh_from_db()
+        self.assertEqual(self.classroom.current_file_id, shared.id)
+
+        # file_id null is the documented «nothing on screen» state
+        resp = self._post({"file_id": None, "page": 1})
+        self.assertEqual(resp.status_code, 200)
+        self.classroom.refresh_from_db()
+        self.assertIsNone(self.classroom.current_file_id)
+        self.assertEqual(self.classroom.current_page, 1)
+
+    def test_a_student_cannot_end_the_presentation(self):
+        from .services import set_presentation
+
+        student = User.objects.create_user(username="pres_stop_student", password="x")
+        join_classroom(self.classroom, student)
+        shared = self._share()
+        set_presentation(self.classroom, self.owner, shared.id, 1)
+
+        self.client.force_login(student)
+        resp = self._post({"file_id": None, "page": 1})
+        self.assertEqual(resp.status_code, 403)
+        self.classroom.refresh_from_db()
+        self.assertEqual(self.classroom.current_file_id, shared.id)
+
     def test_non_student_cannot_present(self):
         student = User.objects.create_user(username="pres_student", password="x")
         join_classroom(self.classroom, student)
