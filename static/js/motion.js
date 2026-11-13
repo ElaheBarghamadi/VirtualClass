@@ -7,11 +7,17 @@
  * gated behind the `js-anim` class added below — no flash of invisible
  * content ever.
  *
- *  1. Reveal-on-scroll for cards, stats and section headings (staggered).
- *  2. Count-up for the dashboard stat numbers.
- *  3. A press ripple on primary buttons and the room's round controls.
- *  4. Pointer parallax on the landing preview (desktop pointers only).
- *  5. Small state classes: sticky header shadow, scrollable nav hint.
+ * The decorative half of this file is scoped to the landing page
+ * (`body.is-home`): reveal-on-scroll, count-up, the press ripple and the
+ * pointer parallax.  Inner pages are working screens — they get one calm
+ * fade-in and nothing that keeps moving while the user reads.
+ *
+ *  1. Reveal-on-scroll for cards, stats and section headings (home only).
+ *  2. Count-up for stat numbers (home only).
+ *  3. A press ripple on primary buttons (home only).
+ *  4. Pointer parallax on the landing preview (home + desktop pointers).
+ *  5. Always-on shell state: sticky header shadow, scrollable nav hint and the
+ *     measured header height (--header-h) used for anchor offsets.
  */
 (function () {
     'use strict';
@@ -170,6 +176,22 @@
     }
 
     // ---- 5. sticky header + scrollable nav affordances -----------------------
+    // The header changes height between breakpoints (and shrinks once the page
+    // is scrolled), so its measured height is published for scroll offsets —
+    // a fixed `scroll-padding-top: 76px` was wrong at every other width.
+    function headerHeight() {
+        const header = document.querySelector('.site-header');
+        if (!header) return;
+        const apply = () => {
+            const h = Math.round(header.getBoundingClientRect().height);
+            if (h > 0) root.style.setProperty('--header-h', `${h}px`);
+        };
+        apply();
+        if ('ResizeObserver' in window) new ResizeObserver(apply).observe(header);
+        else window.addEventListener('resize', apply);
+        window.addEventListener('load', apply);
+    }
+
     function headerState() {
         const header = document.querySelector('.site-header');
         if (!header) return;
@@ -201,12 +223,20 @@
 
     function init() {
         root.classList.add('js-anim');
+        // Shell state runs on every page; it is not decoration.
+        headerState();
+        headerHeight();
+        navOverflowHint();
+
+        // Decorative motion belongs to the landing page only.  Working screens
+        // (dashboard, lists, forms, auth) stay still: one short fade-in from
+        // CSS and responsive hover feedback, nothing else.
+        if (!document.body.classList.contains('is-home')) return;
+
         tagReveals();
         observeReveals();
         animateStats();
         heroParallax();
-        headerState();
-        navOverflowHint();
         document.addEventListener('pointerdown', ripple, { passive: true });
     }
 
@@ -217,5 +247,9 @@
     }
 
     // Re-scan when the app swaps large chunks of the DOM (file lists, roster…).
-    window.MotionRefresh = () => { tagReveals(); observeReveals(); };
+    window.MotionRefresh = () => {
+        if (!document.body.classList.contains('is-home')) return;
+        tagReveals();
+        observeReveals();
+    };
 })();

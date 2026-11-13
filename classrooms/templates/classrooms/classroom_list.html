@@ -13,7 +13,7 @@
         {% for classroom in owned_classrooms %}
             <article class="card classroom-card">
                 <div class="card-top">
-                    <h3>{% if classroom.logo %}<img class="classroom-logo" src="{{ classroom.logo.url }}" alt="">{% endif %}{% if classroom.accent_color %}<span class="accent-dot" style="background:{{ classroom.accent_color }}" aria-hidden="true"></span>{% endif %}{{ classroom.title }}</h3>
+                    <h3>{% if classroom.logo %}<img class="classroom-logo" src="{{ classroom.logo.url }}" alt="" width="36" height="36" loading="lazy" decoding="async">{% endif %}{% if classroom.accent_color %}<span class="accent-dot" style="background:{{ classroom.accent_color }}" aria-hidden="true"></span>{% endif %}{{ classroom.title }}</h3>
                     <span class="badge {% if classroom.is_active %}badge-success{% else %}badge-muted{% endif %}">
                         {% if classroom.is_active %}فعال{% else %}غیرفعال{% endif %}
                     </span>
@@ -41,7 +41,7 @@
         {% for membership in memberships %}
             <article class="card classroom-card">
                 <div class="card-top">
-                    <h3>{% if membership.classroom.logo %}<img class="classroom-logo" src="{{ membership.classroom.logo.url }}" alt="">{% endif %}{% if membership.classroom.accent_color %}<span class="accent-dot" style="background:{{ membership.classroom.accent_color }}" aria-hidden="true"></span>{% endif %}{{ membership.classroom.title }}</h3>
+                    <h3>{% if membership.classroom.logo %}<img class="classroom-logo" src="{{ membership.classroom.logo.url }}" alt="" width="36" height="36" loading="lazy" decoding="async">{% endif %}{% if membership.classroom.accent_color %}<span class="accent-dot" style="background:{{ membership.classroom.accent_color }}" aria-hidden="true"></span>{% endif %}{{ membership.classroom.title }}</h3>
                     <span class="badge badge-info">{{ membership.get_role_display }}</span>
                 </div>
                 <dl class="meta-list">
@@ -61,8 +61,10 @@
 
 {% if not owned_classrooms and not memberships %}
     <div class="empty-state card">
-        <p>هنوز نه کلاسی ساخته‌اید و نه در کلاسی عضو هستید.</p>
+        <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="3.5" width="7.2" height="7.2" rx="1.8"/><rect x="13.3" y="3.5" width="7.2" height="7.2" rx="1.8"/><rect x="3.5" y="13.3" width="7.2" height="7.2" rx="1.8"/><path d="M16.9 13.9v5.2M14.3 16.5h5.2"/></svg>
+        <h3>هنوز کلاسی ندارید</h3>
         <p class="muted">یک کلاس بسازید و لینکش را برای دانش‌آموزان بفرستید — یا از طریق لینک دعوت به کلاس کسی بپیوندید.</p>
+        <a class="btn btn-primary" href="{% url 'classrooms:create' %}">ساخت کلاس</a>
     </div>
 {% endif %}
 {% endblock %}

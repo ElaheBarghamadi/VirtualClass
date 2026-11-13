@@ -22,7 +22,7 @@
     <aside class="join-intro">
       <div class="join-orb" aria-hidden="true">
         {% if classroom.logo %}
-          <img src="{{ classroom.logo.url }}" alt="">
+          <img src="{{ classroom.logo.url }}" alt="" decoding="async">
         {% else %}
           <span class="join-orb-letter">{{ classroom.title|slice:":1" }}</span>
         {% endif %}

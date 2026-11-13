@@ -8,8 +8,8 @@
     <title>{% block title %}خطا{% endblock %} · کلاس آنلاین</title>
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
     <link href="https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css" rel="stylesheet">
-    {# Self-contained on purpose: these pages must render even when the app is
-       the thing that is broken (no base.html, no context processors). #}
+    {% comment %}Self-contained on purpose: these pages must render even when the app is
+       the thing that is broken (no base.html, no context processors).{% endcomment %}
     <link rel="stylesheet" href="{% static 'css/tokens.css' %}?v={{ ASSET_V }}">
     <link rel="stylesheet" href="{% static 'css/errors.css' %}?v={{ ASSET_V }}">
 </head>

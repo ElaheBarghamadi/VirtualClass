@@ -127,7 +127,7 @@
 
     <header class="room-header">
         <div class="room-title">
-            {% if classroom.logo %}<img class="room-logo" src="{{ classroom.logo.url }}" alt="">{% endif %}
+            {% if classroom.logo %}<img class="room-logo" src="{{ classroom.logo.url }}" alt="" decoding="async">{% endif %}
             <h1>{{ classroom.title }}</h1>
             <span class="badge badge-info" id="role-badge">{{ member.get_role_display }}</span>
             {% if live_session %}<span class="live-dot" title="جلسه در حال برگزاری"><i class="dot" aria-hidden="true"></i> LIVE</span>{% endif %}

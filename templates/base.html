@@ -5,10 +5,10 @@
       {% if ui.reduce_animations %}data-motion="reduced"{% endif %}>
 <head>
     <meta charset="UTF-8">
-    {# interactive-widget: Chrome resizes the page for the keyboard instead of
+    {% comment %}interactive-widget: Chrome resizes the page for the keyboard instead of
        sliding it under the input — the room's composer then moves up with the
        layout instead of the whole page jumping. Safari ignores it; viewport.js
-       covers that case with the visual-viewport height. #}
+       covers that case with the visual-viewport height.{% endcomment %}
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
     <meta name="color-scheme" content="light dark">
     <title>{% block title %}{{ ui.app_name }}{% endblock %}</title>
@@ -22,7 +22,9 @@
     {# the animation layer is loaded LAST so component motion wins #}
     <link rel="stylesheet" href="{% static 'css/motion.css' %}?v={{ ASSET_V }}">
 </head>
-<body{% if full_page %} class="full-page"{% endif %}>
+{% comment %}body_class lets a page opt into the richer landing-page motion; every other
+   page stays calm (see motion.css).{% endcomment %}
+<body class="{% block body_class %}{% endblock %}{% if full_page %} full-page{% endif %}">
 {% include "_icon_sprite.html" %}
 <a class="skip-link" href="#main-content">پرش به محتوای اصلی</a>
 {% if not full_page %}
@@ -45,7 +47,7 @@
             <span class="nav-toggle-box" aria-hidden="true"><span></span><span></span><span></span></span>
         </button>
 
-        <nav class="main-nav" id="main-nav" data-nav-panel aria-label="ناوبری اصلی">
+        <nav class="main-nav" id="main-nav" data-nav-panel aria-label="ناوبری اصلی" tabindex="-1">
             <div class="nav-head">
                 <span class="nav-head-title">منو</span>
                 <button type="button" class="nav-close" data-nav-close aria-label="بستن منو">
@@ -84,13 +86,20 @@
                 {% if user.is_authenticated %}
                     <form method="post" action="{% url 'accounts:logout' %}" class="inline-form nav-logout">
                         {% csrf_token %}
-                        <button type="submit" class="btn btn-ghost btn-sm" title="خروج از حساب">
+                        <button type="submit" class="btn btn-ghost btn-sm"
+                                title="خروج از حساب" aria-label="خروج از حساب">
                             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3"/><path d="M10 8l-4 4 4 4"/><path d="M6 12h9"/></svg>
-                            خروج
+                            <span class="btn-label">خروج</span>
                         </button>
                     </form>
                 {% else %}
-                    <a href="{% url 'accounts:register' %}" class="btn btn-primary btn-sm">ثبت‌نام رایگان</a>
+                    {% comment %}the only action that must stay explicit: a full label on the
+                       row, a short one when space is tight (#1120px){% endcomment %}
+                    <a href="{% url 'accounts:register' %}" class="btn btn-primary btn-sm btn-guest">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 20v-1.8a3.6 3.6 0 0 0-3.6-3.6H7.2A3.6 3.6 0 0 0 3.6 18.2V20"/><circle cx="9.3" cy="8.2" r="3.4"/><path d="M18.4 7.6v5.2M21 10.2h-5.2"/></svg>
+                        <span class="btn-label-full">ثبت‌نام رایگان</span>
+                        <span class="btn-label-short">ثبت‌نام</span>
+                    </a>
                 {% endif %}
             </div>
         </nav>
@@ -102,8 +111,8 @@
 
 <main {% if not full_page %}class="container" {% endif %}id="main-content">
     {% if messages %}
-        {# Server messages become the same toasts as everything else (notify.js);
-           the copy below is the no-JS fallback and stays visible if JS is off. #}
+        {% comment %}Server messages become the same toasts as everything else (notify.js);
+           the copy below is the no-JS fallback and stays visible if JS is off.{% endcomment %}
         <noscript>
             <div class="messages" role="status">
                 {% for message in messages %}

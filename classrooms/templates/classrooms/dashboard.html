@@ -9,14 +9,14 @@
     </div>
 </div>
 
+{% comment %}Profile and logout live in the header; repeating them here made the first
+   screen a wall of equally-weighted buttons.{% endcomment %}
 <div class="action-bar">
-    <a class="btn btn-primary" href="{% url 'classrooms:create' %}">+ ایجاد کلاس</a>
+    <a class="btn btn-primary" href="{% url 'classrooms:create' %}">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5.5v13M5.5 12h13"/></svg>
+        ایجاد کلاس
+    </a>
     <a class="btn btn-ghost" href="{% url 'classrooms:list' %}">کلاس‌های من</a>
-    <a class="btn btn-ghost" href="{% url 'accounts:profile' %}">پروفایل</a>
-    <form method="post" action="{% url 'accounts:logout' %}">
-        {% csrf_token %}
-        <button type="submit" class="btn btn-ghost">خروج</button>
-    </form>
 </div>
 
 <section class="stat-row">
@@ -48,7 +48,7 @@
         {% for classroom in owned_classrooms %}
             <article class="card classroom-card">
                 <div class="card-top">
-                    <h3>{% if classroom.logo %}<img class="classroom-logo" src="{{ classroom.logo.url }}" alt="">{% endif %}{% if classroom.accent_color %}<span class="accent-dot" style="background:{{ classroom.accent_color }}" aria-hidden="true"></span>{% endif %}{{ classroom.title }}</h3>
+                    <h3>{% if classroom.logo %}<img class="classroom-logo" src="{{ classroom.logo.url }}" alt="" width="36" height="36" loading="lazy" decoding="async">{% endif %}{% if classroom.accent_color %}<span class="accent-dot" style="background:{{ classroom.accent_color }}" aria-hidden="true"></span>{% endif %}{{ classroom.title }}</h3>
                     <span class="badge {% if classroom.is_active %}badge-success{% else %}badge-muted{% endif %}">
                         {% if classroom.is_active %}فعال{% else %}غیرفعال{% endif %}
                     </span>
@@ -75,8 +75,10 @@
     </div>
 {% else %}
     <div class="empty-state card">
-        <p>هنوز کلاسی نساخته‌اید.</p>
-        <a class="btn btn-primary" href="{% url 'classrooms:create' %}">اولین کلاس خود را بسازید</a>
+        <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="2.6" y="4" width="18.8" height="11.2" rx="1.8"/><path d="M12 15.2v4.2M8.5 20.6h7"/></svg>
+        <h3>هنوز کلاسی نساخته‌اید</h3>
+        <p>اولین کلاس را بسازید، لینکش را برای شاگردان بفرستید و در چند ثانیه شروع کنید.</p>
+        <a class="btn btn-primary" href="{% url 'classrooms:create' %}">ساخت کلاس</a>
     </div>
 {% endif %}
 

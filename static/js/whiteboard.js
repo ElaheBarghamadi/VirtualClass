@@ -101,6 +101,8 @@ const ZOOM_STEP = 1.25;
 /** Wheel zoom: exp(-deltaY * WHEEL_ZOOM_RATE) — a trackpad tick is gentle. */
 const WHEEL_ZOOM_RATE = 0.0015;
 
+import { toast } from './toast.js';
+
 class WhiteboardImpl {
     constructor() {
         this.canvas = null;        // fabric.Canvas
@@ -505,7 +507,7 @@ class WhiteboardImpl {
                 // author keeps ink that nobody else has (and that disappears
                 // on the next reload).
                 if (data.op_id) this._rollback(data.op_id);
-                import('./toast.js').then(({ toast }) => toast(data.message || 'خطا در تخته.', 'error'));
+                toast(data.message || 'خطا در تخته.', 'error');
             }
         };
     }
@@ -730,8 +732,7 @@ class WhiteboardImpl {
     addPage() {
         if (!this.canDraw) return this._deny();
         if (this.pageCount >= MAX_PAGES) {
-            import('./toast.js').then(({ toast }) =>
-                toast(`بیشتر از ${MAX_PAGES.toLocaleString('fa-IR')} صفحه پشتیبانی نمی‌شود.`, 'warning'));
+            toast(`بیشتر از ${MAX_PAGES.toLocaleString('fa-IR')} صفحه پشتیبانی نمی‌شود.`, 'warning');
             return;
         }
         const target = this.pageCount + 1;
@@ -937,7 +938,7 @@ class WhiteboardImpl {
 
     _deny(reason = 'برای حساب شما نوشتن روی تخته فعال نیست. از مالک کلاس بخواهید مجوز «تختهٔ اشتراکی» را روشن کند و در صورت نیاز تنظیمات کلاس را بررسی کند.') {
         if (!this._warned) {
-            import('./toast.js').then(({ toast }) => toast(reason, 'warning'));
+            toast(reason, 'warning');
             this._warned = true;
             setTimeout(() => { this._warned = false; }, 4000);
         }
@@ -1520,8 +1521,7 @@ class WhiteboardImpl {
             } else {
                 this.setPage(pg, { broadcast: false });
                 if (actorName) {
-                    import('./toast.js').then(({ toast }) =>
-                        toast(`${actorName} به صفحهٔ ${pg} رفت.`, 'info', 2000));
+                    toast(`${actorName} به صفحهٔ ${pg} رفت.`, 'info', 2000);
                 }
             }
             return;

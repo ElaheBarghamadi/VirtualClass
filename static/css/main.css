@@ -113,6 +113,9 @@ code {
 }
 .header-inner {
     display: flex; align-items: center; justify-content: space-between;
+    /* one row, always: the parts that do not fit are hidden by the breakpoint
+       rules in the header section instead of wrapping to a second line */
+    flex-wrap: nowrap;
     gap: 1rem; padding: .7rem 0;
 }
 
@@ -134,7 +137,6 @@ code {
 .brand-text { display: grid; line-height: 1.25; }
 .brand-text small { font-size: .68rem; font-weight: 500; color: var(--muted); letter-spacing: .01em; }
 
-.main-nav { display: flex; align-items: center; gap: .25rem; flex-wrap: wrap; }
 .main-nav a,
 .main-nav .link-button,
 .main-nav button.nav-link {
@@ -737,9 +739,7 @@ code {
    "Header — responsive shell" section at the end of this file.
    ========================================================================== */
 @media (max-width: 760px) {
-    .header-inner { padding: .5rem 0; gap: .5rem; }
-    .brand { font-size: .95rem; min-height: 44px; }
-    .brand-mark { width: 30px; height: 30px; border-radius: 10px; }
+    /* header geometry lives in the «Header — one row at every width» section */
     .nav-sep { display: none; }
     .icon-btn { width: 40px; height: 40px; }
 }
@@ -2336,23 +2336,148 @@ html[dir="rtl"] .toast__timer::after { transform-origin: right center; }
 
 
 /* ==========================================================================
-   Header — responsive shell
-   Desktop: one row — brand, links, actions.
-   ≤900px: the same markup becomes a slide-in panel opened by the burger.
-   Everything is logical (`inline-start/end`) so RTL and LTR both work, and
-   nothing relies on a second copy of the navigation.
+   Visual refinement
+   --------------------------------------------------------------------------
+   A narrow, deliberate layer on top of the components above: type rhythm,
+   page headers, table legibility, empty states and the footer.  No new
+   colours and no new geometry scale — everything still comes from tokens.css,
+   so the light/dark themes and the density switch keep working untouched.
    ========================================================================== */
-.header-inner { gap: .85rem; }
 
+/* ---- type rhythm -------------------------------------------------------- */
+h1, h2, h3 { text-wrap: balance; }
+p { text-wrap: pretty; }
+h1 { letter-spacing: -0.022em; }
+::selection { background: color-mix(in srgb, var(--primary) 26%, transparent); }
+
+/* ---- page header -------------------------------------------------------- */
+.page-head {
+    margin: 2.25rem 0 1.35rem;
+    gap: 1rem 1.5rem;
+    align-items: flex-end;
+}
+.page-head > div { min-width: 0; }
+.page-head h1 { margin: 0 0 .3rem; }
+/* one comfortable measure for the subtitle: full-width paragraphs on a wide
+   screen are hard to read and make the whole header look unfinished */
+.page-head p, .page-head .muted { margin: 0; max-width: 64ch; line-height: 1.75; }
+
+.section-title { margin: 2.1rem 0 .9rem; letter-spacing: -0.01em; }
+.section-title::before { width: 3px; border-radius: 3px; }
+
+/* ---- cards -------------------------------------------------------------- */
+.card { padding: 1.45rem; }
+.card-grid { gap: 1.1rem; }
+.classroom-card .card-top h3 { font-size: 1.03rem; line-height: 1.5; min-width: 0; }
+.classroom-card .card-top h3 { overflow-wrap: anywhere; }
+.card-actions { gap: .45rem; }
+
+/* ---- stats -------------------------------------------------------------- */
+.stat-card { padding: 1.15rem 1.3rem; gap: .2rem; }
+.stat-value { font-size: 2rem; letter-spacing: -0.02em; }
+.stat-label { letter-spacing: .01em; }
+
+/* ---- data tables -------------------------------------------------------- */
+.table-wrap { border-radius: var(--radius-md); box-shadow: var(--shadow-xs); }
+.data-table th {
+    font-size: .8rem; font-weight: 650; letter-spacing: .02em;
+    color: var(--text-secondary);
+    border-bottom: 1px solid var(--border-strong);
+}
+.data-table td { font-variant-numeric: tabular-nums; }
+.data-table tbody tr:nth-child(even) td {
+    background: color-mix(in srgb, var(--surface-2) 60%, transparent);
+}
+.data-table tbody tr:hover td {
+    background: color-mix(in srgb, var(--primary) 6%, var(--surface-2));
+}
+
+/* ---- empty states ------------------------------------------------------- */
+.empty-state {
+    display: grid; justify-items: center; gap: .45rem;
+    padding: 2.6rem 1.4rem;
+    line-height: 1.8;
+}
+.empty-state h3, .empty-state strong { margin: 0; color: var(--text); font-size: 1.02rem; }
+.empty-state .ic { width: 30px; height: 30px; opacity: .45; }
+.empty-state p { margin: 0; max-width: 46ch; }
+
+/* ---- forms -------------------------------------------------------------- */
+.field > label, .field label { color: var(--text-secondary); }
+.field-help { line-height: 1.75; }
+.field input:hover:not(:focus), .field select:hover:not(:focus), .field textarea:hover:not(:focus) {
+    border-color: var(--border-strong);
+}
+
+/* ---- footer ------------------------------------------------------------- */
+.site-footer {
+    margin-top: 3rem;
+    padding: 1.9rem 0 calc(2rem + env(safe-area-inset-bottom, 0px));
+    background: linear-gradient(180deg, transparent, color-mix(in srgb, var(--surface) 70%, transparent));
+    border-top: 1px solid var(--border);
+    font-size: var(--fs-sm);
+    letter-spacing: .01em;
+}
+
+/* ---- scrollbars --------------------------------------------------------- */
+@supports (scrollbar-width: thin) {
+    .table-wrap, .main-nav, textarea, .room-side {
+        scrollbar-width: thin;
+        scrollbar-color: var(--border-strong) transparent;
+    }
+}
+
+/* ---- phones: tighten the rhythm instead of shrinking the type ---------- */
+@media (max-width: 480px) {
+    .page-head { margin: 1.35rem 0 1rem; align-items: flex-start; }
+    .page-head h1 { font-size: 1.42rem; }
+    .section-title { margin: 1.6rem 0 .75rem; }
+    .card { padding: 1.15rem; }
+    .stat-value { font-size: 1.6rem; }
+    .site-footer { margin-top: 2rem; padding-block: 1.4rem 1.6rem; }
+}
+
+/* ==========================================================================
+   Header — one row at every width
+
+   ≥1025px: brand · links · account + theme, inline.
+   ≤1024px: brand · burger; the same markup becomes a slide-in panel.
+   ≤1200px: the tagline goes; ≤1120px the link icons go; ≤1024px the account
+   label goes.  The row sheds optional parts instead of wrapping onto a second
+   line (a two-line sticky header eats a fifth of a phone screen and made every
+   anchor land underneath it).
+
+   Everything is logical (`inline-start/end`), so RTL and LTR share one set of
+   rules and there is never a second copy of the navigation in the DOM.
+   ========================================================================== */
+.site-header { padding-block-start: env(safe-area-inset-top, 0px); }
+
+.header-inner {
+    gap: .75rem;
+    padding-block: .6rem;
+    min-height: 62px;
+    flex-wrap: nowrap;
+}
+
+/* --- brand: mark + name, ellipsised instead of pushing the row wide ------ */
+.brand { min-width: 0; flex: 0 1 auto; }
+.brand-text { min-width: 0; }
+.brand-name {
+    display: block; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* --- inline row --------------------------------------------------------- */
 .main-nav {
-    display: flex; align-items: center; gap: .5rem;
-    margin-inline-start: auto; min-width: 0;
+    display: flex; align-items: center; flex-wrap: nowrap;
+    gap: .45rem; margin-inline-start: auto; min-width: 0;
 }
 .nav-head { display: none; }
-.nav-list { display: flex; align-items: center; gap: .1rem; min-width: 0; }
+
+.nav-list { display: flex; align-items: center; gap: .08rem; min-width: 0; }
 .nav-list a {
-    display: inline-flex; align-items: center; gap: .42rem;
-    min-height: 38px; padding: .45rem .8rem;
+    display: inline-flex; align-items: center; gap: .4rem;
+    min-height: 38px; padding: .42rem .78rem;
     color: var(--text-secondary); font-size: .9rem; font-weight: 600;
     text-decoration: none; white-space: nowrap;
     border: 1px solid transparent; border-radius: var(--radius-pill);
@@ -2374,7 +2499,13 @@ html[dir="rtl"] .toast__timer::after { transform-origin: right center; }
 }
 .nav-list a[aria-current="page"] svg { opacity: 1; }
 
-.nav-actions { display: flex; align-items: center; gap: .4rem; flex: none; }
+/* The account cluster is separated by a hairline so "خروج" never reads as
+   another destination in the same list. */
+.nav-actions {
+    display: flex; align-items: center; gap: .35rem; flex: none;
+    margin-inline-start: .2rem; padding-inline-start: .55rem;
+    border-inline-start: 1px solid var(--border);
+}
 .nav-actions .btn { min-height: 38px; }
 .nav-actions .btn svg {
     width: 16px; height: 16px; flex: none;
@@ -2382,15 +2513,16 @@ html[dir="rtl"] .toast__timer::after { transform-origin: right center; }
     stroke-linecap: round; stroke-linejoin: round;
 }
 
-/* ---- the burger (only ever visible ≤900px) ---- */
+/* ---- the burger (only ever visible ≤1024px) ---- */
 .nav-toggle {
     display: none; flex: none; align-items: center; justify-content: center;
     width: 44px; height: 44px; margin-inline-start: auto; padding: 0;
     border: 1px solid var(--border); border-radius: 14px;
     background: var(--surface); color: var(--text); cursor: pointer;
-    transition: border-color var(--speed) var(--ease), transform var(--speed) var(--ease);
+    transition: border-color var(--speed) var(--ease), transform var(--speed) var(--ease),
+                background var(--speed) var(--ease);
 }
-.nav-toggle:hover { border-color: var(--border-strong); }
+.nav-toggle:hover { border-color: var(--border-strong); background: var(--surface-2); }
 .nav-toggle:active { transform: scale(.94); }
 .nav-toggle-box { position: relative; display: block; width: 20px; height: 14px; }
 .nav-toggle-box span {
@@ -2414,37 +2546,54 @@ html[dir="rtl"] .toast__timer::after { transform-origin: right center; }
     transition: opacity .22s var(--ease);
 }
 .nav-scrim.open { opacity: 1; pointer-events: auto; }
+
+/* Scroll lock while the panel is open.  Both elements are locked because the
+   browsers disagree about which one owns the scroll; the page is never
+   repositioned, so the header cannot jump and there is nothing to restore. */
 body.nav-open { overflow: hidden; }
+html.nav-lock, body.nav-lock { overflow: hidden; overscroll-behavior: none; }
 
-/* Between 900px and ~1150px the row is tight: drop the icons and the tagline
-   rather than letting the last item slide under the edge. */
-@media (max-width: 1150px) {
+/* ---- narrow: shed the tagline, then the icons, then the label ---------- */
+@media (max-width: 1200px) {
     .brand-text small { display: none; }
-    .nav-list a svg { display: none; }
-    .nav-list a { padding-inline: .7rem; }
 }
+@media (max-width: 1120px) {
+    .nav-list a svg { display: none; }
+    .nav-list a { padding-inline: .72rem; }
+    .nav-actions .btn-label { display: none; }
+    .nav-actions .btn { width: 38px; padding-inline: 0; border-radius: var(--radius-pill); }
+}
+/* Guests get a short label rather than an icon-only "sign up" button, which
+   is the one action that should stay explicit. */
+@media (max-width: 1120px) {
+    .nav-actions .btn-label-full { display: none; }
+    .nav-actions .btn-label-short { display: inline; }
+    .nav-actions .btn-guest { width: auto; padding-inline: .8rem; }
+}
+.nav-actions .btn-label-short { display: none; }
 
-@media (max-width: 900px) {
+/* ==========================================================================
+   ≤1024px — the panel
+   ========================================================================== */
+@media (max-width: 1024px) {
     .site-header { z-index: 60; }
-    .header-inner { padding: .45rem 0; gap: .5rem; }
-    .brand { min-height: 46px; gap: .5rem; }
-    .brand-text small { display: none; }
-    .brand-mark { width: 32px; height: 32px; border-radius: 10px; }
+    .header-inner { padding-block: .45rem; min-height: 56px; gap: .5rem; }
+    .brand { min-height: 44px; gap: .5rem; font-size: .98rem; }
+    .brand-mark { width: 31px; height: 31px; border-radius: 10px; }
     .nav-toggle { display: inline-flex; }
 
     .main-nav {
-        /* the slide-in panel: full height, anchored to the inline start */
         position: fixed; inset-block: 0; inset-inline-start: 0;
         z-index: 61;
         --nav-shift: -105%;
-        width: min(86vw, 336px);
+        width: min(88vw, 348px);
+        height: 100vh; height: 100dvh; max-height: 100dvh;
         display: flex; flex-direction: column; align-items: stretch;
-        gap: .1rem; margin: 0;
-        padding: calc(1rem + env(safe-area-inset-top)) .95rem
-                 calc(1.1rem + env(safe-area-inset-bottom));
+        gap: 0; margin: 0;
+        padding: 0 .9rem calc(1rem + env(safe-area-inset-bottom));
         background: var(--surface);
         border-inline-end: 1px solid var(--border);
-        box-shadow: 24px 0 70px -34px rgb(4 6 15 / .6);
+        box-shadow: 24px 0 70px -34px rgb(4 6 15 / .55);
         transform: translateX(var(--nav-shift));
         opacity: 0; visibility: hidden;
         transition: transform .32s var(--ease-spring), opacity .2s var(--ease), visibility .32s;
@@ -2453,16 +2602,22 @@ body.nav-open { overflow: hidden; }
     }
     html[dir="rtl"] .main-nav {
         --nav-shift: 105%;
-        box-shadow: -24px 0 70px -34px rgb(4 6 15 / .6);
+        box-shadow: -24px 0 70px -34px rgb(4 6 15 / .55);
     }
     .main-nav.open { --nav-shift: 0; opacity: 1; visibility: visible; }
 
+    /* the head stays put while the list scrolls — the close button is always
+       reachable, even on a 320px-tall landscape phone */
     .nav-head {
+        position: sticky; top: 0; z-index: 2;
         display: flex; align-items: center; justify-content: space-between;
-        gap: .5rem; margin-bottom: .9rem;
+        gap: .5rem; margin: 0 -.9rem; padding:
+            calc(.75rem + env(safe-area-inset-top)) .9rem .7rem;
+        background: var(--surface);
+        border-bottom: 1px solid var(--border);
     }
     .nav-head-title {
-        font-size: .74rem; font-weight: 700; letter-spacing: .04em;
+        font-size: .74rem; font-weight: 700; letter-spacing: .05em;
         color: var(--muted); text-transform: uppercase;
     }
     .nav-close {
@@ -2470,6 +2625,7 @@ body.nav-open { overflow: hidden; }
         width: 40px; height: 40px; padding: 0; flex: none;
         border: 1px solid var(--border); border-radius: 12px;
         background: var(--surface-2); color: var(--text-secondary); cursor: pointer;
+        transition: color var(--speed) var(--ease), border-color var(--speed) var(--ease);
     }
     .nav-close:hover { color: var(--text); border-color: var(--border-strong); }
     .nav-close svg {
@@ -2477,13 +2633,13 @@ body.nav-open { overflow: hidden; }
         stroke-width: 2; stroke-linecap: round;
     }
 
-    .nav-list { flex-direction: column; align-items: stretch; gap: .15rem; }
+    .nav-list { flex-direction: column; align-items: stretch; gap: .12rem; padding-block: .7rem; }
     .nav-list a {
         min-height: 50px; width: 100%; justify-content: flex-start;
         gap: .7rem; padding: .6rem .8rem; border-radius: 14px;
-        font-size: .98rem;
+        font-size: .98rem; font-weight: 600;
     }
-    .nav-list a svg { display: block; width: 19px; height: 19px; opacity: .9; }
+    .nav-list a svg { display: block; width: 19px; height: 19px; opacity: .85; }
     .nav-list a[aria-current="page"] {
         background: color-mix(in srgb, var(--primary) 10%, transparent);
         border-color: color-mix(in srgb, var(--primary) 26%, transparent);
@@ -2491,22 +2647,31 @@ body.nav-open { overflow: hidden; }
     }
 
     .nav-actions {
-        margin-top: auto; padding-top: 1rem;
-        border-top: 1px solid var(--border);
+        margin-top: auto; margin-inline-start: 0; padding-inline-start: 0;
+        border-inline-start: none; border-top: 1px solid var(--border);
+        padding-top: .85rem;
         display: grid; grid-template-columns: auto minmax(0, 1fr);
         align-items: center; gap: .5rem;
     }
     .nav-actions .icon-btn { width: 46px; height: 46px; border-radius: 14px; }
-    .nav-actions .btn { min-width: 0; min-height: 46px; }
+    .nav-actions .btn,
+    .nav-actions .btn-guest { min-width: 0; min-height: 46px; width: auto; padding-inline: 1rem; }
+    .nav-actions .btn-label { display: inline; }
+    .nav-actions .btn-label-full { display: inline; }
+    .nav-actions .btn-label-short { display: none; }
     .nav-actions .nav-logout { display: block; }
     .nav-actions .nav-logout .btn { width: 100%; }
 }
 
-/* The panel is a phone-only device; on wide screens the same markup is a row
+/* The panel is a phone/tablet device; on wide screens the same markup is a row
    and the close button/scrim have no business being focusable. */
-@media (min-width: 901px) {
+@media (min-width: 1025px) {
     .nav-head, .nav-toggle { display: none; }
     .nav-scrim { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce), (update: slow) {
+    .main-nav, .nav-scrim, .nav-toggle-box span { transition: none; }
 }
 
 /* ==========================================================================
@@ -2547,7 +2712,9 @@ body.nav-open { overflow: hidden; }
    ========================================================================== */
 /* Anchor jumps (#main-content, in-page links) must not land under the sticky
    header. Its height is 56–64px; 76px leaves a comfortable gap. */
-html { scroll-padding-top: 76px; }
+/* Anchor offsets follow the *measured* header (motion.js publishes --header-h
+   and it changes with the breakpoints and the scrolled state). */
+html { scroll-padding-top: calc(var(--header-h, 62px) + .75rem); }
 
 /* Touch devices are not only phones: a tablet at 1024px still needs a 44px
    target, and the pointer media query says so more accurately than a width. */

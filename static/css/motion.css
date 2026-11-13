@@ -92,11 +92,11 @@
 /* --------------------------------------------------------------------------
    Page shell
    -------------------------------------------------------------------------- */
-/* living background: two slow aurora fields instead of a flat sheet */
-body::before {
-    animation: aurora-drift 34s var(--ease) infinite;
-    will-change: transform;
-}
+/* The living background — two slow aurora fields instead of a flat sheet — is
+   a landing-page flourish.  Inner pages keep the same colours, perfectly
+   still: a full-viewport element that repaints forever is real battery and
+   frame budget on a phone, and nobody wants the page breathing while reading a
+   form. */
 body::after {
     content: "";
     position: fixed;
@@ -106,6 +106,12 @@ body::after {
     background:
         radial-gradient(32rem 22rem at 15% 85%, color-mix(in srgb, #22d3ee 10%, transparent), transparent 70%),
         radial-gradient(28rem 20rem at 85% 25%, color-mix(in srgb, #a855f7 12%, transparent), transparent 70%);
+}
+body.is-home::before {
+    animation: aurora-drift 34s var(--ease) infinite;
+    will-change: transform;
+}
+body.is-home::after {
     animation: aurora-drift 46s var(--ease) infinite reverse;
     will-change: transform;
 }
@@ -113,9 +119,11 @@ body::after {
 /* the app bar settles in once per page */
 .site-header { animation: fade-in var(--speed-slow) var(--ease) both; }
 
-/* content: a gentle rise.  `.js-anim` is added by motion.js, so no-JS pages
-   render immediately instead of waiting for an animation that never starts. */
-.js-anim main { animation: fade-up .5s var(--ease) both; }
+/* Content entrance: a quick, quiet fade everywhere (it is the only entrance
+   animation a working screen gets), and the gentle rise on the landing page.
+   `.js-anim` is added by motion.js, so no-JS pages render immediately. */
+.js-anim main { animation: fade-in .18s var(--ease) both; }
+html.js-anim body.is-home main { animation: fade-up .5s var(--ease) both; }
 
 /* --------------------------------------------------------------------------
    Reveal-on-scroll (motion.js adds .is-revealed)
@@ -142,12 +150,16 @@ body::after {
 .btn:hover:not(:disabled) { transform: translateY(-1.5px); }
 .btn:active:not(:disabled) { transform: translateY(0) scale(.985); }
 
-/* primary: panning gradient + a light sweep that only exists on hover */
+/* primary: on the landing page the gradient pans and a light sweep crosses on
+   hover; inside the app it is a solid brand button that only reacts to the
+   pointer. */
 .btn-primary {
     position: relative;
     overflow: hidden;
-    background-size: 180% 180%;
     background-image: var(--gradient-brand);
+}
+body.is-home .btn-primary {
+    background-size: 180% 180%;
     animation: gradient-pan 9s ease-in-out infinite alternate;
 }
 .btn-primary::after {
@@ -159,18 +171,24 @@ body::after {
 }
 .btn-primary:hover:not(:disabled)::after { animation: shine-sweep .85s var(--ease); }
 
-/* lift on the interactive cards */
-.card, .feature, .stat-card, .classroom-card, .profile-section {
+/* Only surfaces that actually *do* something on click lift under the pointer.
+   A static summary card that jumps when the mouse crosses it reads as a bug. */
+.card-lift, .feature, .classroom-card, .profile-section {
     transition: transform .28s var(--ease-spring), box-shadow .28s var(--ease),
                 border-color .28s var(--ease);
 }
-.card:hover, .feature:hover, .stat-card:hover, .classroom-card:hover {
-    transform: translateY(-4px);
+.card-lift:hover, .feature:hover, .classroom-card:hover {
+    transform: translateY(-2px);
     box-shadow: var(--shadow);
+    border-color: color-mix(in srgb, var(--primary) 22%, var(--border));
+}
+body.is-home .card-lift:hover, body.is-home .feature:hover,
+body.is-home .classroom-card:hover {
+    transform: translateY(-4px);
     border-color: color-mix(in srgb, var(--primary) 28%, var(--border));
 }
 
-.stat-value {
+body.is-home .stat-value {
     background-size: 220% 220%;
     animation: gradient-pan 12s ease-in-out infinite alternate;
 }
@@ -183,12 +201,16 @@ body::after {
     transition: background var(--speed) var(--ease), color var(--speed) var(--ease),
                 transform .2s var(--ease-spring), border-color var(--speed) var(--ease);
 }
-.main-nav a:hover, .main-nav .link-button:hover, .main-nav button.nav-link:hover { transform: translateY(-1px); }
 .brand-mark { transition: transform .45s var(--ease-spring), box-shadow var(--speed) var(--ease); }
-.brand:hover .brand-mark { transform: rotate(-8deg) scale(1.06); }
-
 .icon-btn { transition: transform .22s var(--ease-spring), color var(--speed) var(--ease), border-color var(--speed) var(--ease); }
-.icon-btn:hover { transform: translateY(-1px) rotate(-6deg); }
+
+/* the playful little turns belong to the landing page; in the app the header
+   stays perfectly still under the pointer */
+body.is-home .main-nav a:hover,
+body.is-home .main-nav .link-button:hover,
+body.is-home .main-nav button.nav-link:hover { transform: translateY(-1px); }
+body.is-home .brand:hover .brand-mark { transform: rotate(-8deg) scale(1.06); }
+body.is-home .icon-btn:hover { transform: translateY(-1px) rotate(-6deg); }
 
 .badge { animation: pop-in .34s var(--ease-spring) both; }
 .alert { animation: slide-in-side .4s var(--ease) both; }

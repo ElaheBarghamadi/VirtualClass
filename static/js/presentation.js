@@ -13,6 +13,8 @@
  * Coordinates are stored normalised to page units so every viewer's
  * annotations land in the same place regardless of their screen size.
  */
+import { toast } from './toast.js';
+
 class PresentationImpl {
     constructor() {
         this.ws = null;
@@ -495,7 +497,7 @@ class PresentationImpl {
         const msg = this.fileId && !this.annotationOpen && !this.canAnnotate
             ? 'نوشتن روی این ارائه توسط ارائه‌دهنده قفل شده است.'
             : 'شما اجازهٔ نوشتن روی ارائه را ندارید.';
-        import('./toast.js').then(({ toast }) => toast(msg, 'warning'));
+        toast(msg, 'warning');
         this._warned = true;
         setTimeout(() => { this._warned = false; }, 4000);
         return false;
