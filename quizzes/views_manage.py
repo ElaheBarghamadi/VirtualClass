@@ -23,9 +23,9 @@ def quiz_list_view(request, room_code: str):
     if request.method == "POST":
         title = (request.POST.get("title") or "").strip()
         if not title:
-            messages.error(request, "عنوان آزمون نمی‌تواند خالی باشد.")
+            messages.error(request, "عنوان سوال نمی‌تواند خالی باشد.")
         elif len(title) > 200:
-            messages.error(request, "عنوان آزمون خیلی طولانی است.")
+            messages.error(request, "عنوان سوال خیلی طولانی است.")
         else:
             quiz = Quiz.objects.create(
                 classroom=classroom, title=title, created_by=request.user,
@@ -51,7 +51,7 @@ def quiz_detail_view(request, room_code: str, quiz_id: int):
             messages.success(request, "پرسش حذف شد.")
         elif "delete_quiz" in request.POST:
             quiz.delete()
-            messages.success(request, "آزمون حذف شد.")
+            messages.success(request, "سوال حذف شد.")
             return redirect("quizzes_manage:list", room_code=room_code)
         return redirect("quizzes_manage:detail",
                         room_code=room_code, quiz_id=quiz.id)
@@ -66,12 +66,16 @@ def quiz_detail_view(request, room_code: str, quiz_id: int):
     })
 
 
+MAX_OPTIONS = 10
+
+
 def _add_question(request, quiz: Quiz) -> None:
     text = (request.POST.get("text") or "").strip()
     options = [
-        (request.POST.get(f"option_{i}") or "").strip() for i in range(1, 5)
+        (request.POST.get(f"option_{i}") or "").strip()
+        for i in range(1, MAX_OPTIONS + 1)
     ]
-    correct = request.POST.get("correct")  # "1".."4"
+    correct = request.POST.get("correct")  # "1".."10"
     try:
         points = max(1, min(100, int(request.POST.get("points") or 1)))
     except ValueError:
@@ -83,7 +87,7 @@ def _add_question(request, quiz: Quiz) -> None:
     if len(filled) < 2:
         messages.error(request, "دست‌کم دو گزینه وارد کنید.")
         return
-    if correct not in {"1", "2", "3", "4"} or not options[int(correct) - 1]:
+    if correct not in {str(i) for i in range(1, MAX_OPTIONS + 1)} or not options[int(correct) - 1]:
         messages.error(request, "گزینهٔ صحیح را مشخص کنید.")
         return
     question = QuizQuestion.objects.create(

@@ -21,8 +21,8 @@ class Quiz(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="تاریخ ساخت")
 
     class Meta:
-        verbose_name = "آزمون"
-        verbose_name_plural = "آزمون‌ها"
+        verbose_name = "سوال"
+        verbose_name_plural = "سوالات"
         ordering = ("-created_at", "-id")
 
     def __str__(self) -> str:  # pragma: no cover - debug helper
@@ -39,10 +39,16 @@ class Quiz(models.Model):
 
 class QuizQuestion(models.Model):
     quiz = models.ForeignKey(Quiz, on_delete=models.CASCADE,
-                             related_name="questions", verbose_name="آزمون")
+                             related_name="questions", verbose_name="سوال")
     text = models.TextField(verbose_name="متن پرسش")
     order = models.PositiveIntegerField(default=1, verbose_name="ترتیب")
     points = models.PositiveIntegerField(default=1, verbose_name="بارم")
+    # Who asked this question live in the room (null for questions written in
+    # the management page or for rows created before live authoring existed).
+    created_by = models.ForeignKey(
+        "classrooms.ClassroomMember", on_delete=models.SET_NULL, null=True,
+        blank=True, related_name="asked_questions", verbose_name="طرح‌کننده",
+    )
 
     class Meta:
         verbose_name = "پرسش"
@@ -70,7 +76,7 @@ class QuizRun(models.Model):
     """One live launch of a quiz inside the classroom."""
 
     quiz = models.ForeignKey(Quiz, on_delete=models.CASCADE,
-                             related_name="runs", verbose_name="آزمون")
+                             related_name="runs", verbose_name="سوال")
     started_by = models.ForeignKey(
         "classrooms.ClassroomMember", on_delete=models.SET_NULL, null=True,
         related_name="started_quiz_runs", verbose_name="شروع‌کننده",
@@ -79,8 +85,8 @@ class QuizRun(models.Model):
     ended_at = models.DateTimeField(null=True, blank=True, verbose_name="پایان")
 
     class Meta:
-        verbose_name = "اجرای آزمون"
-        verbose_name_plural = "اجراهای آزمون"
+        verbose_name = "اجرای سوال"
+        verbose_name_plural = "اجراهای سوال"
         ordering = ("-started_at", "-id")
 
     @property

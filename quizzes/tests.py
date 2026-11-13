@@ -7,10 +7,19 @@ from django.urls import reverse
 
 from classrooms.models import ClassroomMember
 from classrooms.permissions import Role
-from classrooms.services import create_classroom
+from classrooms.services import create_classroom, join_classroom
 
 from .models import Quiz, QuizAnswer, QuizOption, QuizQuestion, QuizRun
-from .services import active_run, results_payload, run_payload
+from .services import (
+    WHO_LIST_MAX_CLASS,
+    QuizError,
+    active_run,
+    ask_question,
+    class_participant_count,
+    question_stats,
+    results_payload,
+    run_payload,
+)
 
 User = get_user_model()
 
@@ -189,5 +198,249 @@ class QuizAuthoringTests(TestCase):
             {"add_question": "1", "text": "سوال", "points": "1",
              "option_1": "الف", "option_2": "", "option_3": "", "option_4": "",
              "correct": "1"},
+        )
+        self.assertEqual(quiz.questions.count(), 0)
+
+
+class LiveQuestionTests(TestCase):
+    """«طرح سوال» — instant authoring from inside the room."""
+
+    def setUp(self):
+        self.owner = make_user("lq_owner")
+        self.moderator = make_user("lq_mod")
+        self.presenter = make_user("lq_pres")
+        self.student = make_user("lq_stu")
+        self.classroom = create_classroom(self.owner, title="Live")
+        ClassroomMember.objects.create(
+            classroom=self.classroom, user=self.moderator, role=Role.MODERATOR,
+        )
+        ClassroomMember.objects.create(
+            classroom=self.classroom, user=self.presenter, role=Role.PRESENTER,
+        )
+        self.student_member = ClassroomMember.objects.create(
+            classroom=self.classroom, user=self.student, role=Role.STUDENT,
+        )
+
+    def _ask(self, user, **body):
+        self.client.force_login(user)
+        return self.client.post(
+            reverse("quizzes:ask", args=[self.classroom.room_code]),
+            data=json.dumps(body), content_type="application/json",
+        )
+
+    def test_authority_asks_and_run_starts_immediately(self):
+        resp = self._ask(self.owner, text="پایتخت ایران؟", options=["تهران", "شیراز"])
+        self.assertEqual(resp.status_code, 200)
+        run = QuizRun.objects.get(id=resp.json()["run_id"])
+        self.assertTrue(run.is_active)
+        question = run.quiz.questions.get()
+        self.assertEqual(question.options.count(), 2)
+        self.assertEqual(question.created_by, self.classroom.members.get(user=self.owner))
+        # students are told who asked, and the payload still hides correctness
+        payload = run_payload(run)
+        self.assertNotIn("is_correct", json.dumps(payload))
+        self.assertTrue(payload["asked_by"])
+
+    def test_moderator_and_presenter_may_ask(self):
+        for user in (self.moderator, self.presenter):
+            resp = self._ask(user, text="سوال", options=["الف", "ب"])
+            self.assertEqual(resp.status_code, 200, user.username)
+
+    def test_student_cannot_ask(self):
+        resp = self._ask(self.student, text="سوال", options=["الف", "ب"])
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(Quiz.objects.exists())
+
+    def test_option_bounds(self):
+        one = self._ask(self.owner, text="سوال", options=["تنها"])
+        self.assertEqual(one.status_code, 400)
+        self.assertIn("دو گزینه", one.json()["detail"])
+
+        ten = self._ask(self.owner, text="سوال", options=[f"گزینهٔ {i}" for i in range(1, 11)])
+        self.assertEqual(ten.status_code, 200)
+        self.assertEqual(
+            QuizRun.objects.get(id=ten.json()["run_id"]).quiz.questions.get().options.count(), 10,
+        )
+
+        eleven = self._ask(self.owner, text="سوال", options=[f"گزینهٔ {i}" for i in range(1, 12)])
+        self.assertEqual(eleven.status_code, 400)
+        self.assertIn("۱۰", eleven.json()["detail"])
+
+    def test_blank_options_are_ignored_before_numbering(self):
+        # The client normalises first (see quiz.js `_ask`), so `correct` counts
+        # positions in the *cleaned* list: 1 → «ب» here.
+        resp = self._ask(
+            self.owner, text="سوال", options=["الف", "   ", "ب", ""], correct=1,
+        )
+        self.assertEqual(resp.status_code, 200)
+        question = QuizRun.objects.get(id=resp.json()["run_id"]).quiz.questions.get()
+        self.assertEqual([o.text for o in question.options.all()], ["الف", "ب"])
+        self.assertTrue(question.options.get(text="ب").is_correct)
+        self.assertFalse(question.options.get(text="الف").is_correct)
+
+    def test_correct_index_out_of_range_is_rejected(self):
+        with self.assertRaises(QuizError):
+            ask_question(self.classroom, self.classroom.members.get(user=self.owner),
+                         text="سوال", options=["الف", "ب"], correct_index=5)
+
+    def test_empty_text_rejected(self):
+        resp = self._ask(self.owner, text="   ", options=["الف", "ب"])
+        self.assertEqual(resp.status_code, 400)
+
+
+class QuestionStatsTests(TestCase):
+    """Percentages, counts and the «زیر ۵۰ نفر» attribution rule."""
+
+    def setUp(self):
+        self.owner = make_user("st_owner")
+        self.classroom = create_classroom(self.owner, title="Stats")
+        self.owner_member = self.classroom.members.get(user=self.owner)
+        self.participants = []
+        for index in range(3):
+            user = make_user(f"st_stu{index}")
+            ClassroomMember.objects.create(
+                classroom=self.classroom, user=user, role=Role.STUDENT,
+            )
+            self.participants.append(self.classroom.members.get(user=user))
+        self.run = ask_question(
+            self.classroom, self.owner_member,
+            text="۲+۲؟", options=["۳", "۴", "۵"], correct_index=1,
+        )
+        self.question = self.run.quiz.questions.get()
+        self.options = list(self.question.options.all())
+        for member, option in zip(self.participants, self.options):
+            QuizAnswer.objects.create(
+                run=self.run, question=self.question, member=member, option=option,
+            )
+
+    def test_percentages_and_counts(self):
+        stats = question_stats(self.run)
+        row = stats[0]
+        self.assertEqual(row["total"], 3)
+        counts = {o["text"]: o["count"] for o in row["options"]}
+        self.assertEqual(counts, {"۳": 1, "۴": 1, "۵": 1})
+        self.assertEqual([o["percent"] for o in row["options"]], [33, 33, 33])
+        self.assertNotIn("is_correct", row["options"][0])
+        self.assertNotIn("who", row["options"][0])
+
+    def test_percent_rounds_and_sums_close_to_hundred(self):
+        extra = ClassroomMember.objects.create(
+            classroom=self.classroom, user=make_user("st_extra"), role=Role.STUDENT,
+        )
+        QuizAnswer.objects.create(
+            run=self.run, question=self.question, member=extra, option=self.options[1],
+        )
+        row = question_stats(self.run)[0]
+        self.assertEqual(row["total"], 4)
+        self.assertEqual([o["count"] for o in row["options"]], [1, 2, 1])
+        self.assertEqual([o["percent"] for o in row["options"]], [25, 50, 25])
+
+    def test_small_class_gets_names(self):
+        row = question_stats(self.run, include_names=True)[0]
+        who = {o["text"]: o["who"] for o in row["options"]}
+        self.assertEqual(who["۳"], [self.participants[0].participant_name])
+        self.assertLess(class_participant_count(self.classroom), WHO_LIST_MAX_CLASS)
+
+    def test_correctness_only_on_reveal(self):
+        live = question_stats(self.run)
+        self.assertFalse(any("is_correct" in o for o in live[0]["options"]))
+        final = question_stats(self.run, reveal_correct=True)
+        correct = [o for o in final[0]["options"] if o.get("is_correct")]
+        self.assertEqual([o["text"] for o in correct], ["۴"])
+
+    def test_large_class_hides_names(self):
+        """At 50+ participants the broadcast stops naming names."""
+        missing = 50 - class_participant_count(self.classroom)
+        for index in range(missing):
+            ClassroomMember.objects.create(
+                classroom=self.classroom, user=make_user(f"st_bulk{index}"),
+                role=Role.STUDENT,
+            )
+        self.assertEqual(class_participant_count(self.classroom), 50)
+        row = question_stats(self.run, include_names=False)[0]
+        self.assertFalse(any("who" in o for o in row["options"]))
+        # percentages are unaffected by the privacy cut-off
+        self.assertEqual(row["total"], 3)
+
+
+class StatsBroadcastTests(TestCase):
+    """The name-by-name detail is only ever pushed to authorities."""
+
+    def setUp(self):
+        self.owner = make_user("sb_owner")
+        self.classroom = create_classroom(self.owner, title="Broadcast")
+        self.owner_member = self.classroom.members.get(user=self.owner)
+
+    def test_detail_goes_to_hosts_only(self):
+        from unittest import mock
+
+        from . import services
+
+        run = ask_question(
+            self.classroom, self.owner_member, text="س؟", options=["الف", "ب"],
+        )
+        question = run.quiz.questions.get()
+        answerer = ClassroomMember.objects.create(
+            classroom=self.classroom, user=make_user("sb_stu"), role=Role.STUDENT,
+        )
+        QuizAnswer.objects.create(
+            run=run, question=question, member=answerer,
+            option=question.options.first(),
+        )
+        with mock.patch.object(services, "broadcast") as sent, \
+                mock.patch.object(services, "notify_member") as notified:
+            services._broadcast_stats(self.classroom, run)
+        self.assertEqual(sent.call_count, 1)
+        event = sent.call_args.args[1]
+        self.assertEqual(event["type"], "quiz_stats")
+        self.assertNotIn("who", json.dumps(event["stats"]))
+
+        self.assertEqual(notified.call_count, 1)  # exactly the owner
+        detail = notified.call_args.args[2]
+        self.assertEqual(detail["type"], "quiz_stats_detail")
+        self.assertTrue(detail["show_who"])
+        self.assertIn("who", json.dumps(detail["stats"]))
+
+    def test_ended_event_is_the_only_one_revealing_correctness(self):
+        from unittest import mock
+
+        from . import services
+
+        run = ask_question(
+            self.classroom, self.owner_member, text="س؟", options=["الف", "ب"],
+            correct_index=0,
+        )
+        with mock.patch.object(services, "broadcast") as sent, \
+                mock.patch.object(services, "notify_member"):
+            services._broadcast_stats(self.classroom, run)
+        self.assertNotIn("is_correct", json.dumps(sent.call_args.args[1]["stats"]))
+
+        with mock.patch.object(services, "broadcast") as sent, \
+                mock.patch.object(services, "notify_member"):
+            services._broadcast_stats(self.classroom, run, ended=True)
+        self.assertIn("is_correct", json.dumps(sent.call_args.args[1]["stats"]))
+
+    def test_form_accepts_up_to_ten_options(self):
+        quiz = Quiz.objects.create(classroom=self.classroom, title="q10")
+        self.client.force_login(self.owner)
+        data = {"add_question": "1", "text": "سوال ده‌گزینه‌ای", "points": "1", "correct": "10"}
+        data.update({f"option_{i}": f"گزینهٔ {i}" for i in range(1, 11)})
+        resp = self.client.post(
+            reverse("quizzes_manage:detail", args=[self.classroom.room_code, quiz.id]),
+            data,
+        )
+        self.assertEqual(resp.status_code, 302)
+        question = quiz.questions.get()
+        self.assertEqual(question.options.count(), 10)
+        self.assertTrue(question.options.get(order=10).is_correct)
+
+    def test_form_still_rejects_four_plus_empty_tail(self):
+        quiz = Quiz.objects.create(classroom=self.classroom, title="q4")
+        self.client.force_login(self.owner)
+        self.client.post(
+            reverse("quizzes_manage:detail", args=[self.classroom.room_code, quiz.id]),
+            {"add_question": "1", "text": "سوال", "points": "1",
+             "option_1": "الف", "option_2": "ب", "option_3": "", "option_4": "",
+             "correct": "3"},
         )
         self.assertEqual(quiz.questions.count(), 0)

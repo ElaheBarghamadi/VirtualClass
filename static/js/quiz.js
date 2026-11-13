@@ -1,28 +1,41 @@
 /**
- * quiz.js — live quiz client.
+ * quiz.js — the live «سوالات» client.
  *
- * Hosts start/end quizzes from the side panel; every participant answers
- * in a simple one-question-at-a-time modal.  The server is authoritative:
- * correct answers never reach the client until the run ends.
+ * Hosts (owner / moderator / presenter) compose a question right inside the
+ * room: a text plus any number of options between two and ten.  Everybody
+ * answers in a one-question-at-a-time modal; the server is authoritative and
+ * never sends the correct option before the question ends.
+ *
+ * Results: counts and percentages for every option, live while people answer.
+ * In a class below 50 people the host team also receives the names behind each
+ * option (the server decides that; a student is never sent those names).
  */
 import { toast } from './toast.js';
 
 const el = (id) => document.getElementById(id);
+const fa = (value) => Number(value || 0).toLocaleString('fa-IR');
+const MIN_OPTIONS = 2;
+const MAX_OPTIONS = 10;
 
 export const QuizClient = {
     api: null,
     identity: '',
-    privileged: false,
+    privileged: false,   // owner/moderator — the moderation side of the room
+    authority: false,    // owner/moderator/presenter — may ask & end questions
     runId: null,
-    quiz: null,        // {run_id, quiz_id, title, questions:[...]}
+    quiz: null,        // {run_id, quiz_id, title, questions:[...], show_who}
     answers: {},       // question_id -> option_id (local mirror for UI state)
     qIndex: 0,
     ended: false,
+    stats: null,       // latest quiz_stats payload
+    detail: null,      // quiz_stats_detail (names + correctness) for hosts
+    _optionRows: 0,
 
-    init({ api, identity, privileged }) {
+    init({ api, identity, privileged, authority = false }) {
         this.api = api;
         this.identity = identity;
         this.privileged = privileged;
+        this.authority = Boolean(authority);
         el('quiz-x')?.addEventListener('click', () => el('quiz-dialog').close());
         el('quiz-prev')?.addEventListener('click', () => this._go(-1));
         el('quiz-next')?.addEventListener('click', () => this._go(1));
@@ -39,6 +52,143 @@ export const QuizClient = {
             if (this.runId == null) return;
             this.api('/quizzes/end/', { run_id: this.runId }).catch(() => {});
         });
+        this._initCompose();
+    },
+
+    // ------------------------------------------------------------ composer
+    _initCompose() {
+        const box = el('quiz-option-inputs');
+        if (!box) return;
+        el('quiz-add-option')?.addEventListener('click', () => this._addOptionRow());
+        el('quiz-ask')?.addEventListener('click', () => this._ask());
+        el('quiz-new-text')?.addEventListener('keydown', (e) => {
+            // Enter inside the question text asks straight away; the option
+            // fields stay single-line so Enter there just moves on.
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                this._ask();
+            }
+        });
+        // Two rows are the minimum a question can have; start there.
+        this._addOptionRow();
+        this._addOptionRow();
+        el('quiz-compose')?.classList.remove('hidden');
+        this._syncCompose();
+    },
+
+    _addOptionRow(focus = false) {
+        const box = el('quiz-option-inputs');
+        if (!box) return null;
+        if (box.children.length >= MAX_OPTIONS) {
+            toast(`حداکثر ${fa(MAX_OPTIONS)} گزینه مجاز است.`, 'warning');
+            return null;
+        }
+        this._optionRows += 1;
+        const row = document.createElement('div');
+        row.className = 'quiz-option-input';
+
+        const correct = document.createElement('input');
+        correct.type = 'radio';
+        correct.name = 'quiz-correct';
+        correct.value = '';
+        correct.className = 'quiz-correct-radio';
+        correct.title = 'این گزینه صحیح است';
+        correct.setAttribute('aria-label', 'این گزینه صحیح است');
+
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'quiz-option-text';
+        input.maxLength = 300;
+        input.placeholder = `گزینهٔ ${fa(box.children.length + 1)}`;
+        input.setAttribute('aria-label', `متن گزینهٔ ${fa(box.children.length + 1)}`);
+
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'quiz-option-remove';
+        remove.title = 'حذف گزینه';
+        remove.setAttribute('aria-label', 'حذف گزینه');
+        remove.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>';
+        remove.addEventListener('click', () => {
+            if (box.children.length <= MIN_OPTIONS) {
+                toast('حداقل دو گزینه لازم است.', 'warning');
+                return;
+            }
+            row.remove();
+            this._syncCompose();
+        });
+
+        row.append(correct, input, remove);
+        box.appendChild(row);
+        this._syncCompose();
+        if (focus) input.focus();
+        return row;
+    },
+
+    _optionInputs() {
+        return Array.from(document.querySelectorAll('#quiz-option-inputs .quiz-option-input'));
+    },
+
+    _syncCompose() {
+        const rows = this._optionInputs();
+        rows.forEach((row, index) => {
+            row.querySelector('.quiz-option-text').placeholder = `گزینهٔ ${fa(index + 1)}`;
+        });
+        const count = el('quiz-option-count');
+        if (count) count.textContent = `${fa(rows.length)} گزینه`;
+        const add = el('quiz-add-option');
+        if (add) add.disabled = rows.length >= MAX_OPTIONS;
+    },
+
+    _resetCompose() {
+        const box = el('quiz-option-inputs');
+        const text = el('quiz-new-text');
+        if (text) text.value = '';
+        if (!box) return;
+        box.innerHTML = '';
+        this._addOptionRow();
+        this._addOptionRow();
+        this._syncCompose();
+    },
+
+    async _ask() {
+        const text = (el('quiz-new-text')?.value || '').trim();
+        const rows = this._optionInputs();
+        const options = rows.map((row) => (row.querySelector('.quiz-option-text')?.value || '').trim());
+        const filled = options.filter(Boolean);
+        if (!text) {
+            toast('متن سوال را بنویسید.', 'warning');
+            el('quiz-new-text')?.focus();
+            return;
+        }
+        if (filled.length < MIN_OPTIONS) {
+            toast('دست‌کم دو گزینه لازم است.', 'warning');
+            return;
+        }
+        let correct = null;
+        rows.forEach((row, index) => {
+            if (row.querySelector('.quiz-correct-radio')?.checked) correct = index;
+        });
+        // Blank rows are dropped *before* numbering: a tick on option 3 must
+        // still point at option 3 after the gaps are removed.
+        const picked = options
+            .map((optionText, index) => ({ text: optionText, correct: correct === index }))
+            .filter((entry) => entry.text);
+        const correctIndex = picked.findIndex((entry) => entry.correct);
+
+        const btn = el('quiz-ask');
+        if (btn) btn.disabled = true;
+        try {
+            await this.api('/quizzes/ask/', {
+                text,
+                options: picked.map((entry) => entry.text),
+                correct: correctIndex >= 0 ? correctIndex : null,
+            });
+            this._resetCompose();
+        } catch (err) {
+            // api() already surfaced the server message; keep the draft intact.
+        } finally {
+            if (btn) btn.disabled = false;
+        }
     },
 
     // ------------------------------------------------------------ WS events
@@ -54,14 +204,26 @@ export const QuizClient = {
         this.answers = {};
         this.qIndex = 0;
         this.ended = false;
+        this.stats = null;
+        this.detail = null;
         el('quiz-results')?.classList.add('hidden');
+        el('quiz-results').innerHTML = '';
+        el('quiz-question-body')?.classList.remove('hidden');
+        const liveBox = el('quiz-live-stats');
+        if (liveBox) {
+            if (Array.isArray(payload.stats) && payload.stats.length) {
+                this._renderStats(liveBox, payload.stats, { showWho: false });
+            } else {
+                liveBox.innerHTML = '';
+            }
+        }
         this._setActiveUI(true);
         el('quiz-live-pill')?.classList.remove('hidden');
-        if (this.privileged) {
-            toast(`آزمون «${payload.title}» شروع شد.`, 'info');
+        if (this.authority) {
+            toast(`سوال «${payload.title}» مطرح شد.`, 'info');
             el('quiz-progress').textContent = 'در انتظار پاسخ شرکت‌کنندگان…';
         } else {
-            toast(`آزمون «${payload.title}» شروع شد — پاسخ دهید.`, 'info');
+            toast(`سوال «${payload.title}» — پاسخ دهید.`, 'info');
             this._openModal();
             this._renderQuestion();
         }
@@ -69,9 +231,31 @@ export const QuizClient = {
 
     handleProgress(payload) {
         if (payload.run_id !== this.runId) return;
-        const line = `${payload.answered_count} از ${payload.total_members} نفر پاسخ داده‌اند`;
+        const line = `${fa(payload.answered_count)} از ${fa(payload.total_members)} نفر پاسخ داده‌اند`;
         const p = el('quiz-progress');
         if (p) p.textContent = line;
+    },
+
+    /** Live percentages for everybody. */
+    handleStats(payload) {
+        if (payload.run_id !== this.runId) return;
+        this.stats = payload;
+        const box = el('quiz-live-stats');
+        if (box) this._renderStats(box, payload.stats || [], { showWho: false });
+    },
+
+    /** Host-only: same numbers plus the names behind each option. */
+    handleStatsDetail(payload) {
+        if (payload.run_id !== this.runId) return;
+        this.detail = payload;
+        if (this.ended) return;        // the results dialog already shows it
+        const box = el('quiz-live-stats');
+        if (box) {
+            this._renderStats(box, payload.stats || [], {
+                showWho: Boolean(payload.show_who),
+                showCorrect: false,
+            });
+        }
     },
 
     handleEnded(payload) {
@@ -79,57 +263,168 @@ export const QuizClient = {
         this.ended = true;
         this._setActiveUI(false);
         el('quiz-live-pill')?.classList.add('hidden');
+        if (payload.stats) this.stats = payload;
+
+        // The panel keeps the final numbers (percentages for everyone, names
+        // for the host team in a small class) after the question closes.
+        const panel = el('quiz-live-stats');
+        if (panel && payload.stats) {
+            this._renderStats(panel, payload.stats, {
+                showWho: Boolean(payload.show_who) && (this.privileged || this.authority),
+                showCorrect: true,
+            });
+        }
+        const titleEl = el('quiz-active-title');
+        if (titleEl && payload.title) titleEl.textContent = `نتایج: ${payload.title}`;
+        const progress = el('quiz-progress');
+        if (progress) {
+            progress.textContent = `${fa(payload.class_size || 0)} نفر در کلاس — `
+                + `${fa((payload.stats || []).reduce((sum, q) => sum + Number(q.total || 0), 0))} پاسخ ثبت شد.`;
+        }
+        el('quiz-active')?.classList.remove('hidden');
+        el('quiz-end')?.classList.add('hidden');
+
         const results = payload.results || [];
         const box = el('quiz-results');
         box.classList.remove('hidden');
         box.innerHTML = '';
+
         const title = document.createElement('h3');
         title.textContent = `نتایج «${payload.title}»`;
         box.appendChild(title);
+
+        const summary = document.createElement('p');
+        summary.className = 'quiz-result-summary muted';
+        const classSize = Number(payload.class_size || 0);
+        summary.textContent = payload.show_who
+            ? `${fa(classSize)} نفر در کلاس — پاسخ‌دهندگان هر گزینه مشخص شده‌اند.`
+            : `${fa(classSize)} نفر در کلاس — برای حفظ حریم خصوصی فقط تعداد و درصد نمایش داده می‌شود.`;
+        box.appendChild(summary);
+
+        if (payload.stats) {
+            const statsBox = document.createElement('div');
+            statsBox.className = 'quiz-results-stats';
+            this._renderStats(statsBox, payload.stats, {
+                showWho: Boolean(payload.show_who) && this.privileged,
+                showCorrect: true,
+            });
+            box.appendChild(statsBox);
+        }
+
         const rows = this.privileged
             ? results
             : results.filter((r) => r.identity === this.identity);
-        if (rows.length === 0) {
+        if (rows.length > 0) {
+            const heading = document.createElement('h4');
+            heading.className = 'quiz-results-heading';
+            heading.textContent = 'کارنامه';
+            box.appendChild(heading);
+            const list = document.createElement('ul');
+            list.className = 'quiz-result-list';
+            rows.forEach((r, i) => {
+                const li = document.createElement('li');
+                const rank = document.createElement('span');
+                rank.className = 'quiz-rank';
+                rank.textContent = `${fa(i + 1)}.`;
+                const name = document.createElement('span');
+                name.textContent = r.name;
+                const score = document.createElement('strong');
+                score.textContent = `${fa(r.score)} از ${fa(r.max)}`;
+                li.append(rank, name, score);
+                list.appendChild(li);
+            });
+            box.appendChild(list);
+        } else if (this.privileged) {
             const p = document.createElement('p');
             p.className = 'muted';
-            p.textContent = this.privileged ? 'پاسخی ثبت نشد.' : 'شما پاسخی ثبت نکردید.';
+            p.textContent = 'پاسخی ثبت نشد.';
             box.appendChild(p);
         }
-        const list = document.createElement('ul');
-        list.className = 'quiz-result-list';
-        rows.forEach((r, i) => {
-            const li = document.createElement('li');
-            const rank = document.createElement('span');
-            rank.className = 'quiz-rank';
-            rank.textContent = `${i + 1}.`;
-            const name = document.createElement('span');
-            name.textContent = r.name;
-            const score = document.createElement('strong');
-            score.textContent = `${r.score} از ${r.max}`;
-            li.append(rank, name, score);
-            list.appendChild(li);
-        });
-        box.appendChild(list);
-        // ensure the dialog is visible so nobody misses their result
+
+        // Show the results in the dialog — it is the surface nobody can miss,
+        // and on a phone the side panel is behind the stage.
+        el('quiz-question-body')?.classList.add('hidden');
+        el('quiz-dialog-title').textContent = 'نتایج سوال';
         this._openModal();
-        el('quiz-question-text').textContent = 'آزمون به پایان رسید.';
-        el('quiz-options').innerHTML = '';
-        el('quiz-q-index').textContent = '';
-        el('quiz-q-points').textContent = '';
-        el('quiz-hint').textContent = '';
-        el('quiz-progress-fill').style.width = '100%';
     },
 
     // ------------------------------------------------------------ UI pieces
+    /** Per-option bars: text, count, percentage and (hosts) the names. */
+    _renderStats(container, stats, { showWho = false, showCorrect = false } = {}) {
+        container.innerHTML = '';
+        stats.forEach((question) => {
+            const block = document.createElement('div');
+            block.className = 'quiz-stat';
+
+            const head = document.createElement('p');
+            head.className = 'quiz-stat-q';
+            head.textContent = question.text;
+            const total = document.createElement('span');
+            total.className = 'muted';
+            total.textContent = ` · ${fa(question.total)} پاسخ`;
+            head.appendChild(total);
+            block.appendChild(head);
+
+            const list = document.createElement('ul');
+            list.className = 'quiz-stat-options';
+            (question.options || []).forEach((option) => {
+                const row = document.createElement('li');
+                row.className = 'quiz-stat-row';
+                if (showCorrect && option.is_correct) row.classList.add('is-correct');
+
+                const line = document.createElement('div');
+                line.className = 'quiz-stat-head';
+
+                const text = document.createElement('span');
+                text.className = 'quiz-stat-text';
+                text.textContent = option.text;
+                if (showCorrect && option.is_correct) {
+                    const tick = document.createElement('span');
+                    tick.className = 'quiz-correct-tag';
+                    tick.textContent = 'صحیح';
+                    text.appendChild(tick);
+                }
+
+                const num = document.createElement('span');
+                num.className = 'quiz-stat-num';
+                num.textContent = `${fa(option.percent)}٪ · ${fa(option.count)} نفر`;
+                line.append(text, num);
+                row.appendChild(line);
+
+                const track = document.createElement('div');
+                track.className = 'quiz-stat-track';
+                const fill = document.createElement('div');
+                fill.className = 'quiz-stat-fill';
+                fill.style.width = `${Math.max(0, Math.min(100, Number(option.percent) || 0))}%`;
+                track.appendChild(fill);
+                row.appendChild(track);
+
+                if (showWho && Array.isArray(option.who) && option.who.length) {
+                    const who = document.createElement('p');
+                    who.className = 'quiz-stat-who';
+                    who.textContent = option.who.join('، ');
+                    row.appendChild(who);
+                }
+                list.appendChild(row);
+            });
+            block.appendChild(list);
+            container.appendChild(block);
+        });
+    },
+
     _setActiveUI(active) {
         el('quiz-active')?.classList.toggle('hidden', !active);
         const end = el('quiz-end');
         if (end) {
-            end.classList.toggle('hidden', !active || !this.privileged);
+            end.classList.toggle('hidden', !active || !this.authority);
         }
+        // The composer stays available while a question runs: a teacher often
+        // follows up immediately, and the server closes the previous run.
+        const compose = el('quiz-compose');
+        if (compose) compose.classList.toggle('hidden', !this.authority);
         if (active) {
             const t = el('quiz-active-title');
-            if (t && this.quiz) t.textContent = `آزمون در جریان: ${this.quiz.title}`;
+            if (t && this.quiz) t.textContent = `در جریان: ${this.quiz.title}`;
         }
     },
 
@@ -146,8 +441,8 @@ export const QuizClient = {
         const q = qs[this.qIndex];
         if (!q) return;
         el('quiz-dialog-title').textContent = this.quiz.title;
-        el('quiz-q-index').textContent = `پرسش ${this.qIndex + 1} از ${qs.length}`;
-        el('quiz-q-points').textContent = `${q.points} نمره`;
+        el('quiz-q-index').textContent = `پرسش ${fa(this.qIndex + 1)} از ${fa(qs.length)}`;
+        el('quiz-q-points').textContent = q.points ? `${fa(q.points)} نمره` : '';
         el('quiz-question-text').textContent = q.text;
         el('quiz-progress-fill').style.width =
             `${Math.round(((this.qIndex + 1) / qs.length) * 100)}%`;

@@ -67,6 +67,19 @@ h3 { font-size: 1.05rem; font-weight: 700; }
 p { margin: .4rem 0; }
 .muted { color: var(--muted); }
 .small { font-size: var(--fs-sm); }
+/* Text for screen readers only (labels that would otherwise be noise). */
+.visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
+}
 code {
     background: var(--surface-2); color: var(--text);
     padding: .12rem .45rem; border-radius: 6px;
@@ -731,6 +744,8 @@ code {
 .options-fieldset legend { font-size: .82rem; padding: 0 .3rem; color: var(--muted); }
 .option-row { display: flex; gap: .5rem; align-items: center; margin-top: .5rem; }
 .option-row input[type=text] { flex: 1; }
+.option-row[hidden] { display: none; }
+#add-option { margin-top: .6rem; }
 .grade-form { margin-top: .6rem; border-top: 1px solid var(--border); padding-top: .6rem; }
 
 /* ==========================================================================

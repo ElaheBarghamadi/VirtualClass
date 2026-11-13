@@ -38,6 +38,20 @@ class ChatMessage(models.Model):
     sender_name = models.CharField(max_length=80, default="", verbose_name="نام فرستنده")
     sender_identity = models.CharField(max_length=48, default="", verbose_name="شناسهٔ فرستنده")
     message = models.TextField(verbose_name="متن پیام")
+    # -- threads & channels ---------------------------------------------------
+    reply_to = models.ForeignKey(
+        "self", null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="replies", verbose_name="پاسخ به",
+    )
+    # A private message never leaves the hosts (and, when a student wrote it,
+    # that student).  ``audience_member`` is the one participant outside the
+    # host team who may read it: the student it belongs to.
+    is_private = models.BooleanField(default=False, db_index=True, verbose_name="خصوصی")
+    audience_member = models.ForeignKey(
+        "classrooms.ClassroomMember", null=True, blank=True,
+        on_delete=models.SET_NULL, related_name="private_chat_messages",
+        verbose_name="مخاطب",
+    )
     created_at = models.DateTimeField(auto_now_add=True, db_index=True, verbose_name="زمان ارسال")
     # Moderation: privileged users can soft-delete a message; the row is
     # kept so the audit trail (and future automated moderation) survives.
@@ -49,10 +63,23 @@ class ChatMessage(models.Model):
         ordering = ("created_at",)
         indexes = [
             models.Index(fields=("classroom", "created_at"), name="chat_class_created_idx"),
+            models.Index(
+                fields=("classroom", "is_private", "created_at"),
+                name="chat_private_idx",
+            ),
         ]
 
     def to_dict(self) -> dict:
         """JSON-safe representation sent over the WebSocket."""
+        quoted = None
+        parent = self.reply_to
+        if parent is not None:
+            quoted = {
+                "id": parent.id,
+                "sender_name": parent.sender_name or "?",
+                "message": "" if parent.is_deleted else parent.message[:160],
+                "is_deleted": parent.is_deleted,
+            }
         return {
             "id": self.id,
             "sender_identity": self.sender_identity,
@@ -60,6 +87,8 @@ class ChatMessage(models.Model):
             "message": "" if self.is_deleted else self.message,
             "is_deleted": self.is_deleted,
             "created_at": self.created_at.isoformat(),
+            "is_private": self.is_private,
+            "reply_to": quoted,
         }
 
     def __str__(self) -> str:

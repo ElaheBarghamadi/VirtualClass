@@ -2,8 +2,16 @@
  * chat.js — real-time classroom chat client.
  *
  * Flow: browser → WebSocket → Django Channels (chat consumer) → DB + broadcast.
- * The server enforces permissions and message limits; this module renders,
- * submits, tracks unread counts and applies moderator deletions.
+ * The server enforces permissions, channel visibility and message limits; this
+ * module renders, submits, tracks unread counts and applies moderator
+ * deletions.
+ *
+ * Two channels
+ *   • عمومی  — everybody in the room reads it;
+ *   • خصوصی — the host team only, and only the host team can switch to it.  A
+ *     student never receives a private row at all: the server filters both the
+ *     history and the live broadcast (this file could not reveal it even if it
+ *     tried).
  *
  * Rendering rules (they are what makes a 330px panel readable):
  *   • a bubble belongs to whoever wrote it — others on the inline-start edge,
@@ -11,6 +19,7 @@
  *   • consecutive messages from one person collapse into a group, so a long
  *     back-and-forth does not repeat the name on every line;
  *   • a day divider separates «today» from yesterday's history;
+ *   • a reply keeps one quoted line of the message it answers;
  *   • arrivals/leaves are quiet centred lines, never bubbles.
  */
 import { toast } from './toast.js';
@@ -19,6 +28,11 @@ const MAX_LENGTH = 1000;
 const COUNTER_FROM = 800;
 const BOTTOM_SLACK = 90;          // px from the end that still counts as "at the bottom"
 const GROUP_WINDOW = 5 * 60 * 1000; // same author within 5 min reads as one group
+
+const CHANNEL_HINTS = {
+    public: 'همهٔ اعضای کلاس این پیام‌ها را می‌بینند.',
+    private_host: 'فقط میزبان‌ها این پیام‌ها را می‌بینند؛ دانش‌آموزان حتی درخواست آن را دریافت نمی‌کنند.',
+};
 
 /** Stable, theme-agnostic avatar colour per participant. */
 function avatarHue(seed) {
@@ -39,6 +53,11 @@ function faNum(value) {
     return Number(value).toLocaleString('fa-IR');
 }
 
+/** Which channel a stored message belongs to. */
+function channelOf(m) {
+    return m.is_private ? 'private' : 'public';
+}
+
 class ChatClientImpl {
     constructor() {
         this.ws = null;
@@ -57,10 +76,18 @@ class ChatClientImpl {
         this.countEl = document.getElementById('chat-count');
         this.offEl = document.getElementById('chat-off');
         this.offTextEl = document.getElementById('chat-off-text');
+        this.replyEl = document.getElementById('chat-reply');
+        this.replyNameEl = document.getElementById('chat-reply-name');
+        this.replyTextEl = document.getElementById('chat-reply-text');
+        this.replyCancelEl = document.getElementById('chat-reply-x');
+        this.hintEl = document.getElementById('chat-channel-hint');
         this.retryDelay = 1000;
         this.roomCode = null;
         this.unread = 0;
         this.pendingNew = 0;
+        this.channel = 'public';     // 'public' | 'private'
+        this.messages = [];          // every message this member may read
+        this.replyTo = null;         // { id, sender_name, message } while composing
         this._lastEntry = null;      // { identity, at } of the previous bubble
         this._lastDay = '';          // «2026-11-07» of the previous entry
         this.onStatusChange = () => {};
@@ -71,6 +98,7 @@ class ChatClientImpl {
         // placeholder straight away instead of a blank white column.
         this.syncEmpty();
         this.syncComposer();
+        this.syncChannelHint();
     }
 
     /** Bring the newest message into view (used when the tab is opened). */
@@ -83,6 +111,7 @@ class ChatClientImpl {
         this.roomCode = roomCode;
         this.identity = identity;
         this.privileged = privileged;
+        this.syncChannelHint();
         // Never stack sockets: two open chat sockets would double every message.
         if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) return;
         const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -125,6 +154,15 @@ class ChatClientImpl {
             this.handle(data);
         };
 
+        this._bindUi();
+    }
+
+    _bindUi() {
+        // The private channel is a host tool: students never get the switch.
+        if (!this.privileged) {
+            document.querySelectorAll('.chat-channel[data-channel="private"]')
+                .forEach((btn) => btn.remove());
+        }
         if (!this._formBound) {
             this.formEl?.addEventListener('submit', (e) => {
                 e.preventDefault();
@@ -132,12 +170,21 @@ class ChatClientImpl {
             });
             this.inputEl?.addEventListener('input', () => this.syncComposer());
             this.formEl?.addEventListener('keydown', (e) => {
-                // Enter sends; Shift+Enter is reserved for future multi-line
-                // support and must not swallow the keystroke.
+                // Escape leaves reply mode without touching the draft.
+                if (e.key === 'Escape' && this.replyTo) {
+                    e.preventDefault();
+                    this.cancelReply();
+                    return;
+                }
+                // Enter sends; Shift+Enter stays available for multi-line input.
                 if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault();
                     this.send(this.inputEl.value);
                 }
+            });
+            this.replyCancelEl?.addEventListener('click', () => this.cancelReply());
+            document.querySelectorAll('.chat-channel').forEach((btn) => {
+                btn.addEventListener('click', () => this.setChannel(btn.dataset.channel));
             });
             this._formBound = true;
         }
@@ -153,6 +200,52 @@ class ChatClientImpl {
         }
     }
 
+    // ------------------------------------------------------------- channels
+    setChannel(channel) {
+        const next = channel === 'private' && this.privileged ? 'private' : 'public';
+        if (next === this.channel) return;
+        this.channel = next;
+        document.querySelectorAll('.chat-channel').forEach((btn) => {
+            const on = btn.dataset.channel === next;
+            btn.classList.toggle('active', on);
+            btn.setAttribute('aria-selected', String(on));
+        });
+        // A reply only makes sense inside the channel it was started in.
+        if (this.replyTo) this.cancelReply();
+        this.syncChannelHint();
+        this.renderList();
+        this.resetUnread();
+        this.pendingNew = 0;
+        this._scroll(true);
+    }
+
+    syncChannelHint() {
+        if (!this.hintEl) return;
+        const key = this.channel === 'private' ? 'private_host' : 'public';
+        this.hintEl.textContent = CHANNEL_HINTS[key];
+        this.hintEl.classList.toggle('is-private', this.channel === 'private');
+        document.getElementById('panel-chat')?.classList
+            .toggle('chat-private-view', this.channel === 'private');
+        if (this.inputEl) {
+            this.inputEl.placeholder = this.channel === 'private'
+                ? 'یادداشت خصوصی برای میزبان‌ها…'
+                : 'پیام خود را بنویسید…';
+        }
+        const locked = this.channel === 'private';
+        this.emptyEl?.classList.toggle('is-private', locked);
+        const emptyTitle = this.emptyEl?.querySelector('.chat-empty-title');
+        const emptyText = this.emptyEl?.querySelector('.chat-empty-text');
+        if (emptyTitle) {
+            emptyTitle.textContent = locked ? 'هنوز پیام خصوصی‌ای نیست' : 'هنوز پیامی نیست';
+        }
+        if (emptyText) {
+            emptyText.textContent = locked
+                ? 'یادداشت‌های خصوصی تیم میزبان اینجا دیده می‌شود.'
+                : 'اولین پیام را بفرستید تا گفتگوی کلاس شروع شود.';
+        }
+    }
+
+    // ---------------------------------------------------------------- send
     send(text) {
         const message = (text || '').trim();
         if (!message) return;
@@ -173,8 +266,12 @@ class ChatClientImpl {
             );
             return;
         }
-        this.ws.send(JSON.stringify({ action: 'send_message', message }));
+        const payload = { action: 'send_message', message };
+        if (this.channel === 'private' && this.privileged) payload.private = true;
+        if (this.replyTo) payload.reply_to = this.replyTo.id;
+        this.ws.send(JSON.stringify(payload));
         this.inputEl.value = '';
+        this.cancelReply();
         this.syncComposer();
     }
 
@@ -204,16 +301,36 @@ class ChatClientImpl {
         }
     }
 
+    // --------------------------------------------------------------- reply
+    startReply(message) {
+        if (!message || message.is_deleted) return;
+        this.replyTo = {
+            id: message.id,
+            sender_name: message.sender_identity === this.identity ? 'شما' : message.sender_name,
+            message: message.message,
+        };
+        if (this.replyNameEl) this.replyNameEl.textContent = this.replyTo.sender_name;
+        if (this.replyTextEl) this.replyTextEl.textContent = message.message.slice(0, 90);
+        this.replyEl?.classList.remove('hidden');
+        this.inputEl?.focus();
+    }
+
+    cancelReply() {
+        this.replyTo = null;
+        this.replyEl?.classList.add('hidden');
+    }
+
+    // -------------------------------------------------------------- events
     handle(data) {
         switch (data.type) {
             case 'chat_history':
-                this.resetEntries();
-                data.messages.forEach((m) => this.renderMessage(m, { silent: true }));
+                this.messages = Array.isArray(data.messages) ? data.messages.slice() : [];
+                this.renderList();
                 this.syncEmpty();
                 this._scroll(true);
                 break;
             case 'chat_message':
-                this.renderMessage(data.message);
+                this.receive(data.message);
                 break;
             case 'chat_deleted':
                 this.markDeleted(data.message_id);
@@ -230,11 +347,37 @@ class ChatClientImpl {
         }
     }
 
-    /** A fresh history replaces the list: forget the grouping state with it. */
-    resetEntries() {
+    /** One incoming message: store it, render it only in its own channel. */
+    receive(m) {
+        if (!m || m.id == null) return;
+        if (this.messages.some((x) => x.id === m.id)) return;
+        this.messages.push(m);
+        if (channelOf(m) === this.channel) {
+            this.renderMessage(m);
+            return;
+        }
+        // Other channel: no bubble, but the badge has to speak up.
+        const own = m.sender_identity === this.identity;
+        if (!own) {
+            this.unread += 1;
+            if (this.unreadEl) {
+                this.unreadEl.textContent = faNum(this.unread);
+                this.unreadEl.classList.remove('hidden');
+            }
+            document.getElementById('btn-chat')?.classList.add('has-unread');
+            this.syncChannelsBadge();
+        }
+    }
+
+    /** A fresh list replaces the panel: forget the grouping state with it. */
+    renderList() {
         if (this.messagesEl) this.messagesEl.innerHTML = '';
         this._lastEntry = null;
         this._lastDay = '';
+        this.messages
+            .filter((m) => channelOf(m) === this.channel)
+            .forEach((m) => this.renderMessage(m, { silent: true }));
+        this.syncEmpty();
     }
 
     renderMessage(m, { silent = false } = {}) {
@@ -258,6 +401,7 @@ class ChatClientImpl {
         if (own) div.classList.add('own');
         if (grouped) div.classList.add('cont');
         if (m.is_deleted) div.classList.add('deleted');
+        if (m.is_private) div.classList.add('private');
         div.dataset.messageId = String(m.id);
         div.dataset.sender = m.sender_identity || '';
 
@@ -287,17 +431,39 @@ class ChatClientImpl {
             const sender = document.createElement('span');
             sender.className = 'chat-sender';
             sender.textContent = own ? 'شما' : m.sender_name;
+            head.appendChild(sender);
+
+            if (m.is_private) {
+                const tag = document.createElement('span');
+                tag.className = 'chat-priv-tag';
+                tag.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true">'
+                    + '<rect x="4.5" y="10.5" width="15" height="9" rx="2"/>'
+                    + '<path d="M8 10.5V7.8a4 4 0 0 1 8 0v2.7"/></svg>'
+                    + '<span>خصوصی</span>';
+                head.appendChild(tag);
+            }
 
             const time = document.createElement('span');
             time.className = 'chat-time';
             time.textContent = timeText;
             time.title = at.toLocaleString('fa-IR');
+            head.appendChild(time);
 
-            head.append(sender, time);
+            if (!m.is_deleted) {
+                const reply = document.createElement('button');
+                reply.className = 'chat-action chat-reply-btn';
+                reply.type = 'button';
+                reply.title = 'پاسخ به این پیام';
+                reply.setAttribute('aria-label', `پاسخ به پیام ${m.sender_name}`);
+                reply.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true">'
+                    + '<path d="M9.6 6 4 11.6l5.6 5.6"/><path d="M4.3 11.6h9.1a6.2 6.2 0 0 1 6.2 6.2v.6"/></svg>';
+                reply.addEventListener('click', () => this.startReply(m));
+                head.appendChild(reply);
+            }
 
             if (this.privileged && !own && !m.is_deleted) {
                 const del = document.createElement('button');
-                del.className = 'chat-delete';
+                del.className = 'chat-action chat-delete';
                 del.type = 'button';
                 del.title = 'حذف پیام (مدیر)';
                 del.setAttribute('aria-label', `حذف پیام ${m.sender_name}`);
@@ -309,6 +475,8 @@ class ChatClientImpl {
             }
             bubble.appendChild(head);
         }
+
+        if (m.reply_to) bubble.appendChild(this.buildQuote(m.reply_to));
 
         const body = document.createElement('p');
         body.className = 'chat-body';
@@ -345,6 +513,23 @@ class ChatClientImpl {
             this._scroll(own || atBottom);
             if (!own) this.syncJump();
         }
+        this.syncChannelsBadge();
+    }
+
+    /** The quoted strip inside a reply bubble. */
+    buildQuote(quoted) {
+        const box = document.createElement('div');
+        box.className = 'chat-quote';
+        if (quoted.is_deleted) box.classList.add('is-deleted');
+        const name = document.createElement('span');
+        name.className = 'chat-quote-name';
+        name.textContent = quoted.sender_name || '?';
+        const text = document.createElement('span');
+        text.className = 'chat-quote-text';
+        text.textContent = quoted.is_deleted ? 'پیام حذف شده' : (quoted.message || '');
+        box.append(name, text);
+        box.title = quoted.is_deleted ? 'پیام حذف شده' : (quoted.message || '');
+        return box;
     }
 
     /** A «امروز / دیروز / ۱۵ آبان» divider between two days of history. */
@@ -368,11 +553,16 @@ class ChatClientImpl {
     }
 
     markDeleted(messageId) {
+        const id = Number(messageId);
+        const stored = this.messages.find((m) => m.id === id);
+        if (stored) stored.is_deleted = true;
         const div = this.messagesEl?.querySelector(`[data-message-id="${messageId}"]`);
-        if (!div || div.classList.contains('deleted')) return;
-        div.classList.add('deleted');
-        const body = div.querySelector('.chat-body');
-        if (body) body.textContent = '— پیام حذف شده —';
+        if (!div) return;
+        if (!div.classList.contains('deleted')) {
+            div.classList.add('deleted');
+            const body = div.querySelector('.chat-body');
+            if (body) body.textContent = '— پیام حذف شده —';
+        }
         div.querySelector('.chat-delete')?.remove();
     }
 
@@ -392,6 +582,15 @@ class ChatClientImpl {
         this.unreadEl?.classList.add('hidden');
         if (this.unreadEl) this.unreadEl.textContent = faNum(0);
         document.getElementById('btn-chat')?.classList.remove('has-unread');
+    }
+
+    /** Dot on the «خصوصی» chip when a private message is waiting there. */
+    syncChannelsBadge() {
+        const badge = document.getElementById('chat-private-badge');
+        if (!badge) return;
+        const pending = this.channel !== 'private'
+            && this.messages.some((m) => m.is_private && m.sender_identity !== this.identity);
+        badge.classList.toggle('hidden', !pending);
     }
 
     addSystemMessage(text) {
@@ -464,7 +663,9 @@ class ChatClientImpl {
         this._canSend = enabled;
         if (this.inputEl) {
             this.inputEl.disabled = !enabled;
-            this.inputEl.placeholder = enabled ? 'پیام خود را بنویسید…' : (reason || 'ارسال پیام بسته است.');
+            this.inputEl.placeholder = enabled
+                ? (this.channel === 'private' ? 'یادداشت خصوصی برای میزبان‌ها…' : 'پیام خود را بنویسید…')
+                : (reason || 'ارسال پیام بسته است.');
         }
         this.syncComposer();
         if (this.offEl) {

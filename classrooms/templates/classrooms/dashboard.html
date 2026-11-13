@@ -67,7 +67,7 @@
                 <div class="card-actions">
                     <a class="btn btn-primary btn-sm" href="{% url 'room:lobby' classroom.room_code %}">ورود به کلاس</a>
                     <a class="btn btn-ghost btn-sm" href="{% url 'classrooms:detail' classroom.room_code %}">مدیریت</a>
-                    <a class="btn btn-ghost btn-sm" href="{% url 'quizzes_manage:list' classroom.room_code %}">آزمون‌ها</a>
+                    <a class="btn btn-ghost btn-sm" href="{% url 'quizzes_manage:list' classroom.room_code %}">سوالات</a>
                     <a class="btn btn-ghost btn-sm" href="{% url 'assignments_manage:list' classroom.room_code %}">تکالیف</a>
                 </div>
             </article>

@@ -14,7 +14,7 @@ from classrooms.services import resolve_member
 from classrooms.views import _json_body, _json_error
 
 from .models import Quiz
-from .services import QuizError, answer_question, end_quiz, start_quiz
+from .services import QuizError, answer_question, ask_question, end_quiz, start_quiz
 
 
 def _member_or_none(request, classroom: Classroom):
@@ -36,7 +36,7 @@ def quiz_start_view(request, room_code: str):
         body = _json_body(request)
         quiz = Quiz.objects.filter(id=int(body.get("quiz_id") or 0)).first()
         if quiz is None:
-            return JsonResponse({"detail": "آزمون یافت نشد."}, status=404)
+            return JsonResponse({"detail": "سوال یافت نشد."}, status=404)
         run = start_quiz(classroom, member, quiz)
     except (QuizError, PermissionError) as exc:
         return _json_error(exc, status=403)
@@ -84,3 +84,30 @@ def quiz_end_view(request, room_code: str):
     except (ValueError, TypeError):
         return JsonResponse({"detail": "run_id نامعتبر است."}, status=400)
     return JsonResponse({"ok": True, "results": results})
+
+
+@require_POST
+def quiz_ask_view(request, room_code: str):
+    """Ask one question right now (owner / moderator / presenter).
+
+    Body: ``{"text": "...", "options": ["...", "..."], "correct": 0|null,
+    "points": 1}`` — 2..10 options, the server re-validates everything.
+    """
+    classroom = Classroom.objects.filter(room_code=room_code).first()
+    if classroom is None:
+        return JsonResponse({"detail": "کلاس یافت نشد."}, status=404)
+    member = _member_or_none(request, classroom)
+    if member is None:
+        return _json_error(PermissionError("دسترسی غیرمجاز."), status=403)
+    try:
+        body = _json_body(request)
+        run = ask_question(
+            classroom, member,
+            text=body.get("text") or "",
+            options=body.get("options") or [],
+            correct_index=body.get("correct"),
+            points=body.get("points", 1),
+        )
+    except QuizError as exc:
+        return _json_error(exc, status=400)
+    return JsonResponse({"ok": True, "run_id": run.id})

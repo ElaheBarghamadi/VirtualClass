@@ -1,30 +1,30 @@
 {% extends "base.html" %}
 {% load core_extras %}
-{% block title %}آزمون‌ها — {{ classroom.title }}{% endblock %}
+{% block title %}سوالات — {{ classroom.title }}{% endblock %}
 {% block content %}
 <div class="page-head">
     <div>
-        <h1>آزمون‌ها</h1>
+        <h1>سوالات</h1>
         <p class="muted">{{ classroom.title }} · کد: <code>{{ classroom.room_code }}</code></p>
     </div>
     <a class="btn btn-ghost" href="{% url 'classrooms:detail' classroom.room_code %}">بازگشت به مدیریت</a>
 </div>
 
 <div class="card form-card form-card--wide">
-    <h2 class="section-title">آزمون جدید</h2>
+    <h2 class="section-title">سوال جدید</h2>
     <form method="post" novalidate>
         {% csrf_token %}
-        <label for="quiz-title">عنوان آزمون</label>
+        <label for="quiz-title">عنوان سوال</label>
         <input id="quiz-title" type="text" name="title" maxlength="200" required
-               placeholder="مثلاً: آزمون میان‌ترم فصل ۳">
+               placeholder="مثلاً: سوالات میان‌ترم فصل ۳">
         <div class="card-actions">
-            <button type="submit" class="btn btn-primary" id="quiz-create-submit">ساخت آزمون</button>
+            <button type="submit" class="btn btn-primary" id="quiz-create-submit">ساخت سوال</button>
         </div>
     </form>
-    <p class="muted">پس از ساخت، پرسش‌های چهارگزینه‌ای را اضافه می‌کنید؛ شروع آزمون از داخل جلسهٔ کلاس است.</p>
+    <p class="muted">پس از ساخت، پرسش‌ها را با ۲ تا ۱۰ گزینه اضافه می‌کنید؛ مطرح‌کردن سوال از داخل جلسهٔ کلاس است (یا همان‌جا در تب «سوالات»).</p>
 </div>
 
-<h2 class="section-title">آزمون‌های این کلاس</h2>
+<h2 class="section-title">سوالات این کلاس</h2>
 {% if quizzes %}
     <div class="card">
         <ul class="session-list">
@@ -38,6 +38,6 @@
         </ul>
     </div>
 {% else %}
-    <div class="empty-state card"><p>هنوز آزمونی نساخته‌اید.</p></div>
+    <div class="empty-state card"><p>هنوز سوالی نساخته‌اید.</p></div>
 {% endif %}
 {% endblock %}

@@ -1168,6 +1168,12 @@ function handleEvent(data) {
         case 'quiz_answered':
             QuizClient.handleProgress(data);
             break;
+        case 'quiz_stats':
+            QuizClient.handleStats(data);
+            break;
+        case 'quiz_stats_detail':
+            QuizClient.handleStatsDetail(data);
+            break;
         case 'quiz_ended':
             QuizClient.handleEnded(data);
             break;
@@ -2976,7 +2982,9 @@ safe('presentation', () => Presentation.init({
     presentedFileId: document.getElementById('view-presentation')?.dataset.currentFile || null,
     api,
 }));
-safe('quiz', () => QuizClient.init({ api, identity: IDENTITY, privileged: PRIVILEGED }));
+safe('quiz', () => QuizClient.init({
+    api, identity: IDENTITY, privileged: PRIVILEGED, authority: CAN_CONTROL_BOARD,
+}));
 // A refresh during a live presentation must land on the slide, not on an
 // empty media grid — the server already told us what is on screen.
 safe('presentation-restore', () => {

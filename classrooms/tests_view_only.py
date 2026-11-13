@@ -229,6 +229,28 @@ class ViewOnlyRoomTests(TestCase):
         self.assertTrue(response.context["can_control_board"])
         self.assertContains(response, 'data-can-control-board="1"')
 
+    # -- the «سوالات» tab and the chat channel switch are host tools ---------
+    def test_owner_sees_the_question_composer(self):
+        response = self._room(self.owner)
+        self.assertContains(response, 'id="quiz-compose"')
+        self.assertContains(response, 'id="quiz-ask"')
+        self.assertContains(response, 'id="quiz-option-inputs"')
+
+    def test_student_gets_no_question_composer(self):
+        response = self._room(self.student_user)
+        self.assertNotContains(response, 'id="quiz-compose"')
+        self.assertNotContains(response, 'id="quiz-ask"')
+        # ... but the tab itself stays: a student still answers live questions.
+        self.assertContains(response, "سوالات")
+
+    def test_only_hosts_get_the_private_chat_switch(self):
+        owner_page = self._room(self.owner)
+        self.assertContains(owner_page, 'data-channel="private"')
+        student_page = self._room(self.student_user)
+        self.assertNotContains(student_page, 'data-channel="private"')
+        # the composer is shared by everybody
+        self.assertContains(student_page, 'id="chat-form"')
+
 
 class BoardOpenWebSocketTests(TransactionTestCase):
     """Opening the board switches the view for the whole class."""

@@ -1,6 +1,6 @@
 {% extends "base.html" %}
-{% load core_extras %}
-{% block title %}{{ quiz.title }} — آزمون{% endblock %}
+{% load core_extras static %}
+{% block title %}{{ quiz.title }} — سوال{% endblock %}
 {% block content %}
 <div class="page-head">
     <div>
@@ -46,18 +46,58 @@
                 <textarea id="q-text" name="text" rows="2" required></textarea>
                 <label for="q-points">بارم (۱ تا ۱۰۰)</label>
                 <input id="q-points" type="number" name="points" min="1" max="100" value="1">
-                <fieldset class="options-fieldset">
-                    <legend>گزینه‌ها (حداقل دو گزینه؛ گزینهٔ صحیح را علامت بزنید)</legend>
-                    {% for i in "1234" %}
+                <fieldset class="options-fieldset" id="options-fieldset"
+                          data-min="2" data-max="10">
+                    <legend>گزینه‌ها (۲ تا ۱۰ گزینه؛ گزینهٔ صحیح را علامت بزنید)</legend>
+                    {% for i in "12" %}
                         <div class="option-row">
                             <input type="radio" name="correct" value="{{ i }}" id="correct-{{ i }}"
-                                   {% if forloop.first %}required{% endif %}
                                    aria-label="گزینهٔ {{ forloop.counter }} صحیح است">
                             <input type="text" name="option_{{ i }}" maxlength="300"
-                                   placeholder="گزینهٔ {{ forloop.counter }}"
-                                   {% if forloop.first or forloop.counter == 2 %}required{% endif %}>
+                                   placeholder="گزینهٔ {{ forloop.counter }}" required>
                         </div>
                     {% endfor %}
+                    <div class="option-row option-row--extra" hidden>
+                        <input type="radio" name="correct" value="3" id="correct-3"
+                               aria-label="گزینهٔ ۳ صحیح است">
+                        <input type="text" name="option_3" maxlength="300" placeholder="گزینهٔ ۳">
+                    </div>
+                    <div class="option-row option-row--extra" hidden>
+                        <input type="radio" name="correct" value="4" id="correct-4"
+                               aria-label="گزینهٔ ۴ صحیح است">
+                        <input type="text" name="option_4" maxlength="300" placeholder="گزینهٔ ۴">
+                    </div>
+                    <div class="option-row option-row--extra" hidden>
+                        <input type="radio" name="correct" value="5" id="correct-5"
+                               aria-label="گزینهٔ ۵ صحیح است">
+                        <input type="text" name="option_5" maxlength="300" placeholder="گزینهٔ ۵">
+                    </div>
+                    <div class="option-row option-row--extra" hidden>
+                        <input type="radio" name="correct" value="6" id="correct-6"
+                               aria-label="گزینهٔ ۶ صحیح است">
+                        <input type="text" name="option_6" maxlength="300" placeholder="گزینهٔ ۶">
+                    </div>
+                    <div class="option-row option-row--extra" hidden>
+                        <input type="radio" name="correct" value="7" id="correct-7"
+                               aria-label="گزینهٔ ۷ صحیح است">
+                        <input type="text" name="option_7" maxlength="300" placeholder="گزینهٔ ۷">
+                    </div>
+                    <div class="option-row option-row--extra" hidden>
+                        <input type="radio" name="correct" value="8" id="correct-8"
+                               aria-label="گزینهٔ ۸ صحیح است">
+                        <input type="text" name="option_8" maxlength="300" placeholder="گزینهٔ ۸">
+                    </div>
+                    <div class="option-row option-row--extra" hidden>
+                        <input type="radio" name="correct" value="9" id="correct-9"
+                               aria-label="گزینهٔ ۹ صحیح است">
+                        <input type="text" name="option_9" maxlength="300" placeholder="گزینهٔ ۹">
+                    </div>
+                    <div class="option-row option-row--extra" hidden>
+                        <input type="radio" name="correct" value="10" id="correct-10"
+                               aria-label="گزینهٔ ۱۰ صحیح است">
+                        <input type="text" name="option_10" maxlength="300" placeholder="گزینهٔ ۱۰">
+                    </div>
+                    <button type="button" class="btn btn-sm btn-ghost" id="add-option">+ گزینه</button>
                 </fieldset>
                 <div class="card-actions">
                     <button type="submit" name="add_question" value="1" class="btn btn-primary">افزودن پرسش</button>
@@ -67,13 +107,13 @@
     </div>
 
     <div>
-        <h2 class="section-title">اجراهای آزمون</h2>
+        <h2 class="section-title">اجراهای سوال</h2>
         <div class="card form-card">
-            <p class="muted">برای شروع آزمون، وارد جلسهٔ کلاس شوید و از تب «آزمون» آن را شروع کنید.</p>
+            <p class="muted">برای مطرح‌کردن سوال، وارد جلسهٔ کلاس شوید و از تب «سوالات» شروع کنید.</p>
             <a class="btn btn-primary" href="{% url 'room:room' classroom.room_code %}">ورود به جلسه</a>
-            <form method="post" onsubmit="return confirm('کل آزمون با تمام نتایج حذف شود؟');" style="margin-top:.6rem">
+            <form method="post" onsubmit="return confirm('کل سوال با تمام نتایج حذف شود؟');" style="margin-top:.6rem">
                 {% csrf_token %}
-                <button type="submit" name="delete_quiz" value="1" class="btn btn-danger">حذف آزمون</button>
+                <button type="submit" name="delete_quiz" value="1" class="btn btn-danger">حذف سوال</button>
             </form>
         </div>
         {% for run in runs %}
@@ -99,4 +139,7 @@
         {% endfor %}
     </div>
 </div>
+{% endblock %}
+{% block extra_js %}
+<script src="{% static 'js/question-builder.js' %}?v={{ ASSET_V }}" defer></script>
 {% endblock %}

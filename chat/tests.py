@@ -554,3 +554,233 @@ class ChatConsumerTests(TransactionTestCase):
             assert code == 4403
 
         async_to_sync(scenario)()
+
+
+class PrivateChannelTests(TransactionTestCase):
+    """«خصوصی» is enforced on the server, not hidden in the UI."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="pv_owner", password="x")
+        self.student = User.objects.create_user(username="pv_student", password="x")
+        self.other = User.objects.create_user(username="pv_other", password="x")
+        self.classroom = create_classroom(self.owner, title="Private")
+        join_classroom(self.classroom, self.student)
+        join_classroom(self.classroom, self.other)
+        allow(self.classroom, self.owner, self.student, "can_send_messages")
+        allow(self.classroom, self.owner, self.other, "can_send_messages")
+
+    def _ws(self, user):
+        return WebsocketCommunicator(
+            app_with_user(user, chat_routes),
+            f"/ws/classroom/{self.classroom.room_code}/chat/",
+        )
+
+    def test_private_message_only_reaches_the_host_team(self):
+        from chat.models import ChatMessage
+
+        async def scenario():
+            owner_ws = self._ws(self.owner)
+            await owner_ws.connect()
+            await owner_ws.receive_json_from()  # history
+
+            student_ws = self._ws(self.student)
+            await student_ws.connect()
+            await student_ws.receive_json_from()
+
+            other_ws = self._ws(self.other)
+            await other_ws.connect()
+            history = await other_ws.receive_json_from()
+
+            await owner_ws.send_json_to(
+                {"action": "send_message", "message": "یادداشت کارکنان", "private": True}
+            )
+
+            host_echo = await owner_ws.receive_json_from()
+            assert host_echo["type"] == "chat_message"
+            assert host_echo["message"]["is_private"] is True
+            assert host_echo["message"]["message"] == "یادداشت کارکنان"
+
+            # Neither student sees the bubble, the event or anything else.
+            assert await student_ws.receive_nothing(), "private chat leaked to a student"
+            assert await other_ws.receive_nothing(), "private chat leaked to a student"
+
+            await owner_ws.disconnect()
+            await student_ws.disconnect()
+            await other_ws.disconnect()
+            return history
+
+        history = async_to_sync(scenario)()
+        self.assertEqual(history["messages"], [])
+        row = ChatMessage.objects.get()
+        self.assertTrue(row.is_private)
+        self.assertFalse(row.is_deleted)
+        self.assertIsNone(row.audience_member)
+
+    def test_student_cannot_open_the_private_channel(self):
+        """«خصوصی» is the host team's mode — the server refuses a student's flag."""
+        from chat.models import ChatMessage
+
+        async def scenario():
+            owner_ws = self._ws(self.owner)
+            await owner_ws.connect()
+            await owner_ws.receive_json_from()
+
+            student_ws = self._ws(self.student)
+            await student_ws.connect()
+            await student_ws.receive_json_from()
+
+            await student_ws.send_json_to(
+                {"action": "send_message", "message": "خصوصی!", "private": True}
+            )
+            reply = await student_ws.receive_json_from()
+            assert reply["type"] == "error", reply
+            assert "خصوصی" in reply["message"]
+            assert await owner_ws.receive_nothing()
+
+            # ... and a normal message still works afterwards.
+            await student_ws.send_json_to({"action": "send_message", "message": "عمومی"})
+            public = await owner_ws.receive_json_from()
+            assert public["message"]["is_private"] is False
+
+            await owner_ws.disconnect()
+            await student_ws.disconnect()
+
+        async_to_sync(scenario)()
+        self.assertEqual(ChatMessage.objects.filter(is_private=True).count(), 0)
+        self.assertEqual(ChatMessage.objects.filter(is_private=False).count(), 1)
+
+    def test_private_history_is_filtered_per_member(self):
+        from chat.models import ChatMessage
+        from chat.consumers import _visible_messages
+        from classrooms.models import ClassroomMember
+
+        student_member = ClassroomMember.objects.get(classroom=self.classroom, user=self.student)
+        other_member = ClassroomMember.objects.get(classroom=self.classroom, user=self.other)
+        owner_member = ClassroomMember.objects.get(classroom=self.classroom, user=self.owner)
+
+        ChatMessage.objects.create(
+            classroom=self.classroom, sender=self.student, sender_member=student_member,
+            sender_name="دانش‌آموز", message="عمومی",
+        )
+        ChatMessage.objects.create(
+            classroom=self.classroom, sender=self.student, sender_member=student_member,
+            sender_name="دانش‌آموز", message="خصوصی", is_private=True,
+            audience_member=student_member,
+        )
+        ChatMessage.objects.create(
+            classroom=self.classroom, sender=self.owner, sender_member=owner_member,
+            sender_name="مالک", message="یادداشت کارکنان", is_private=True,
+        )
+
+        def texts(member):
+            return [m.message for m in _visible_messages(self.classroom, member)]
+
+        self.assertEqual(texts(student_member), ["عمومی", "خصوصی"])
+        self.assertEqual(texts(other_member), ["عمومی"])
+        self.assertEqual(texts(owner_member), ["عمومی", "خصوصی", "یادداشت کارکنان"])
+
+    def test_host_reply_in_the_private_channel_stays_staff_only(self):
+        from chat.models import ChatMessage
+
+        async def scenario():
+            owner_ws = self._ws(self.owner)
+            await owner_ws.connect()
+            await owner_ws.receive_json_from()
+
+            student_ws = self._ws(self.student)
+            await student_ws.connect()
+            await student_ws.receive_json_from()
+
+            await owner_ws.send_json_to(
+                {"action": "send_message", "message": "یادداشت اول", "private": True}
+            )
+            note = await owner_ws.receive_json_from()
+            assert await student_ws.receive_nothing()
+
+            await owner_ws.send_json_to({
+                "action": "send_message", "message": "پیوست یادداشت",
+                "private": True, "reply_to": note["message"]["id"],
+            })
+            answer = await owner_ws.receive_json_from()
+            assert answer["message"]["reply_to"]["id"] == note["message"]["id"]
+            assert answer["message"]["reply_to"]["message"] == "یادداشت اول"
+            assert await student_ws.receive_nothing()
+
+            await owner_ws.disconnect()
+            await student_ws.disconnect()
+
+        async_to_sync(scenario)()
+
+        reply = ChatMessage.objects.exclude(reply_to=None).get()
+        self.assertTrue(reply.is_private)
+        self.assertIsNone(reply.audience_member)
+
+    def test_public_reply_carries_a_snippet(self):
+        from chat.models import ChatMessage
+
+        async def scenario():
+            owner_ws = self._ws(self.owner)
+            await owner_ws.connect()
+            await owner_ws.receive_json_from()
+
+            await owner_ws.send_json_to({"action": "send_message", "message": "پیام اول"})
+            first = await owner_ws.receive_json_from()
+            assert first["message"]["message"] == "پیام اول"
+            assert first["message"]["reply_to"] is None
+
+            await owner_ws.send_json_to({
+                "action": "send_message", "message": "پیام دوم",
+                "reply_to": first["message"]["id"],
+            })
+            second = await owner_ws.receive_json_from()
+            quote = second["message"]["reply_to"]
+            assert quote["id"] == first["message"]["id"]
+            assert quote["message"] == "پیام اول"
+
+            await owner_ws.disconnect()
+
+        async_to_sync(scenario)()
+        self.assertEqual(ChatMessage.objects.count(), 2)
+
+    def test_reply_to_a_message_you_cannot_read_is_dropped(self):
+        from chat.models import ChatMessage
+        from classrooms.models import ClassroomMember
+
+        student_member = ClassroomMember.objects.get(classroom=self.classroom, user=self.student)
+        owner_member = ClassroomMember.objects.get(classroom=self.classroom, user=self.owner)
+        secret = ChatMessage.objects.create(
+            classroom=self.classroom, sender=self.owner, sender_member=owner_member,
+            sender_name="مالک", message="فقط کارکنان", is_private=True,
+        )
+
+        async def scenario():
+            ws = self._ws(self.student)
+            await ws.connect()
+            history = await ws.receive_json_from()
+            assert history["messages"] == []
+            await ws.send_json_to({
+                "action": "send_message", "message": "نقل قول",
+                "reply_to": secret.id,
+            })
+            sent = await ws.receive_json_from()
+            assert sent["message"]["reply_to"] is None
+            await ws.disconnect()
+
+        async_to_sync(scenario)()
+        self.assertEqual(ChatMessage.objects.filter(reply_to=secret).count(), 0)
+        self.assertTrue(student_member.id)
+
+    def test_private_mode_is_not_a_student_choice_for_visibility(self):
+        """A student marking a message private still cannot read host-only notes."""
+        from chat.models import ChatMessage
+        from chat.consumers import _can_read
+        from classrooms.models import ClassroomMember
+
+        owner_member = ClassroomMember.objects.get(classroom=self.classroom, user=self.owner)
+        student_member = ClassroomMember.objects.get(classroom=self.classroom, user=self.student)
+        staff_note = ChatMessage.objects.create(
+            classroom=self.classroom, sender=self.owner, sender_member=owner_member,
+            sender_name="مالک", message="یادداشت", is_private=True,
+        )
+        self.assertTrue(_can_read(staff_note, owner_member, host=True))
+        self.assertFalse(_can_read(staff_note, student_member, host=False))
