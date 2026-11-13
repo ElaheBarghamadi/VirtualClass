@@ -275,3 +275,46 @@ def database_has_a_schema(app_configs, **kwargs) -> list[CheckWarning]:
     except Exception:  # pragma: no cover - diagnostics must never crash
         return issues
     return issues
+
+
+def _looks_public(host: str) -> bool:
+    """True for a name a browser could actually type (not localhost/LAN)."""
+    name = host.strip().lower().lstrip(".")
+    if not name or name == "*":
+        return False
+    if name in {"localhost", "0.0.0.0", "[::1]", "::1"}:
+        return False
+    if name.startswith(("127.", "10.", "192.168.", "169.254.")):
+        return False
+    if name.endswith((".local", ".internal", ".localdomain")):
+        return False
+    return "." in name  # a real DNS name, not a bare container name
+
+
+@register()
+def allowed_hosts_cover_the_public_domain(app_configs, **kwargs) -> list[CheckWarning]:
+    """Warn when production accepts no public host name at all.
+
+    ``DisallowedHost: Invalid HTTP_HOST header: 'class.example.com'`` is the
+    first thing a new domain hits, and it is silent until someone opens the site.
+    This catches the shape of the mistake — DEBUG off, and every name in
+    ``ALLOWED_HOSTS`` is localhost or a LAN address — before the first visitor.
+    """
+    if settings.DEBUG:
+        return []
+    hosts = [h for h in (getattr(settings, "ALLOWED_HOSTS", []) or []) if h]
+    if not hosts or "*" in hosts:
+        return []
+    if any(_looks_public(h) for h in hosts):
+        return []
+    issue = CheckWarning(
+        "No public host name is allowed: ALLOWED_HOSTS only lists "
+        f"{', '.join(hosts)}. A browser opening the deployed domain gets "
+        "“DisallowedHost … You may need to add …”. ",
+        hint="Set ALLOWED_HOSTS to the domain the site is opened on, e.g. "
+             "ALLOWED_HOSTS=class.example.com (comma-separated; `.example.com` "
+             "accepts every subdomain), then redeploy. Setting PUBLIC_URL / "
+             "APP_URL to that address also adds it automatically.",
+        id="deploy.W011",
+    )
+    return [issue]

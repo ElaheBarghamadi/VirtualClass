@@ -120,6 +120,95 @@ class HealthProbeHostMiddleware:
         return validate_host(host, allowed) if host else True
 
 
+class HostHeaderGuardMiddleware:
+    """Say which host name is missing, instead of printing the settings page.
+
+    ``DisallowedHost`` is the classic first-deploy error on a new domain: the app
+    is reachable, the domain is right, and one environment variable does not
+    mention it.  Django answers with its technical page (with DEBUG on) or a bare
+    ``400`` (with DEBUG off) — both of which leave the owner guessing, and the
+    first of which publishes paths and settings to whoever opens the URL.
+
+    This middleware catches exactly that exception and answers a designed
+    ``400`` that names the host that arrived, the hosts that are configured, and
+    the variable to change.  It must sit **before** the security/common
+    middleware, because those call ``request.get_host()`` themselves.
+    """
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        from django.core.exceptions import DisallowedHost
+
+        # Check the Host *before* the framework does.  Django converts
+        # SuspiciousOperation into a response inside its own middleware wrapper,
+        # so by the time this method could catch it the generic 400 page (or the
+        # technical one) has already been chosen; asking here keeps the useful
+        # page.  ``request.get_host()`` is cached, so CommonMiddleware's later
+        # call is free.
+        try:
+            request.get_host()
+        except DisallowedHost as exc:
+            host = self._host_of(request) or "?"
+            self._report(host, exc)
+            return self._response(host)
+        except Exception:  # pragma: no cover - never block a request over this
+            pass
+
+        # Belt and braces: a view that reads the Host header itself throws the
+        # same exception, and it should still land on the same page.
+        try:
+            return self.get_response(request)
+        except DisallowedHost as exc:
+            host = self._host_of(request) or "?"
+            self._report(host, exc)
+            return self._response(host)
+
+    @staticmethod
+    def _host_of(request) -> str:
+        """The Host header as it really arrived (never via ``get_host()``)."""
+        host = request.META.get("HTTP_HOST") or ""
+        if not host:
+            name = request.META.get("SERVER_NAME", "")
+            port = request.META.get("SERVER_PORT", "")
+            host = name if not port or port in {"80", "443"} else f"{name}:{port}"
+        return host
+
+    def _report(self, host: str, exc: Exception) -> None:
+        if _host_reported:
+            return
+        globals()["_host_reported"] = True
+        logger.critical(
+            "host_not_allowed host=%s (%s) — the app was reached on a domain that "
+            "ALLOWED_HOSTS does not list. Set ALLOWED_HOSTS=<that domain> "
+            "(comma-separated for several, or .example.com for every subdomain) "
+            "and redeploy.",
+            host,
+            exc,
+        )
+
+    def _response(self, host: str):
+        from django.conf import settings
+        from django.http import HttpResponse
+        from django.template import loader
+
+        allowed = [h for h in (getattr(settings, "ALLOWED_HOSTS", []) or [])]
+        context = {
+            "host": host,
+            "bare_host": host.split(":", 1)[0],
+            "allowed_hosts": ", ".join(allowed) or "—",
+        }
+        body = loader.get_template("errors/host_not_allowed.html").render(context)
+        response = HttpResponse(body, status=400, content_type="text/html; charset=utf-8")
+        response["Cache-Control"] = "no-store"
+        return response
+
+
+#: One log line per process; the page itself repeats the fix for every visitor.
+_host_reported = False
+
+
 class DatabaseNotReadyMiddleware:
     """Answer an unmigrated database with a page, not a traceback.
 
@@ -165,6 +254,19 @@ class DatabaseNotReadyMiddleware:
                 raise
             self._report_once(request, exc)
             return self._response()
+
+    def process_exception(self, request, exception):
+        """The documented hook for "a view raised": Django converts exceptions
+        raised by a view into responses *inside* the middleware wrapper, so
+        ``__call__`` never sees them.  This does."""
+        from django.db import Error as DatabaseError
+
+        if not isinstance(exception, DatabaseError):
+            return None
+        if not self._is_missing_schema(exception):
+            return None
+        self._report_once(request, exception)
+        return self._response()
 
     @classmethod
     def _is_missing_schema(cls, exc: Exception) -> bool:

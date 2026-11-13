@@ -1,0 +1,26 @@
+{% extends "errors/_error.html" %}
+
+{% block title %}دامنه پذیرفته نشد{% endblock %}
+{% block scene %}broken{% endblock %}
+{% block code %}400{% endblock %}
+
+{% block glyph %}<circle cx="12" cy="12" r="8.4"/><path d="M3.8 12h16.4"/><path d="M12 3.6c2.6 2.4 4 5.3 4 8.4s-1.4 6-4 8.4c-2.6-2.4-4-5.3-4-8.4s1.4-6 4-8.4Z"/>{% endblock %}
+
+{% block kicker %}تنظیم دامنه{% endblock %}
+{% block heading %}این دامنه در فهرست مجاز نیست{% endblock %}
+{% block message %}
+    سایت بالا آمده، ولی نام دامنه‌ای که مرورگر فرستاده با تنظیمات سرور هم‌خوان نیست؛
+    به همین دلیل این صفحه باز شده. داده‌ای تغییر نکرده است.
+    <br><br>
+    دامنهٔ رسیده: <code dir="ltr">{{ bare_host }}</code>
+    <br>
+    دامنه‌های مجاز فعلی: <code dir="ltr">{{ allowed_hosts }}</code>
+{% endblock %}
+
+{% block hint %}
+    <p class="err-foot">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.4 5.4 6.2v5.2c0 3.9 2.7 7.2 6.6 8.4 3.9-1.2 6.6-4.5 6.6-8.4V6.2Z"/><path d="m9.2 12 2 2 3.6-3.8"/></svg>
+        مدیر باید در Environment مقدار <code dir="ltr">ALLOWED_HOSTS</code> را شامل
+        <code dir="ltr">{{ bare_host }}</code> کند و دوباره دیپلوی کند.
+    </p>
+{% endblock %}

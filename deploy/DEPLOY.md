@@ -48,6 +48,8 @@ TRUST_X_FORWARDED_PROTO=true               # اگر TLS را پروکسی تما
 | `deploy.W006` | `MEDIA_ROOT`/`PRIVATE_MEDIA_ROOT` نیست یا نوشتنی نیست | volume در کانتینر، مالکیت در VPS |
 | `deploy.W007` | `SECURE_SSL_REDIRECT` روشن است ولی هدر پروکسی نه → حلقهٔ ریدایرکت | `TRUST_X_FORWARDED_PROTO=true` |
 | `deploy.W008` | mesh بدون TURN: تصویر/صدا بین شبکه‌های سخت‌گیر نمی‌رسد («دوربین روشن است ولی بقیه نمی‌بینند») | coturn در `WEBRTC_ICE_SERVERS` یا LiveKit |
+| `deploy.W010` | دیتابیس خالی/بدون مایگریشن است (`no such table`) | `python manage.py migrate --noinput`؛ Start command نباید entrypoint را رد کند |
+| `deploy.W011` | `ALLOWED_HOSTS` هیچ نام عمومی ندارد (فقط localhost) → `DisallowedHost` | دامنه را در `ALLOWED_HOSTS` بگذارید (یا `PUBLIC_URL`) |
 | `deploy.W009` | نه LiveKit نه mesh → رسانه در همهٔ اتاق‌ها خاموش است | `MEDIA_SERVER_*` یا `MESH_ENABLED=1` |
 | `deploy.W002` | بدون `REDIS_URL` → تک‌پروسه | Redis؛ در نصب تک‌پروسه پذیرفتنی است |
 | `deploy.W003` | SQLite با `DEBUG=false` | PostgreSQL، یا `ALLOW_SQLITE_IN_PRODUCTION=true` روی هاست دائمی |

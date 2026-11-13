@@ -68,7 +68,8 @@ class StaticServingTests(SimpleTestCase):
         # before anything (session, auth, CSRF) that a static request needs.
         chain = list(settings.MIDDLEWARE)
         self.assertEqual(chain[0], "core.middleware.HealthProbeHostMiddleware")
-        self.assertEqual(chain[1], "django.middleware.security.SecurityMiddleware")
+        self.assertEqual(chain[1], "core.middleware.HostHeaderGuardMiddleware")
+        self.assertEqual(chain[2], "django.middleware.security.SecurityMiddleware")
         # WhiteNoise must still come before anything that needs a session, auth
         # or a database (the database-not-ready guard sits between them).
         self.assertLess(

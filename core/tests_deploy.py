@@ -518,3 +518,175 @@ class EmptyDatabaseCheckTests(SimpleTestCase):
 
     def test_a_migrated_database_is_quiet(self):
         self.assertNotIn("deploy.W010", _ids(checks.database_has_a_schema(None)))
+
+
+class HostHeaderGuardTests(SimpleTestCase):
+    """A domain that is not listed must say so — not publish the settings."""
+
+    def setUp(self):
+        import core.middleware as middleware
+
+        middleware._host_reported = False
+
+    def _guard(self, exc):
+        from core.middleware import HostHeaderGuardMiddleware
+
+        def boom(request):
+            raise exc
+
+        return HostHeaderGuardMiddleware(boom)
+
+    def _request(self, host="virtualclass.weblines.ir"):
+        from django.test import RequestFactory
+
+        return RequestFactory().get("/class/abc/room/", HTTP_HOST=host)
+
+    def test_it_names_the_host_and_the_fix(self):
+        from django.core.exceptions import DisallowedHost
+
+        guard = self._guard(DisallowedHost("Invalid HTTP_HOST header: 'x'"))
+        with self.assertLogs("core.middleware", level="CRITICAL") as captured:
+            with override_settings(ALLOWED_HOSTS=["elahe.weblines.ir"]):
+                response = guard(self._request())
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response["Cache-Control"], "no-store")
+        body = response.content.decode()
+        self.assertIn("virtualclass.weblines.ir", body)
+        self.assertIn("elahe.weblines.ir", body)      # what is configured now
+        self.assertIn("ALLOWED_HOSTS", body)
+        self.assertIn("host_not_allowed", captured.records[0].getMessage())
+        self.assertNotIn("SECRET_KEY", body)
+        self.assertNotIn("Traceback", body)
+
+    def test_the_scene_survives_a_missing_static_version(self):
+        """The page renders before static/session machinery has been touched."""
+        from django.core.exceptions import DisallowedHost
+
+        guard = self._guard(DisallowedHost("nope"))
+        response = guard(self._request("10.0.0.7"))
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("10.0.0.7", response.content.decode())
+
+    def test_anything_else_still_raises(self):
+        guard = self._guard(RuntimeError("real bug"))
+        with self.assertRaises(RuntimeError):
+            guard(self._request())
+
+
+class AllowedHostsCheckTests(SimpleTestCase):
+    """`check --deploy` must notice a list that only knows about localhost."""
+
+    def test_localhost_only_is_reported(self):
+        with override_settings(DEBUG=False, ALLOWED_HOSTS=["localhost", "127.0.0.1", "[::1]"]):
+            ids = _ids(checks.allowed_hosts_cover_the_public_domain(None))
+        self.assertIn("deploy.W011", ids)
+
+    def test_a_real_domain_is_quiet(self):
+        with override_settings(DEBUG=False, ALLOWED_HOSTS=["virtualclass.weblines.ir"]):
+            self.assertNotIn(
+                "deploy.W011", _ids(checks.allowed_hosts_cover_the_public_domain(None))
+            )
+
+    def test_a_suffix_wildcard_counts_as_public(self):
+        with override_settings(DEBUG=False, ALLOWED_HOSTS=[".weblines.ir"]):
+            self.assertNotIn(
+                "deploy.W011", _ids(checks.allowed_hosts_cover_the_public_domain(None))
+            )
+
+    def test_a_wildcard_is_quiet(self):
+        with override_settings(DEBUG=False, ALLOWED_HOSTS=["*"]):
+            self.assertNotIn(
+                "deploy.W011", _ids(checks.allowed_hosts_cover_the_public_domain(None))
+            )
+
+    def test_debug_is_quiet(self):
+        with override_settings(DEBUG=True, ALLOWED_HOSTS=["localhost"]):
+            self.assertNotIn(
+                "deploy.W011", _ids(checks.allowed_hosts_cover_the_public_domain(None))
+            )
+
+
+class PublishedUrlTests(SimpleTestCase):
+    """If the platform says what address it publishes, believe it."""
+
+    def test_public_url_is_added_to_allowed_hosts_and_csrf(self):
+        from core.tests_settings import _boot
+
+        result = _boot(PUBLIC_URL="https://virtualclass.weblines.ir/")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        hosts = result.stdout.splitlines()[0].split(",")
+        self.assertIn("virtualclass.weblines.ir", hosts)
+
+    def test_a_bare_domain_is_understood(self):
+        from core.tests_settings import _boot
+
+        result = _boot(APP_URL="class.example.org")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("class.example.org", result.stdout)
+
+
+class HostGuardThroughTheStackTests(SimpleTestCase):
+    """End to end: the response a visitor really gets for a wrong domain."""
+
+    def setUp(self):
+        import core.middleware as middleware
+
+        middleware._host_reported = False
+
+    def test_the_page_arrives_instead_of_djangos_400(self):
+        from django.test import Client
+
+        with override_settings(ALLOWED_HOSTS=["elahe.weblines.ir"]):
+            with self.assertLogs("core.middleware", level="CRITICAL"):
+                response = Client().get(
+                    "/class/n2bfrOqlzul/room/", HTTP_HOST="virtualclass.weblines.ir"
+                )
+        self.assertEqual(response.status_code, 400)
+        body = response.content.decode()
+        self.assertIn("دامنهٔ رسیده", body)
+        self.assertIn("virtualclass.weblines.ir", body)
+        self.assertIn("elahe.weblines.ir", body)
+        self.assertNotIn("Traceback", body)
+        self.assertNotIn("Settings", body)
+
+
+class DatabaseNotReadyHookTests(SimpleTestCase):
+    """`process_exception` is the only hook that sees a view's exception.
+
+    Django converts view exceptions into responses inside its own middleware
+    wrapper, so ``__call__`` never receives them (``__call__`` covers the rarer
+    case of a database error raised by middleware above this one).
+    """
+
+    def setUp(self):
+        import core.middleware as middleware
+
+        middleware._db_reported = False
+
+    def test_the_hook_answers_503(self):
+        from django.db.utils import OperationalError
+        from django.test import RequestFactory
+
+        from core.middleware import DatabaseNotReadyMiddleware
+
+        middleware = DatabaseNotReadyMiddleware(lambda r: None)
+        with self.assertLogs("core.middleware", level="CRITICAL"):
+            response = middleware.process_exception(
+                RequestFactory().get("/class/abc/room/"),
+                OperationalError("no such table: classrooms_classroom"),
+            )
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response["Retry-After"], "60")
+
+    def test_the_hook_leaves_other_errors_alone(self):
+        from django.db.utils import OperationalError
+        from django.test import RequestFactory
+
+        from core.middleware import DatabaseNotReadyMiddleware
+
+        middleware = DatabaseNotReadyMiddleware(lambda r: None)
+        request = RequestFactory().get("/class/abc/room/")
+        self.assertIsNone(middleware.process_exception(request, ValueError("boom")))
+        self.assertIsNone(
+            middleware.process_exception(request, OperationalError("database is locked"))
+        )

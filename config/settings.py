@@ -46,6 +46,38 @@ DEBUG = env_bool("DEBUG", "true")
 # a literal ``*`` is refused by the guard right below.
 ALLOWED_HOSTS = env_list("ALLOWED_HOSTS", "*" if DEBUG else "localhost,127.0.0.1,[::1]")
 
+# A hosting platform usually knows the address the browser will type: it is the
+# domain of the service the app just got deployed on.  Reading it back means the
+# single most common production error — ``DisallowedHost: Invalid HTTP_HOST …
+# You may need to add 'x' to ALLOWED_HOSTS`` — cannot happen on those hosts, and
+# without ever widening the list to a wildcard.
+_PUBLISHED_URL_VARS = (
+    "PUBLIC_URL",
+    "APP_URL",
+    "SITE_URL",
+    "WEBSITE_URL",
+    "BASE_URL",
+    "RENDER_EXTERNAL_URL",
+    "RAILWAY_PUBLIC_DOMAIN",
+)
+
+
+def _published_host() -> str:
+    """The host name this deployment is publicly served on, if it says so."""
+    for name in _PUBLISHED_URL_VARS:
+        raw = (os.environ.get(name) or "").strip()
+        if not raw:
+            continue
+        parsed = urlparse(raw if "://" in raw else f"https://{raw}")
+        if parsed.netloc:
+            return parsed.netloc.lower()
+    return ""
+
+
+PUBLISHED_HOST = _published_host()
+if PUBLISHED_HOST and PUBLISHED_HOST not in ALLOWED_HOSTS:
+    ALLOWED_HOSTS = [*ALLOWED_HOSTS, PUBLISHED_HOST]
+
 if not DEBUG and "*" in ALLOWED_HOSTS:
     # Fail fast: Host-header validation is what keeps password-reset links and
     # cache keys bound to *our* domain.  A wildcard silently disables that.
@@ -91,6 +123,9 @@ MIDDLEWARE = [
     # First on purpose: lets a platform's health probe answer even when it calls
     # the container by IP (see core.middleware.HealthProbeHostMiddleware).
     "core.middleware.HealthProbeHostMiddleware",
+    # Before SecurityMiddleware: it calls request.get_host() itself, and a
+    # DisallowedHost there must still reach a designed page.
+    "core.middleware.HostHeaderGuardMiddleware",
     "django.middleware.security.SecurityMiddleware",
     # An unmigrated database answers with a page + 503 instead of a traceback
     # (see core.middleware.DatabaseNotReadyMiddleware).
@@ -509,6 +544,14 @@ CSRF_COOKIE_HTTPONLY = False  # must remain readable by JS templates (Django def
 SESSION_COOKIE_SAMESITE = "Lax"
 CSRF_COOKIE_SAMESITE = "Lax"
 CSRF_TRUSTED_ORIGINS = env_list("CSRF_TRUSTED_ORIGINS", "")
+
+# Same idea as the Host header: if the deployment publishes its own https URL,
+# that origin is by definition ours, so form posts from it must not fail CSRF.
+# (The list still has no bare ``*``; every entry is a concrete origin.)
+if PUBLISHED_HOST:
+    _published_origin = f"https://{PUBLISHED_HOST}"
+    if _published_origin not in CSRF_TRUSTED_ORIGINS:
+        CSRF_TRUSTED_ORIGINS = [*CSRF_TRUSTED_ORIGINS, _published_origin]
 # Preview/sandbox proxies (and most local reverse proxies) terminate TLS and
 # forward plain HTTP.  Without this, Django considers every request insecure,
 # so the browser's ``Origin: https://<host>`` never matches and every form POST

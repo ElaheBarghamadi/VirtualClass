@@ -316,6 +316,8 @@ WEBRTC_ICE_SERVERS=[{"urls":["turn:openrelay.metered.ca:80","turn:openrelay.mete
 | بعد از هر دیپلوی کاربران رفته‌اند | `DATABASE_URL` خالی → SQLite در کانتینر | PostgreSQL را لینک کنید (`deploy_check` → `postgresql`) |
 | `no such table: classrooms_classroom` | کانتینر تازه بالا آمده و `migrate` اجرا نشده (Start command پنل `entrypoint` را رد کرده) | از Shell: `python manage.py migrate --noinput`؛ Start command را خالی/`/usr/local/bin/entrypoint` کنید و PostgreSQL لینک کنید تا دیگر تکرار نشود. کد فعلی برای همین حالت صفحهٔ ۵۰۳ با پیام «پایگاه‌داده آماده نیست» می‌دهد، نه traceback |
 | در `check --deploy` می‌بینید `deploy.W010` | دیتابیسِ جلوی این پروسه خالی/بدون مایگریشن است | همان `migrate` |
+| `DisallowedHost … You may need to add '<دامنه>' to ALLOWED_HOSTS` | `ALLOWED_HOSTS` این دامنه را ندارد (با تغییر env، مقدار قبلی مانده) | `ALLOWED_HOSTS=virtualclass.weblines.ir` یا برای همهٔ زیردامنه‌ها `ALLOWED_HOSTS=.weblines.ir`؛ یا `PUBLIC_URL=https://virtualclass.weblines.ir` بگذارید تا خودکار اضافه شود — بعد Redeploy. کد فعلی به‌جای traceback صفحهٔ ۴۰۰ با نام دامنهٔ رسیده و فهرست فعلی نشان می‌دهد |
+| در `check --deploy` می‌بینید `deploy.W011` | `ALLOWED_HOSTS` فقط localhost/LAN است | همان `ALLOWED_HOSTS=<دامنه>` |
 | چت/تخته بین دو تب یا دو نفر همگام نیست | `REDIS_URL` خالی → channel layer درون‌پروسه | سرویس Redis + `REDIS_URL` |
 | `/healthz` از داخل کانتینر ۲۰۰ است ولی پنل می‌گوید unhealthy | پروب با IP صدا می‌زند | کد فعلی `/healthz` را از بررسی Host مستثنی می‌کند؛ مسیر Health check را روی `/healthz` بگذارید |
 | دوربین/میکروفون بی‌صدا است | `MEDIA_SERVER_URL` خالی و `MESH_ENABLED=0` | بخش ۵ |

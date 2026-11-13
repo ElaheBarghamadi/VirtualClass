@@ -32,7 +32,9 @@ def _boot(**overrides) -> subprocess.CompletedProcess:
         key: value
         for key, value in os.environ.items()
         if key not in {"DEBUG", "ALLOWED_HOSTS", "SECRET_KEY", "DJANGO_SETTINGS_MODULE",
-                       "TRUST_X_FORWARDED_PROTO"}
+                       "TRUST_X_FORWARDED_PROTO", "CSRF_TRUSTED_ORIGINS",
+                       "PUBLIC_URL", "APP_URL", "SITE_URL", "WEBSITE_URL", "BASE_URL",
+                       "RENDER_EXTERNAL_URL", "RAILWAY_PUBLIC_DOMAIN"}
     }
     env.update({"DJANGO_SETTINGS_MODULE": "config.settings", "PYTHONPATH": str(BASE_DIR)})
     env.update(overrides)
