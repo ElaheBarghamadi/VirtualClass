@@ -67,7 +67,7 @@ class StaticServingTests(SimpleTestCase):
         # ... and the middleware sits directly after SecurityMiddleware, i.e.
         # before anything (session, auth, CSRF) that a static request needs.
         self.assertEqual(
-            settings.MIDDLEWARE[:2],
+            settings.MIDDLEWARE[1:3],
             [
                 "django.middleware.security.SecurityMiddleware",
                 "whitenoise.middleware.WhiteNoiseMiddleware",

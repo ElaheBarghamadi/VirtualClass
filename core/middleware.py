@@ -66,3 +66,55 @@ class ASGIOnlyWebSocketsMiddleware:
             "(daphne config.asgi:application).",
             path,
         )
+
+
+class HealthProbeHostMiddleware:
+    """Let ``/healthz`` answer a probe that does not know the public domain.
+
+    Load balancers, container platforms and uptime monitors often call the
+    container directly — ``curl http://10.0.0.5:8000/healthz`` — so the Host
+    header is an IP address (or ``localhost``), not the domain in
+    ``ALLOWED_HOSTS``.  Django rejects it before any view runs, the probe gets
+    a ``400``, and the platform restarts a process that was perfectly healthy.
+
+    The fix is deliberately the smallest possible: for **exactly** the health
+    path, and only when the incoming Host is not already allowed, the Host is
+    rewritten to an allowed name.  The health view returns a two-line JSON
+    object that reveals nothing, so a rewritten Host cannot be used to reach
+    anything else; every other path keeps full Host validation.
+
+    Must be first in ``MIDDLEWARE``: security/common middleware call
+    ``request.get_host()`` themselves.
+    """
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        from django.conf import settings
+
+        path = request.path_info or "/"
+        if path.rstrip("/") == "/healthz" or path.startswith("/healthz?"):
+            allowed = list(getattr(settings, "ALLOWED_HOSTS", []) or [])
+            # The effective host: HTTP_HOST when present, otherwise the
+            # SERVER_NAME/SERVER_PORT pair the WSGI/ASGI server built (that is
+            # what a bare `curl 10.0.0.5:8000` looks like).
+            host = request.META.get("HTTP_HOST") or ""
+            if not host:
+                name = request.META.get("SERVER_NAME", "")
+                port = request.META.get("SERVER_PORT", "")
+                host = name if not port or port in {"80", "443"} else f"{name}:{port}"
+            bare = host.split(":", 1)[0]
+            target = next(
+                (h for h in allowed if h != "*" and not h.startswith(".") and h),
+                None,
+            )
+            if target and bare and not self._host_allowed(bare, allowed):
+                request.META["HTTP_HOST"] = target
+        return self.get_response(request)
+
+    @staticmethod
+    def _host_allowed(host: str, allowed: list[str]) -> bool:
+        from django.http.request import validate_host
+
+        return validate_host(host, allowed) if host else True

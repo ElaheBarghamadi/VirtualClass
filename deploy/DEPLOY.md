@@ -93,6 +93,10 @@ python manage.py deploy_check --brief  # همان یک خط بالا
 
 ---
 
+> **برای همین پروژه روی وب‌لاینز:** سند آمادهٔ `virtualclass.weblines.ir` در
+> [`deploy/HOSTING-virtualclass-weblines.md`](HOSTING-virtualclass-weblines.md) است —
+> مقادیر env آمادهٔ کپی، تنظیمات Build/Port/Health، سرویس‌ها و چک‌لیست تحویل.
+
 ## الف) ابر وب‌لاینز
 
 پلتفرم بر پایهٔ کانتینر است و **build خودکارش فقط Node.js را می‌شناسد**؛ برای پایتون باید صریحاً Dockerfile بدهید. برای همین یک Dockerfile آمادهٔ **فقط-دیپلوی** در ریپو هست:

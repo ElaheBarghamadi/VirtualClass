@@ -290,3 +290,52 @@ class DatabaseUrlTests(SimpleTestCase):
         entry = self._entry("")
         self.assertEqual(entry["ENGINE"], "django.db.backends.sqlite3")
         self.assertEqual(entry["OPTIONS"], {"timeout": 20})
+
+
+class HealthProbeHostTests(SimpleTestCase):
+    """A platform probe calls the container by IP; that must not look unhealthy.
+
+    ``DisallowedHost`` happens before URL resolution, so a probe with
+    ``Host: 10.0.0.5:8000`` would get 400 and the platform would restart a
+    healthy process.  Only the health path may be rescued from that.
+    """
+
+    def test_the_probe_answers_on_an_unknown_host(self):
+        with self.settings(ALLOWED_HOSTS=["virtualclass.weblines.ir"]):
+            response = self.client.get("/healthz", HTTP_HOST="10.128.1.20:8000")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(json.loads(response.content)["status"], "ok")
+
+    def test_nothing_else_is_rescued(self):
+        with self.settings(ALLOWED_HOSTS=["virtualclass.weblines.ir"]):
+            self.assertEqual(
+                self.client.get("/", HTTP_HOST="10.128.1.20:8000").status_code, 400
+            )
+            self.assertEqual(
+                self.client.get("/accounts/login/", HTTP_HOST="evil.example").status_code,
+                400,
+            )
+
+    def test_the_real_domain_is_never_rewritten(self):
+        from core.middleware import HealthProbeHostMiddleware
+
+        seen = {}
+
+        def record(request):
+            seen["host"] = request.META["HTTP_HOST"]
+            from django.http import HttpResponse
+
+            return HttpResponse("ok")
+
+        middleware = HealthProbeHostMiddleware(record)
+        from django.test import RequestFactory
+
+        request = RequestFactory().get("/healthz", HTTP_HOST="virtualclass.weblines.ir")
+        with self.settings(ALLOWED_HOSTS=["virtualclass.weblines.ir", "other.example"]):
+            middleware(request)
+        self.assertEqual(seen["host"], "virtualclass.weblines.ir")
+
+    def test_it_runs_before_host_validation(self):
+        from django.conf import settings
+
+        self.assertEqual(settings.MIDDLEWARE[0], "core.middleware.HealthProbeHostMiddleware")

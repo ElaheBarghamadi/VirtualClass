@@ -978,7 +978,7 @@ python tests_e2e/run_e2e.py --room <CODE>
 | مسیر | واست | فایل‌های آماده |
 |---|---|---|
 | **سرور مجازی** (nginx + Daphne + systemd) | کنترل کامل، WebSocket تضمینی | [`deploy/nginx/virtualclass.conf`](deploy/nginx/virtualclass.conf) · [`deploy/systemd/`](deploy/systemd) |
-| **ابر وب‌لاینز** (PaaS) | بدون کار سرور، دامنه/SSL/دیتابیس از پنل | [`deploy/weblines/Dockerfile`](deploy/weblines/Dockerfile) · [`.env.production.example`](.env.production.example) |
+| **ابر وب‌لاینز** (PaaS) | بدون کار سرور، دامنه/SSL/دیتابیس از پنل | [`deploy/weblines/Dockerfile`](deploy/weblines/Dockerfile) · [`.env.production.example`](.env.production.example) · [`deploy/HOSTING-virtualclass-weblines.md`](deploy/HOSTING-virtualclass-weblines.md) |
 
 ### حداقلِ تنظیمات و پروب سلامت
 

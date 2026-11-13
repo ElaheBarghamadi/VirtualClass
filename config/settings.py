@@ -88,6 +88,9 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    # First on purpose: lets a platform's health probe answer even when it calls
+    # the container by IP (see core.middleware.HealthProbeHostMiddleware).
+    "core.middleware.HealthProbeHostMiddleware",
     "django.middleware.security.SecurityMiddleware",
     # Serves /static/ straight from the app (compressed, cached), so a
     # deployment needs no nginx rule — and static is never missing on a
