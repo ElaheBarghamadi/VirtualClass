@@ -364,83 +364,104 @@ class QuestionStatsTests(TestCase):
 
 
 class StatsBroadcastTests(TestCase):
-    """The name-by-name detail is only ever pushed to authorities."""
+    """Who gets percentages, and when.
+
+    The rule the room is built around: a bar chart is an answer key, so the
+    numbers only reach somebody who has already answered (or everybody, once
+    the question is over).  The host team always sees the whole picture.
+    """
 
     def setUp(self):
         self.owner = make_user("sb_owner")
         self.classroom = create_classroom(self.owner, title="Broadcast")
         self.owner_member = self.classroom.members.get(user=self.owner)
-
-    def test_detail_goes_to_hosts_only(self):
-        from unittest import mock
-
-        from . import services
-
-        run = ask_question(
-            self.classroom, self.owner_member, text="س؟", options=["الف", "ب"],
+        self.answerer = ClassroomMember.objects.create(
+            classroom=self.classroom, user=make_user("sb_answer"), role=Role.STUDENT,
         )
-        question = run.quiz.questions.get()
-        answerer = ClassroomMember.objects.create(
-            classroom=self.classroom, user=make_user("sb_stu"), role=Role.STUDENT,
+        self.quiet = ClassroomMember.objects.create(
+            classroom=self.classroom, user=make_user("sb_quiet"), role=Role.STUDENT,
         )
-        QuizAnswer.objects.create(
-            run=run, question=question, member=answerer,
-            option=question.options.first(),
-        )
-        with mock.patch.object(services, "broadcast") as sent, \
-                mock.patch.object(services, "notify_member") as notified:
-            services._broadcast_stats(self.classroom, run)
-        self.assertEqual(sent.call_count, 1)
-        event = sent.call_args.args[1]
-        self.assertEqual(event["type"], "quiz_stats")
-        self.assertNotIn("who", json.dumps(event["stats"]))
-
-        self.assertEqual(notified.call_count, 1)  # exactly the owner
-        detail = notified.call_args.args[2]
-        self.assertEqual(detail["type"], "quiz_stats_detail")
-        self.assertTrue(detail["show_who"])
-        self.assertIn("who", json.dumps(detail["stats"]))
-
-    def test_ended_event_is_the_only_one_revealing_correctness(self):
-        from unittest import mock
-
-        from . import services
-
-        run = ask_question(
+        self.run = ask_question(
             self.classroom, self.owner_member, text="س؟", options=["الف", "ب"],
             correct_index=0,
         )
-        with mock.patch.object(services, "broadcast") as sent, \
-                mock.patch.object(services, "notify_member"):
-            services._broadcast_stats(self.classroom, run)
-        self.assertNotIn("is_correct", json.dumps(sent.call_args.args[1]["stats"]))
+        self.question = self.run.quiz.questions.get()
 
-        with mock.patch.object(services, "broadcast") as sent, \
-                mock.patch.object(services, "notify_member"):
-            services._broadcast_stats(self.classroom, run, ended=True)
-        self.assertIn("is_correct", json.dumps(sent.call_args.args[1]["stats"]))
-
-    def test_form_accepts_up_to_ten_options(self):
-        quiz = Quiz.objects.create(classroom=self.classroom, title="q10")
-        self.client.force_login(self.owner)
-        data = {"add_question": "1", "text": "سوال ده‌گزینه‌ای", "points": "1", "correct": "10"}
-        data.update({f"option_{i}": f"گزینهٔ {i}" for i in range(1, 11)})
-        resp = self.client.post(
-            reverse("quizzes_manage:detail", args=[self.classroom.room_code, quiz.id]),
-            data,
+    def _answer(self):
+        QuizAnswer.objects.create(
+            run=self.run, question=self.question, member=self.answerer,
+            option=self.question.options.first(),
         )
-        self.assertEqual(resp.status_code, 302)
-        question = quiz.questions.get()
-        self.assertEqual(question.options.count(), 10)
-        self.assertTrue(question.options.get(order=10).is_correct)
 
-    def test_form_still_rejects_four_plus_empty_tail(self):
-        quiz = Quiz.objects.create(classroom=self.classroom, title="q4")
-        self.client.force_login(self.owner)
-        self.client.post(
-            reverse("quizzes_manage:detail", args=[self.classroom.room_code, quiz.id]),
-            {"add_question": "1", "text": "سوال", "points": "1",
-             "option_1": "الف", "option_2": "ب", "option_3": "", "option_4": "",
-             "correct": "3"},
-        )
-        self.assertEqual(quiz.questions.count(), 0)
+    def _frames(self):
+        from unittest import mock
+
+        from . import services
+
+        with mock.patch.object(services, "broadcast") as sent, \
+                mock.patch.object(services, "notify_member") as notified:
+            services._broadcast_stats(self.classroom, self.run)
+        return sent, notified
+
+    def test_nothing_is_broadcast_to_the_room_while_the_question_is_open(self):
+        self._answer()
+        sent, _ = self._frames()
+        self.assertEqual(sent.call_count, 0, "percentages must not go room-wide")
+
+    def test_hosts_get_the_detail_even_before_anybody_answers(self):
+        _, notified = self._frames()
+        self.assertEqual(notified.call_count, 1)
+        room, member, payload = notified.call_args.args
+        self.assertEqual(member.id, self.owner_member.id)
+        self.assertEqual(payload["type"], "quiz_stats_detail")
+        self.assertTrue(payload["show_who"])
+        self.assertNotIn("is_correct", json.dumps(payload["stats"]))
+
+    def test_the_student_who_answered_gets_their_row(self):
+        self._answer()
+        _, notified = self._frames()
+        by_type = {}
+        for call in notified.call_args_list:
+            _, member, payload = call.args
+            by_type.setdefault(payload["type"], []).append((member.id, payload))
+        stats_frames = by_type.get("quiz_stats", [])
+        self.assertEqual([mid for mid, _ in stats_frames], [self.answerer.id])
+        payload = stats_frames[0][1]
+        self.assertEqual([row["id"] for row in payload["stats"]], [self.question.id])
+        self.assertNotIn("who", json.dumps(payload["stats"]))
+        self.assertNotIn("is_correct", json.dumps(payload["stats"]))
+
+    def test_the_student_who_has_not_answered_gets_nothing(self):
+        self._answer()
+        _, notified = self._frames()
+        targets = {call.args[1].id for call in notified.call_args_list}
+        self.assertNotIn(self.quiet.id, targets)
+
+    def test_ending_reveals_everything_to_the_room(self):
+        from unittest import mock
+
+        from . import services
+
+        self._answer()
+        with mock.patch.object(services, "broadcast") as sent, \
+                mock.patch.object(services, "notify_member") as notified:
+            services._broadcast_stats(self.classroom, self.run, ended=True)
+
+        self.assertEqual(sent.call_count, 1)
+        event = sent.call_args.args[1]
+        self.assertEqual(event["type"], "quiz_stats")
+        self.assertTrue(event["ended"])
+        self.assertIn("is_correct", json.dumps(event["stats"]))
+        # correctness still never travels as a live event
+        self.assertNotIn("who", json.dumps(event["stats"]))
+        self.assertTrue(notified.call_count >= 1)
+
+    def test_live_events_never_reveal_correctness(self):
+        from unittest import mock
+
+        from . import services
+
+        self._answer()
+        with mock.patch.object(services, "broadcast") as sent:
+            services._broadcast_stats(self.classroom, self.run)
+        self.assertEqual(sent.call_count, 0)

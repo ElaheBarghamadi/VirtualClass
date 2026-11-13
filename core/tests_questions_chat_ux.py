@@ -75,7 +75,8 @@ class QuestionTabTests(SimpleTestCase):
     def test_live_stats_never_render_correctness_until_the_end(self):
         detail = re.search(r"handleStatsDetail\(payload\) \{(.*?)\n    \},", self.quiz_js, re.S)
         self.assertIsNotNone(detail)
-        self.assertIn("showCorrect: false", detail.group(1))
+        # Live detail is only "correct" when the payload says the run ended.
+        self.assertIn("showCorrect: Boolean(payload.ended) || this.ended", detail.group(1))
         ended = re.search(r"handleEnded\(payload\) \{(.*?)\n    \},", self.quiz_js, re.S)
         self.assertIsNotNone(ended)
         self.assertIn("showCorrect: true", ended.group(1))
@@ -98,6 +99,27 @@ class QuestionTabTests(SimpleTestCase):
         self.assertIn('id="quiz-results"', self.room)
         self.assertIn('id="quiz-question-body"', self.room)
         self.assertIn("el('quiz-question-body')?.classList.add('hidden')", self.quiz_js)
+
+    def test_results_show_up_without_waiting_for_the_end(self):
+        """Bars under the options the moment a student answers."""
+        self.assertIn('id="quiz-question-stats"', self.room)
+        self.assertIn("_renderQuestionStats()", self.quiz_js)
+        render = re.search(r"_renderQuestionStats\(\) \{(.*?)\n    \},", self.quiz_js, re.S)
+        self.assertIsNotNone(render)
+        self.assertIn("this.statsMap[question.id]", render.group(1))
+        # ... and the panel keeps every question that already has a row
+        stats = re.search(r"_paintStats\(\{ showWho = false, showCorrect = false \} = \{\}\) \{(.*?)\n    \},", self.quiz_js, re.S)
+        self.assertIsNotNone(stats)
+        self.assertIn("this._renderStats(panel, rows, { showWho, showCorrect })", stats.group(1))
+        self.assertIn("_statRows()", stats.group(1))
+
+    def test_stats_frames_merge_instead_of_replacing(self):
+        merge = re.search(r"mergeStats\(rows\) \{(.*?)\n    \},", self.quiz_js, re.S)
+        self.assertIsNotNone(merge)
+        self.assertIn("{ ...previous, ...row }", merge.group(1))
+        # the old run's rows must not survive into the next question
+        started = re.search(r"handleStarted\(payload\) \{(.*?)\n    \},", self.quiz_js, re.S)
+        self.assertIn("this.statsMap = {};", started.group(1))
 
 
 class ChatChannelTests(SimpleTestCase):

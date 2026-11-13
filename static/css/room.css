@@ -2856,6 +2856,11 @@ body.class-is-over .room-side { pointer-events: none; }
 .quiz-result-summary { margin: .1rem 0 .5rem; font-size: .74rem; line-height: 1.7; }
 .quiz-results-heading { margin: .8rem 0 .3rem; font-size: .8rem; }
 
+/* bars for the question that was just answered, inside the dialog */
+.quiz-question-stats { margin-top: .55rem; }
+.quiz-question-stats:empty { display: none; }
+.quiz-question-stats .quiz-stat-q { font-size: .72rem; color: var(--room-muted); font-weight: 600; }
+
 /* the results block replaces the question inside the same dialog */
 .quiz-question-body.hidden, .quiz-results.hidden { display: none; }
 .quiz-results { display: grid; gap: .5rem; }

@@ -66,10 +66,10 @@ def run_payload(run: QuizRun) -> dict:
         "class_size": size,
         "show_who": size < WHO_LIST_MAX_CLASS,
         "asked_by": _asked_by_name(run),
-        # Totals only: somebody joining mid-question sees the same bars as
-        # everybody else instead of an empty panel (no names here — the
-        # host-only detail travels separately).
-        "stats": question_stats(run),
+        # Deliberately *no* stats here: this payload goes to the whole room,
+        # and a percentage bar shown to somebody who has not answered yet is
+        # just an answer key.  Totals travel per member (see
+        # ``_broadcast_stats``).
     }
 
 
@@ -134,29 +134,76 @@ def question_stats(
 
 
 def _broadcast_stats(classroom: Classroom, run: QuizRun, *, ended: bool = False) -> None:
-    """Live totals for everybody; the name-by-name detail only for the hosts."""
-    broadcast(classroom.room_code, {
-        "type": "quiz_stats",
-        "run_id": run.id,
-        "stats": question_stats(run, reveal_correct=ended),
-        "ended": ended,
-    })
+    """Percentages, addressed to the people entitled to see them.
+
+    A live bar chart is an answer key: whoever has not answered yet would only
+    have to read it.  So the numbers are *not* room-wide while the question is
+    open:
+
+    * the host team sees the whole picture at all times (plus the names when
+      the class is smaller than :data:`WHO_LIST_MAX_CLASS`);
+    * a student sees the rows of the questions **they** have answered — the
+      question they are still deciding on stays blank;
+    * once the run ends the answer can no longer change, so everybody gets
+      everything, correctness included.
+    """
     size = class_participant_count(classroom)
-    if size >= WHO_LIST_MAX_CLASS and not ended:
-        return
-    detail = question_stats(
-        run, include_names=size < WHO_LIST_MAX_CLASS, reveal_correct=ended,
+    show_who = size < WHO_LIST_MAX_CLASS
+    stats = question_stats(run, reveal_correct=ended)
+
+    if ended:
+        broadcast(classroom.room_code, {
+            "type": "quiz_stats",
+            "run_id": run.id,
+            "stats": stats,
+            "ended": True,
+        })
+
+    detail = (
+        question_stats(run, include_names=show_who, reveal_correct=True)
+        if ended else
+        question_stats(run, include_names=show_who)
     )
-    for member in ClassroomMember.objects.filter(
+    authorities = list(ClassroomMember.objects.filter(
         classroom=classroom, is_active=True, in_waiting_room=False,
         role__in=AUTHORITY_ROLES,
-    ):
+    ))
+    for member in authorities:
         notify_member(classroom.room_code, member, {
             "type": "quiz_stats_detail",
             "run_id": run.id,
             "stats": detail,
-            "show_who": size < WHO_LIST_MAX_CLASS,
+            "show_who": show_who,
             "class_size": size,
+            "ended": ended,
+        })
+    if ended:
+        return
+
+    # One frame per student who answered, carrying only their own questions.
+    answered: dict[int, set[int]] = {}
+    for member_id, question_id in QuizAnswer.objects.filter(run=run).values_list(
+        "member_id", "question_id"
+    ):
+        answered.setdefault(member_id, set()).add(question_id)
+    if not answered:
+        return
+    authority_ids = {member.id for member in authorities}
+    rows = {row["id"]: row for row in stats}
+    for member in ClassroomMember.objects.filter(
+        id__in=[mid for mid in answered if mid not in authority_ids],
+        is_active=True, in_waiting_room=False,
+    ):
+        own = [
+            rows[qid] for qid in answered[member.id] if qid in rows
+        ]
+        if not own:
+            continue
+        notify_member(classroom.room_code, member, {
+            "type": "quiz_stats",
+            "run_id": run.id,
+            "stats": own,
+            "ended": False,
         })
 
 
@@ -214,6 +261,9 @@ def start_quiz(classroom: Classroom, member: ClassroomMember, quiz: Quiz) -> Qui
     payload = {"type": "quiz_started", **run_payload(run),
                "actor_name": _member_name(member)}
     broadcast(classroom.room_code, payload)
+    # The host panel starts from an empty chart instead of nothing at all;
+    # students get their rows the moment they answer.
+    _broadcast_stats(classroom, run)
     logger.info("quiz_started", extra={"run": run.id, "room": classroom.room_code})
     return run
 

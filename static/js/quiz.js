@@ -29,6 +29,7 @@ export const QuizClient = {
     ended: false,
     stats: null,       // latest quiz_stats payload
     detail: null,      // quiz_stats_detail (names + correctness) for hosts
+    statsMap: {},      // question_id → latest row; the panel renders this
     _optionRows: 0,
 
     init({ api, identity, privileged, authority = false }) {
@@ -206,17 +207,14 @@ export const QuizClient = {
         this.ended = false;
         this.stats = null;
         this.detail = null;
+        this.statsMap = {};
         el('quiz-results')?.classList.add('hidden');
         el('quiz-results').innerHTML = '';
         el('quiz-question-body')?.classList.remove('hidden');
         const liveBox = el('quiz-live-stats');
-        if (liveBox) {
-            if (Array.isArray(payload.stats) && payload.stats.length) {
-                this._renderStats(liveBox, payload.stats, { showWho: false });
-            } else {
-                liveBox.innerHTML = '';
-            }
-        }
+        if (liveBox) liveBox.innerHTML = '';
+        const dialogStats = el('quiz-question-stats');
+        if (dialogStats) dialogStats.innerHTML = '';
         this._setActiveUI(true);
         el('quiz-live-pill')?.classList.remove('hidden');
         if (this.authority) {
@@ -236,26 +234,74 @@ export const QuizClient = {
         if (p) p.textContent = line;
     },
 
-    /** Live percentages for everybody. */
+    /**
+     * Percentages for the questions the server decided this browser may see.
+     *
+     * A student receives a row only for a question they answered (the server
+     * does not broadcast the numbers room-wide while the question is open), so
+     * the map is always "what I already answered" — nothing to gate here.
+     */
     handleStats(payload) {
         if (payload.run_id !== this.runId) return;
         this.stats = payload;
-        const box = el('quiz-live-stats');
-        if (box) this._renderStats(box, payload.stats || [], { showWho: false });
+        this.mergeStats(payload.stats);
+        this._paintStats({
+            showWho: false,
+            showCorrect: this.ended,
+        });
     },
 
-    /** Host-only: same numbers plus the names behind each option. */
+    /** Host-only: the whole picture, with the names below fifty people. */
     handleStatsDetail(payload) {
         if (payload.run_id !== this.runId) return;
         this.detail = payload;
-        if (this.ended) return;        // the results dialog already shows it
-        const box = el('quiz-live-stats');
-        if (box) {
-            this._renderStats(box, payload.stats || [], {
-                showWho: Boolean(payload.show_who),
-                showCorrect: false,
-            });
+        this.mergeStats(payload.stats);
+        this._paintStats({
+            showWho: Boolean(payload.show_who) && (this.privileged || this.authority),
+            showCorrect: Boolean(payload.ended) || this.ended,
+        });
+    },
+
+    /** Fold incoming rows into the map: a later frame only updates its own. */
+    mergeStats(rows) {
+        (rows || []).forEach((row) => {
+            if (!row || row.id == null) return;
+            const previous = this.statsMap[row.id];
+            this.statsMap[row.id] = previous ? { ...previous, ...row } : row;
+        });
+    },
+
+    /** Question order of the running quiz, for a stable panel. */
+    _statRows() {
+        const order = (this.quiz?.questions || []).map((q) => q.id);
+        const rank = (id) => {
+            const at = order.indexOf(id);
+            return at === -1 ? order.length : at;
+        };
+        return Object.values(this.statsMap).sort((a, b) => rank(a.id) - rank(b.id));
+    },
+
+    _paintStats({ showWho = false, showCorrect = false } = {}) {
+        const rows = this._statRows();
+        const panel = el('quiz-live-stats');
+        if (panel) {
+            if (rows.length) this._renderStats(panel, rows, { showWho, showCorrect });
+            else panel.innerHTML = '';
         }
+        this._renderQuestionStats();
+    },
+
+    /** The bars under the options, inside the answering dialog. */
+    _renderQuestionStats() {
+        const box = el('quiz-question-stats');
+        if (!box) return;
+        const question = (this.quiz?.questions || [])[this.qIndex];
+        const row = question ? this.statsMap[question.id] : null;
+        if (!row) {
+            box.innerHTML = '';
+            return;
+        }
+        this._renderStats(box, [row], { showWho: false, showCorrect: this.ended });
     },
 
     handleEnded(payload) {
@@ -267,13 +313,11 @@ export const QuizClient = {
 
         // The panel keeps the final numbers (percentages for everyone, names
         // for the host team in a small class) after the question closes.
-        const panel = el('quiz-live-stats');
-        if (panel && payload.stats) {
-            this._renderStats(panel, payload.stats, {
-                showWho: Boolean(payload.show_who) && (this.privileged || this.authority),
-                showCorrect: true,
-            });
-        }
+        this.mergeStats(payload.stats);
+        this._paintStats({
+            showWho: Boolean(payload.show_who) && (this.privileged || this.authority),
+            showCorrect: true,
+        });
         const titleEl = el('quiz-active-title');
         if (titleEl && payload.title) titleEl.textContent = `نتایج: ${payload.title}`;
         const progress = el('quiz-progress');
@@ -446,10 +490,13 @@ export const QuizClient = {
         el('quiz-question-text').textContent = q.text;
         el('quiz-progress-fill').style.width =
             `${Math.round(((this.qIndex + 1) / qs.length) * 100)}%`;
+        const answeredAll = Object.keys(this.answers).length === qs.length;
+        const answeredThis = this.answers[q.id] !== undefined;
         el('quiz-hint').textContent =
-            Object.keys(this.answers).length === qs.length
-                ? 'به همهٔ پرسش‌ها پاسخ داده‌اید ✓'
-                : 'با کلیک روی گزینه، پاسخ شما ثبت می‌شود.';
+            answeredAll ? 'به همهٔ پرسش‌ها پاسخ داده‌اید ✓'
+                : answeredThis
+                    ? 'پاسخ شما ثبت شد ✓ — درصدها پایین همین صفحه به‌روز می‌شود.'
+                    : 'با کلیک روی گزینه، پاسخ شما ثبت می‌شود.';
         const box = el('quiz-options');
         box.innerHTML = '';
         q.options.forEach((o) => {
@@ -463,6 +510,7 @@ export const QuizClient = {
         });
         el('quiz-prev').disabled = this.qIndex === 0;
         el('quiz-next').disabled = this.qIndex === qs.length - 1;
+        this._renderQuestionStats();
     },
 
     _go(delta) {
@@ -484,14 +532,9 @@ export const QuizClient = {
             delete this.answers[q.id];
             return;
         }
+        // Stay put: the percentages for the question just answered land right
+        // below the options, and jumping away would hide them.  «پرسش بعد»
+        // moves on when the reader is done looking.
         this._renderQuestion();
-        // gentle auto-advance to the first unanswered question
-        const qs = this.quiz.questions;
-        const unanswered = qs.findIndex((x) => this.answers[x.id] === undefined);
-        if (unanswered !== -1 && unanswered !== this.qIndex) {
-            setTimeout(() => {
-                if (this.quiz && !this.ended) { this.qIndex = unanswered; this._renderQuestion(); }
-            }, 450);
-        }
     },
 };
