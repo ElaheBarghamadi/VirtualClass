@@ -13,9 +13,17 @@ from django.test import TransactionTestCase
 from chat.routing import websocket_urlpatterns as chat_routes
 from classrooms import consumers as classrooms_consumers
 from classrooms.routing import websocket_urlpatterns as classroom_routes
-from classrooms.services import create_classroom, join_classroom
+from classrooms.services import create_classroom, join_classroom, set_member_permission
 
 User = get_user_model()
+
+
+def allow(classroom, owner, user, *capabilities):
+    """Grant capabilities to one member, exactly like the owner does by hand."""
+    member = classroom.members.get(user=user)
+    for capability in capabilities:
+        set_member_permission(classroom, owner, member.id, capability, True)
+    return member
 
 
 def app_with_user(user, routes):
@@ -253,6 +261,7 @@ class RaiseHandTests(TransactionTestCase):
         student = User.objects.create_user(username="rh_student", password="x")
         classroom = create_classroom(owner, title="Hands")
         join_classroom(classroom, student)
+        allow(classroom, owner, student, "can_raise_hand")
 
         async def scenario():
             owner_ws = WebsocketCommunicator(
@@ -293,7 +302,8 @@ class ReactionTests(TransactionTestCase):
         student = User.objects.create_user(username="rx_student", password="x")
         classroom = create_classroom(owner, title="Reactions")
         join_classroom(classroom, student)
-        student_member_id = classroom.members.get(user=student).id
+        # Reactions ride the raise-hand grant: nothing is on by default.
+        student_member_id = allow(classroom, owner, student, "can_raise_hand").id
 
         async def scenario():
             owner_ws = WebsocketCommunicator(
@@ -350,7 +360,8 @@ class CaptionRelayTests(TransactionTestCase):
         student = User.objects.create_user(username="cap_student", password="x")
         classroom = create_classroom(owner, title="Captions")
         join_classroom(classroom, student)
-        student_member_id = classroom.members.get(user=student).id
+        # Captions are the speaker's own words: they follow the microphone grant.
+        student_member_id = allow(classroom, owner, student, "can_use_microphone").id
 
         async def scenario():
             owner_ws = WebsocketCommunicator(
@@ -418,6 +429,8 @@ class ReactionSummaryTests(TransactionTestCase):
         classroom = create_classroom(owner, title="Digest")
         join_classroom(classroom, first)
         join_classroom(classroom, second)
+        allow(classroom, owner, first, "can_raise_hand")
+        allow(classroom, owner, second, "can_raise_hand")
         return owner, first, second, classroom
 
     def test_multiple_reactions_become_one_chat_digest(self):
@@ -489,6 +502,7 @@ class ChatConsumerTests(TransactionTestCase):
         student = User.objects.create_user(username="c_student", password="x")
         classroom = create_classroom(owner, title="Chat")
         join_classroom(classroom, student)
+        allow(classroom, owner, student, "can_send_messages")
 
         async def scenario():
             owner_ws = WebsocketCommunicator(

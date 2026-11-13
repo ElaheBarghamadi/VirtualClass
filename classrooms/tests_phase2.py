@@ -87,6 +87,8 @@ class HostActionTests(TestCase):
 
     def test_outsider_cannot_touch_other_classroom(self):
         """IDOR: a member of no classroom gets 403 on host endpoints."""
+        # A real grant to revoke, so a silent success would be visible.
+        set_member_permission(self.classroom, self.owner, self.stu_member.id, "can_use_camera", True)
         self.client.login(username="h_outsider", password=PASSWORD)
         response = self.client.post(
             self._url("room:member_permission", self.stu_member.id),
@@ -94,6 +96,7 @@ class HostActionTests(TestCase):
             content_type="application/json",
         )
         self.assertEqual(response.status_code, 403)
+        # The stored grant is untouched by an outsider.
         self.stu_member.refresh_from_db()
         self.assertTrue(self.stu_member.can_use_camera)
 
@@ -181,6 +184,11 @@ class HostActionTests(TestCase):
     def test_participant_payload_carries_effective_permissions(self):
         data = participant_payload(self.stu_member, self.classroom)
         self.assertIn("permissions", data)
+        # Read-only until granted; then a moderator mute takes the mic away again.
+        self.assertFalse(data["permissions"]["can_use_microphone"])
+        set_member_permission(self.classroom, self.owner, self.stu_member.id, "can_use_microphone", True)
+        self.stu_member.refresh_from_db()
+        data = participant_payload(self.stu_member, self.classroom)
         self.assertTrue(data["permissions"]["can_use_microphone"])
         self.stu_member.muted = True
         self.stu_member.save(update_fields=["muted"])
@@ -222,15 +230,16 @@ class HostActionTests(TestCase):
 
     # -- settings ------------------------------------------------------------------
     def test_settings_update(self):
-        # Grant the member flag first (room settings only *restrict* students):
+        # A per-member grant is sufficient on its own: screen sharing is never
+        # handed to students room-wide (that was the old
+        # ``allow_student_screen_share`` switch, now a legacy no-op).
         set_member_permission(self.classroom, self.owner, self.stu_member.id, "can_share_screen", True)
-        self.classroom.allow_student_screen_share = True
-        self.classroom.save()
         self.stu_member.refresh_from_db()
-        perms = effective_permissions(self.stu_member, self.classroom)
-        self.assertTrue(perms["can_share_screen"])
+        self.classroom.refresh_from_db()
+        self.assertFalse(self.classroom.allow_student_screen_share)
+        self.assertTrue(effective_permissions(self.stu_member, self.classroom)["can_share_screen"])
 
-        # Owner disables screen share + chat room-wide through the API:
+        # Owner silences chat room-wide through the API:
         response = self.client.post(
             self._url("room:settings"),
             json.dumps({"settings": {"allow_student_screen_share": False, "chat_disabled": True}}),
@@ -238,13 +247,12 @@ class HostActionTests(TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.classroom.refresh_from_db()
-        self.assertFalse(self.classroom.allow_student_screen_share)
         self.assertTrue(self.classroom.chat_disabled)
 
-        # Effective permissions follow BOTH layers:
+        # Participation switches still bite; the per-member grant survives.
         perms = effective_permissions(self.stu_member, self.classroom)
-        self.assertFalse(perms["can_share_screen"])
-        self.assertFalse(perms["can_send_messages"])  # chat_disabled
+        self.assertFalse(perms["can_send_messages"])   # chat_disabled
+        self.assertTrue(perms["can_share_screen"])     # granted by hand
 
     def test_non_owner_cannot_change_settings(self):
         self.client.login(username="h_mod", password=PASSWORD)
@@ -502,7 +510,16 @@ class MediaTokenTests(TestCase):
         self.client.login(username="m_student", password=PASSWORD)
         response = self.client.get(self.url)
         claims = self._decode(response.json()["token"])
-        # STUDENT defaults: mic+camera yes, screen share no.
+        # A student who has not been granted anything may join and watch, but
+        # publish nothing at all — the SFU enforces this, not the browser.
+        self.assertFalse(claims["video"].get("canPublish", False))
+        self.assertFalse(claims["video"].get("canPublishSources") or [])
+
+        # After the owner grants mic + camera the token follows the grants.
+        member = ClassroomMember.objects.get(classroom=self.classroom, user=self.student)
+        set_member_permission(self.classroom, self.owner, member.id, "can_use_microphone", True)
+        set_member_permission(self.classroom, self.owner, member.id, "can_use_camera", True)
+        claims = self._decode(self.client.get(self.url).json()["token"])
         self.assertEqual(set(claims["video"]["canPublishSources"]), {"camera", "microphone"})
 
     def test_muted_student_gets_no_microphone_grant(self):

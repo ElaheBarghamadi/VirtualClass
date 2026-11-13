@@ -53,12 +53,13 @@ class PresentationImpl {
         this._ready = false;
     }
 
-    init({ roomCode, identity, canAnnotate, canPresent, api, annotationOpen, presentedFileId }) {
+    init({ roomCode, identity, canAnnotate, canPresent, isAuthority, api, annotationOpen, presentedFileId }) {
         this.roomCode = roomCode;
         this.identity = identity;
         this.canAnnotate = canAnnotate;
         this.canPresent = canPresent;
         this.annotationOpen = annotationOpen !== false;
+        this.isAuthority = Boolean(isAuthority);
         this.presentedFileId = presentedFileId ? Number(presentedFileId) : null;
         this.api = api;
         this._bindToolbar();
@@ -96,7 +97,11 @@ class PresentationImpl {
      * only decides what the UI offers.
      */
     _annotAllowed() {
-        if (this.canAnnotate) return true;
+        // Writing on a slide is writing: it needs the same per-member grant as
+        // the board.  «Annotation open» is not a licence for the whole room any
+        // more — it only decides whether a *granted* student may join in.
+        if (!this.canAnnotate) return false;
+        if (this.isAuthority) return true;
         // Free ink only ever targets the file the whole room is watching — a
         // private preview of some other file stays read-only (the server
         // rejects those ops anyway, so the UI must not offer them).

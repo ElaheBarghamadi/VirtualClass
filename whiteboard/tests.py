@@ -104,9 +104,9 @@ class WhiteboardConsumerTests(TransactionTestCase):
 
     def test_student_granted_permission_can_draw(self):
         member = self.classroom.members.get(user=self.student)
-        # Both layers must allow it: the member flag AND the room setting.
-        self.classroom.allow_student_whiteboard = True
-        self.classroom.save()
+        # The per-member grant is the only gate; the old room-wide
+        # ``allow_student_whiteboard`` switch no longer widens anything.
+        self.assertFalse(self.classroom.allow_student_whiteboard)
         set_member_permission(self.classroom, self.owner, member.id, "can_use_whiteboard", True)
 
         async def scenario():
@@ -284,7 +284,10 @@ class ChatModerationTests(TransactionTestCase):
         self.owner = User.objects.create_user(username="cm_owner", password="x")
         self.student = User.objects.create_user(username="cm_student", password="x")
         self.classroom = create_classroom(self.owner, title="CM")
-        join_classroom(self.classroom, self.student)
+        student = join_classroom(self.classroom, self.student)
+        # Chat is a per-member grant: the student has to be allowed to talk
+        # before moderation (deleting their message) can be exercised.
+        set_member_permission(self.classroom, self.owner, student.id, "can_send_messages", True)
 
     def _ws(self, user):
         return WebsocketCommunicator(
@@ -688,7 +691,37 @@ class SharedSlideAnnotationTests(TransactionTestCase):
             "color": "#000", "width": 2, "id": ident, "page": 1, "file_id": fid,
         }}
 
-    def test_viewer_without_board_permission_can_annotate_the_slide(self):
+    def test_viewer_without_board_permission_cannot_annotate_the_slide(self):
+        """«Annotation is open» is not a licence for the whole room any more.
+
+        Writing on the shared slide is writing: it needs the same per-member
+        grant as the board, and only the owner can hand it out.
+        """
+        async def scenario():
+            vw = self._ws(self.viewer)
+            connected, _ = await vw.connect()
+            assert connected
+            await vw.receive_json_from()
+
+            await vw.send_json_to(self._draw(self.shared.id, "note1"))
+            msg = await vw.receive_json_from()
+            assert msg["type"] == "error", msg
+            await vw.disconnect()
+
+        async_to_sync(scenario)()
+        assert not WhiteboardEvent.objects.filter(operation__id="note1").exists()
+
+    def _grant(self, capability="can_use_whiteboard"):
+        from classrooms.models import ClassroomMember
+
+        member = ClassroomMember.objects.get(classroom=self.classroom, user=self.viewer)
+        setattr(member, capability, True)
+        member.save(update_fields=[capability])
+        return member
+
+    def test_granted_student_may_annotate_the_open_slide(self):
+        self._grant()
+
         async def scenario():
             ow = self._ws(self.owner)
             connected, _ = await ow.connect()
@@ -699,7 +732,7 @@ class SharedSlideAnnotationTests(TransactionTestCase):
             assert connected
             await vw.receive_json_from()
 
-            await vw.send_json_to(self._draw(self.shared.id, "note1"))
+            await vw.send_json_to(self._draw(self.shared.id, "note4"))
             msg = await ow.receive_json_from()
             assert msg["type"] == "whiteboard_operation", msg
             assert msg["op"]["file_id"] == self.shared.id
@@ -708,7 +741,50 @@ class SharedSlideAnnotationTests(TransactionTestCase):
             await vw.disconnect()
 
         async_to_sync(scenario)()
-        assert WhiteboardEvent.objects.filter(operation__id="note1").exists()
+        assert WhiteboardEvent.objects.filter(operation__id="note4").exists()
+
+    def test_granted_student_can_write_the_board_but_not_restructure_it(self):
+        """The grant is ink.  Pages, backgrounds and «clear» stay with the roles."""
+        self._grant()
+
+        async def scenario():
+            # The sender is never echoed its own op (seq guard), so watch the
+            # owner's socket for the accepted stroke.
+            ow = self._ws(self.owner)
+            connected, _ = await ow.connect()
+            assert connected
+            await ow.receive_json_from()
+
+            vw = self._ws(self.viewer)
+            connected, _ = await vw.connect()
+            assert connected
+            await vw.receive_json_from()
+
+            await vw.send_json_to({"action": "op", "op": {
+                "type": "draw", "tool": "pen", "points": [[1, 2], [3, 4]],
+                "color": "#000", "width": 2, "id": "ink1", "page": 1,
+            }})
+            msg = await ow.receive_json_from()
+            assert msg["type"] == "whiteboard_operation", msg
+            assert msg["op"]["id"] == "ink1"
+            assert msg["actor_identity"] == f"u:{self.viewer.id}"
+
+            for op in (
+                {"type": "page_add", "page": 2, "id": "pg1"},
+                {"type": "page_go", "page": 2, "id": "pg2"},
+                {"type": "page_setup", "page": 1, "grid": "dots", "id": "pg3"},
+                {"type": "clear", "page": 1, "id": "pg4"},
+            ):
+                await vw.send_json_to({"action": "op", "op": op})
+                msg = await vw.receive_json_from()
+                assert msg["type"] == "error", (op, msg)
+            await ow.disconnect()
+            await vw.disconnect()
+
+        async_to_sync(scenario)()
+        assert WhiteboardEvent.objects.filter(operation__id="ink1").exists()
+        for forbidden in ("pg1", "pg2", "pg3", "pg4"):
+            assert not WhiteboardEvent.objects.filter(operation__id=forbidden).exists(), forbidden
 
     def test_locked_presentation_rejects_viewer_ink(self):
         self.classroom.annotation_open = False

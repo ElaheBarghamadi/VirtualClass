@@ -32,7 +32,7 @@ from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from classrooms.models import ClassroomMember
-from classrooms.permissions import effective_permissions
+from classrooms.permissions import effective_permissions, may_write_board
 from classrooms.services import member_group, resolve_scope_member
 from classrooms.ws_security import RateLimiter, SafeJsonWebsocketConsumer, describe_origin, ws_origin_allowed
 
@@ -375,23 +375,16 @@ class WhiteboardConsumer(SafeJsonWebsocketConsumer):
 
     @staticmethod
     def _may_write(member, op: dict | None) -> bool:
-        """Who may put ink on screen — board rules plus shared-slide rules."""
-        if effective_permissions(member, member.classroom)["can_use_whiteboard"]:
-            return True
-        # Shared material is a different capability from the free whiteboard:
-        # while the presenter leaves annotation open, anybody in the room may
-        # write on the file that is actually on screen.  Anything else (board
-        # ops, other files) still needs can_use_whiteboard.
-        if not op:
-            return False
-        classroom = member.classroom
-        file_id = op.get("file_id")
-        if not classroom.annotation_open or not classroom.current_file_id:
-            return False
-        if isinstance(file_id, bool) or not isinstance(file_id, int):
-            return False
-        # Only the file being presented — not any file id a client makes up.
-        return file_id == classroom.current_file_id
+        """Who may put ink on screen — see ``permissions.may_write_board``.
+
+        Writing always needs the per-member ``can_use_whiteboard`` grant;
+        page-structure operations need an authority role on top of that, and a
+        granted non-authority member may only annotate the slide that is
+        actually on screen while the presenter has annotation open.  The old
+        "anybody in the room may annotate the open slide" bypass is gone: a
+        student without a grant writes nothing at all.
+        """
+        return may_write_board(member, member.classroom, op)
 
     @staticmethod
     def _chunk(items: list, size_hint=1024) -> list[list]:

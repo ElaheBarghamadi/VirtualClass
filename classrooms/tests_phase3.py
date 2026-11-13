@@ -34,6 +34,7 @@ from .services import (
     join_classroom,
     join_classroom_guest,
     set_member_muted,
+    set_member_permission,
     validate_display_name,
 )
 
@@ -226,14 +227,19 @@ class GuestPermissionTests(TestCase):
         self.guest = join_classroom_guest(self.classroom, "Ali")
 
     def test_guest_default_permissions(self):
+        """A guest is view-only: nothing is handed out by role or by link."""
+        perms = effective_permissions(self.guest, self.classroom)
+        self.assertFalse(any(perms.values()), perms)
+
+    def test_guest_can_be_granted_one_capability_at_a_time(self):
+        set_member_permission(self.classroom, self.owner, self.guest.id, "can_use_microphone", True)
+        self.guest.refresh_from_db()
         perms = effective_permissions(self.guest, self.classroom)
         self.assertTrue(perms["can_use_microphone"])
-        self.assertTrue(perms["can_use_camera"])
-        self.assertTrue(perms["can_send_messages"])
-        self.assertTrue(perms["can_raise_hand"])
-        self.assertFalse(perms["can_share_screen"])
+        # Still no board, no camera, no messages: grants are one flag each.
+        self.assertFalse(perms["can_use_camera"])
         self.assertFalse(perms["can_use_whiteboard"])
-        self.assertFalse(perms["can_present"])
+        self.assertFalse(perms["can_send_messages"])
 
     def test_guests_can_never_upload_files(self):
         self.guest.can_upload_files = True
@@ -242,9 +248,18 @@ class GuestPermissionTests(TestCase):
         self.assertFalse(effective_permissions(self.guest, self.classroom)["can_upload_files"])
 
     def test_room_settings_restrict_guests_like_students(self):
+        # The room-wide switches are master silencers: even a granted guest
+        # loses the capability while the host has it switched off.
+        set_member_permission(self.classroom, self.owner, self.guest.id, "can_use_microphone", True)
+        set_member_permission(self.classroom, self.owner, self.guest.id, "can_send_messages", True)
+        self.guest.refresh_from_db()
+        self.assertEqual(
+            effective_permissions(self.guest, self.classroom)["can_use_microphone"], True
+        )
         self.classroom.allow_student_mic = False
         self.classroom.chat_disabled = True
         self.classroom.save(update_fields=["allow_student_mic", "chat_disabled"])
+        self.guest.refresh_from_db()
         perms = effective_permissions(self.guest, self.classroom)
         self.assertFalse(perms["can_use_microphone"])
         self.assertFalse(perms["can_send_messages"])
@@ -556,19 +571,15 @@ class RtcSignalRelayTests(TransactionTestCase):
     def test_media_state_does_not_rebroadcast_stale_class_permissions(self):
         from asgiref.sync import sync_to_async
         from classrooms.models import Classroom
-        from classrooms.services import set_member_permission, update_settings
+        from classrooms.services import set_member_permission
 
         async def scenario():
             owner_ws = await self._connected(self.owner)
             student_ws = await self._connected(self.student)
 
-            # The sockets were opened while this class-wide grant was false.
-            # Update the policy and member permission without reconnecting.
-            await sync_to_async(update_settings)(
-                self.classroom, self.owner, {"allow_student_whiteboard": True},
-            )
-            await self._receive_typed(owner_ws, "settings_changed")
-            await self._receive_typed(student_ws, "settings_changed")
+            # The sockets were opened before this per-member grant existed; the
+            # grant has to reach every peer without reconnecting.  (No room-wide
+            # switch is involved any more — a grant is per member.)
             fresh_classroom = await sync_to_async(Classroom.objects.get)(id=self.classroom.id)
             await sync_to_async(set_member_permission)(
                 fresh_classroom, self.owner, self.stu_member.id, "can_use_whiteboard", True,
@@ -590,11 +601,16 @@ class RtcSignalRelayTests(TransactionTestCase):
         async_to_sync(scenario)()
 
     def test_room_setting_change_pushes_fresh_effective_permissions(self):
+        """A room-wide switch still re-gates the capabilities it owns.
+
+        ``allow_student_camera`` is a participation switch (it can take the
+        camera away from everyone at once), so flipping it must push fresh
+        effective permissions.  The whiteboard is deliberately not one of these
+        — it is granted per member and a room switch cannot revoke it.
+        """
         from asgiref.sync import sync_to_async
         from classrooms.services import set_member_permission, update_settings
 
-        self.classroom.allow_student_whiteboard = True
-        self.classroom.save(update_fields=["allow_student_whiteboard"])
         set_member_permission(
             self.classroom, self.owner, self.stu_member.id, "can_use_whiteboard", True,
         )
@@ -604,22 +620,24 @@ class RtcSignalRelayTests(TransactionTestCase):
             owner_ws = await self._connected(self.owner)
             student_ws = await self._connected(self.student)
             await sync_to_async(update_settings)(
-                self.classroom, self.owner, {"allow_student_whiteboard": False},
+                self.classroom, self.owner, {"allow_student_camera": False},
             )
             owner_event = await self._receive_typed(owner_ws, "settings_changed")
             student_event = await self._receive_typed(student_ws, "settings_changed")
             for event in (owner_event, student_event):
                 updates = {entry["identity"]: entry for entry in event["permission_updates"]}
-                assert updates[f"u:{self.owner.id}"]["permissions"]["can_use_whiteboard"] is True
-                assert updates[f"u:{self.student.id}"]["permissions"]["can_use_whiteboard"] is False
+                assert updates[f"u:{self.owner.id}"]["permissions"]["can_use_camera"] is True
+                assert updates[f"u:{self.student.id}"]["permissions"]["can_use_camera"] is False
+                # …and the per-member board grant survives the room-wide switch
+                assert updates[f"u:{self.student.id}"]["permissions"]["can_use_whiteboard"] is True
             await owner_ws.disconnect()
             await student_ws.disconnect()
 
         async_to_sync(scenario)()
         self.stu_member.refresh_from_db()
         self.classroom.refresh_from_db()
-        self.assertTrue(self.stu_member.can_use_whiteboard)  # stored grant remains
-        self.assertFalse(self.classroom.allow_student_whiteboard)
+        self.assertTrue(self.stu_member.can_use_whiteboard)  # per-member grant remains
+        self.assertFalse(self.classroom.allow_student_camera)
 
 
 class WaitingRoomPresenceTests(TransactionTestCase):

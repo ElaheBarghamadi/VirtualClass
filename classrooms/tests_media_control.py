@@ -154,24 +154,31 @@ class ServiceRevocationTests(TestCase):
     def test_mute_reaches_the_sfu_but_unmute_does_not(self):
         with mock.patch.object(media, "mute_participant") as mute:
             set_member_muted(self.classroom, self.owner, self.member.id, True)
-        self.assertEqual(mute.call_args.kwargs.get("source"), "audio")
+        # An ungranted student publishes nothing, so the re-sync silences both
+        # sources; the mute itself is the audio one.
+        sources = [call.kwargs.get("source") for call in mute.call_args_list]
+        self.assertIn("audio", sources)
         with mock.patch.object(media, "mute_participant") as mute:
             set_member_muted(self.classroom, self.owner, self.member.id, False)
         mute.assert_not_called()
 
     def test_revoking_the_microphone_mutes_the_microphone(self):
+        set_member_permission(self.classroom, self.owner, self.member.id, "can_use_microphone", True)
         with mock.patch.object(media, "mute_participant") as mute:
             set_member_permission(
                 self.classroom, self.owner, self.member.id, "can_use_microphone", False
             )
-        self.assertEqual(mute.call_args.kwargs.get("source"), "audio")
+        sources = [call.kwargs.get("source") for call in mute.call_args_list]
+        self.assertIn("audio", sources)
 
     def test_revoking_the_camera_mutes_the_camera(self):
+        set_member_permission(self.classroom, self.owner, self.member.id, "can_use_camera", True)
         with mock.patch.object(media, "mute_participant") as mute:
             set_member_permission(
                 self.classroom, self.owner, self.member.id, "can_use_camera", False
             )
-        self.assertEqual(mute.call_args.kwargs.get("source"), "video")
+        sources = [call.kwargs.get("source") for call in mute.call_args_list]
+        self.assertIn("video", sources)
 
     def test_mute_all_reaches_the_sfu(self):
         with mock.patch.object(media, "mute_all_participants") as mute_all_sfu:

@@ -164,21 +164,21 @@ class HostActionInputTests(TestCase):
         self.student_member.refresh_from_db()
         self.assertFalse(self.student_member.can_use_whiteboard)
 
-    def test_permission_response_returns_effective_value_under_room_policy(self):
+    def test_whiteboard_grant_is_per_member_and_effective_at_once(self):
+        """A manual grant is the grant: no room-wide switch has to agree.
+
+        (The old ``allow_student_whiteboard`` switch handed the board to every
+        student at once; it is legacy now and widens nothing.)
+        """
         url = reverse("room:member_permission", args=[self.classroom.room_code, self.student_member.id])
         payload = '{"permission":"can_use_whiteboard","value":true}'
         response = self._post(url, payload)
         self.assertEqual(response.status_code, 200)
-        self.assertFalse(response.json()["permissions"]["can_use_whiteboard"])
-        self.student_member.refresh_from_db()
-        self.assertTrue(self.student_member.can_use_whiteboard)  # stored grant; global policy still wins
-
-        self.classroom.allow_student_whiteboard = True
-        self.classroom.save(update_fields=["allow_student_whiteboard"])
-        response = self._post(url, payload)
-        self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["permissions"]["can_use_whiteboard"])
+        self.student_member.refresh_from_db()
+        self.assertTrue(self.student_member.can_use_whiteboard)
 
+    def test_permission_response_returns_effective_value_under_room_policy(self):
         camera_url = reverse("room:member_permission", args=[self.classroom.room_code, self.student_member.id])
         self.classroom.allow_student_camera = False
         self.classroom.save(update_fields=["allow_student_camera"])

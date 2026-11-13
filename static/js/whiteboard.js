@@ -120,6 +120,10 @@ class WhiteboardImpl {
         this.myRedo = [];
         this._replaying = false;   // history replay: record only, paint once
         this.canDraw = false;
+        // Structural control (open/close for the room, add/switch pages, page
+        // background, clear): OWNER/MODERATOR/PRESENTER only.  A student can be
+        // granted ink without ever being allowed to reorganise the board.
+        this.canControlBoard = false;
         this.unavailable = false;  // fabric failed to load
         this.identity = null;
         this.retryDelay = 1000;
@@ -151,9 +155,10 @@ class WhiteboardImpl {
         this._spaceDown = false;
     }
 
-    init({ roomCode, identity, canDraw }) {
+    init({ roomCode, identity, canDraw, canControlBoard }) {
         this.identity = identity;
         this.canDraw = canDraw;
+        this.canControlBoard = Boolean(canControlBoard);
         this._syncDrawGate();
         // Clear, permanent feedback for viewers who may not draw — instead of
         // a toolbar that looks usable but silently does nothing.
@@ -215,7 +220,11 @@ class WhiteboardImpl {
      */
     _syncDrawGate() {
         const on = Boolean(this.canDraw);
-        document.querySelector('.wb-toolbar')?.classList.toggle('no-draw', !on);
+        const toolbar = document.querySelector('.wb-toolbar');
+        toolbar?.classList.toggle('no-draw', !on);
+        // Pages / background / clear disappear for anybody who does not own the
+        // board — including a student the owner allowed to write on it.
+        toolbar?.classList.toggle('no-structure', !this.canControlBoard);
         document.getElementById('wb-mode-chip')?.classList.toggle('hidden', on);
         document.getElementById('wb-nodraw-hint')?.classList.toggle('hidden', on);
         document.getElementById('view-whiteboard')?.classList.toggle('readonly', !on);
@@ -603,12 +612,12 @@ class WhiteboardImpl {
         // page background colour — a colour-picker drag fires dozens of input
         // events; they are merged into ONE op (and one DB row).
         document.getElementById('wb-bg')?.addEventListener('input', (e) => {
-            if (!this.canDraw) return this._deny();
+            if (!this.canControlBoard) return this._deny();
             this._queueSetup({ color: e.target.value });
         });
         // grid style cycler: none → grid → dots → none
         document.getElementById('wb-grid')?.addEventListener('click', () => {
-            if (!this.canDraw) return this._deny();
+            if (!this.canControlBoard) return this._deny();
             const order = ['none', 'grid', 'dots'];
             const cur = this._pendingSetup?.grid || this._pageGrid.get(this.page) || 'none';
             const next = order[(order.indexOf(cur) + 1) % order.length];
@@ -619,7 +628,9 @@ class WhiteboardImpl {
     /** Activate a tool (also used by the keyboard shortcuts). */
     setTool(tool) {
         if (!tool) return;
-        if (!this.canDraw && tool !== 'laser') return this._deny();
+        // The laser pointer is a write operation as well: it draws on every
+        // screen in the room, so it needs the same grant as the pen.
+        if (!this.canDraw) return this._deny();
         this.tool = tool;
         document.querySelectorAll('.wb-toolbar .wb-tool').forEach((b) => {
             const on = b.dataset.tool === tool;
@@ -755,14 +766,17 @@ class WhiteboardImpl {
         this.page = n;
         this._repaintPage();
         this._updatePageUI();
-        // presenters take the whole class with them
-        if (broadcast && this.canDraw) {
+        // Only the authority roles take the whole class with them; a granted
+        // student flips pages on their own screen and never drags the room.
+        if (broadcast && this.canControlBoard) {
             this._sendOp({ type: 'page_go', page: n, id: this._id() });
         }
     }
 
     addPage() {
-        if (!this.canDraw) return this._deny();
+        if (!this.canControlBoard) {
+            return this._deny('صفحهٔ جدید فقط توسط مالک، مدیر جلسه یا ارائه‌دهنده ساخته می‌شود.');
+        }
         if (this.pageCount >= MAX_PAGES) {
             toast(`بیشتر از ${MAX_PAGES.toLocaleString('fa-IR')} صفحه پشتیبانی نمی‌شود.`, 'warning');
             return;
@@ -1834,7 +1848,9 @@ class WhiteboardImpl {
             }
             this._syncEditState();
         } else if (action === 'clear') {
-            if (!this.canDraw) return this._deny();
+            if (!this.canControlBoard) {
+                return this._deny('پاک‌کردن صفحهٔ مشترک فقط توسط مالک، مدیر جلسه یا ارائه‌دهنده انجام می‌شود.');
+            }
             if (!confirm('فقط صفحهٔ جاری برای همه پاک شود؟')) return;
             this._cancelStroke();
             const op = { type: 'clear', id: this._id(), page: this.page };

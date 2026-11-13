@@ -57,8 +57,6 @@ class ClassroomForm(forms.ModelForm):
             "allow_student_chat",
             "allow_student_mic",
             "allow_student_camera",
-            "allow_student_screen_share",
-            "allow_student_whiteboard",
             "allow_file_upload",
             "show_chat_default",
             "accent_color",
@@ -70,11 +68,13 @@ class ClassroomForm(forms.ModelForm):
             "is_password_protected": "محافظت با رمز عبور",
             "allow_guests": "ورود مهمان با لینک (بدون حساب)",
             "enable_waiting_room": "تأیید ورود توسط میزبان (اتاق انتظار)",
-            "allow_student_chat": "گفتگوی متنی",
-            "allow_student_mic": "میکروفون",
-            "allow_student_camera": "دوربین",
-            "allow_student_screen_share": "اشتراک صفحه",
-            "allow_student_whiteboard": "تختهٔ سفید",
+            # Room-wide ceilings, not invitations: a student/guest holds no
+            # capability until the owner grants it per member (see
+            # ``permissions.ROLE_DEFAULTS``); these switches can only take one
+            # away again from everybody at once.
+            "allow_student_chat": "گفتگوی متنی (کلید کلی)",
+            "allow_student_mic": "میکروفون (کلید کلی)",
+            "allow_student_camera": "دوربین (کلید کلی)",
             "allow_file_upload": "بارگذاری فایل",
             "show_chat_default": "پنل گفتگو در شروع باز باشد",
             "accent_color": "رنگ کلاس",
@@ -130,8 +130,6 @@ class ClassroomForm(forms.ModelForm):
             "allow_student_chat": self.cleaned_data.get("allow_student_chat", True),
             "allow_student_mic": self.cleaned_data.get("allow_student_mic", True),
             "allow_student_camera": self.cleaned_data.get("allow_student_camera", True),
-            "allow_student_screen_share": self.cleaned_data.get("allow_student_screen_share", False),
-            "allow_student_whiteboard": self.cleaned_data.get("allow_student_whiteboard", False),
             "allow_file_upload": self.cleaned_data.get("allow_file_upload", True),
             "show_chat_default": self.cleaned_data.get("show_chat_default", True),
             "accent_color": self.cleaned_data.get("accent_color", "") or "",
@@ -247,11 +245,12 @@ class SessionScheduleForm(forms.ModelForm):
 
 SETTING_LABELS = {
     "enable_waiting_room": "اتاق انتظار (تأیید ورود توسط میزبان)",
-    "allow_student_chat": "دانش‌آموزان بتوانند پیام بفرستند",
-    "allow_student_mic": "دانش‌آموزان بتوانند میکروفون روشن کنند",
-    "allow_student_camera": "دانش‌آموزان بتوانند دوربین روشن کنند",
-    "allow_student_screen_share": "دانش‌آموزان بتوانند صفحه به اشتراک بگذارند",
-    "allow_student_whiteboard": "دانش‌آموزان بتوانند از تخته استفاده کنند",
+    # Master switches: they never hand a capability to anybody, they only stop
+    # a per-member grant from taking effect (owner grants live in the
+    # participants panel).
+    "allow_student_chat": "سقف کلی ارسال پیام (مجوز تکی لازم است)",
+    "allow_student_mic": "سقف کلی میکروفون (مجوز تکی لازم است)",
+    "allow_student_camera": "سقف کلی دوربین (مجوز تکی لازم است)",
     "allow_file_upload": "غیرمالک بتواند فایل بارگذاری کند",
     "chat_disabled": "گفتگو برای همه قطع شود",
 }

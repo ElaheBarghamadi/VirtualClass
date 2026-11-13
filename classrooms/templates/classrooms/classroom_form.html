@@ -121,20 +121,22 @@
                 <span class="builder-step">۳</span>
                 <div>
                     <h2>امکانات دانش‌آموز</h2>
-                    <p>هر کدام را که لازم نیست همان اول خاموش کنید؛ در کلاس هم قابل تغییر است.</p>
+                    <p>دانش‌آموز و مهمان پیش‌فرض فقط تماشاگرند: نه میکروفون، نه دوربین، نه گفتگو.
+                        هر دسترسی را در کلاس، تکی و از فهرست شرکت‌کنندگان بدهید.</p>
+                    <p class="muted small">کلیدهای زیر «سقف کلی» را تعیین می‌کنند: اگر خاموش باشند آن
+                        دسترسی — حتی پس از دادنِ مجوز تکی — بسته می‌ماند. تختهٔ سفید، اشتراک صفحه و
+                        نوشتن روی ارائه همیشه تکی داده می‌شود.</p>
                 </div>
             </header>
             <div class="feature-toggles">
                 {% for field in form %}
-                    {% if field.name == "allow_student_chat" or field.name == "allow_student_mic" or field.name == "allow_student_camera" or field.name == "allow_student_screen_share" or field.name == "allow_student_whiteboard" or field.name == "allow_file_upload" %}
+                    {% if field.name == "allow_student_chat" or field.name == "allow_student_mic" or field.name == "allow_student_camera" or field.name == "allow_file_upload" %}
                         <label class="feature-toggle" for="{{ field.id_for_label }}">
                             {{ field }}
                             <span class="ft-icon">
                                 {% if field.name == "allow_student_chat" %}<svg viewBox="0 0 24 24" aria-hidden="true"><use href="#b-chat"/></svg>
                                 {% elif field.name == "allow_student_mic" %}<svg viewBox="0 0 24 24" aria-hidden="true"><use href="#b-mic"/></svg>
                                 {% elif field.name == "allow_student_camera" %}<svg viewBox="0 0 24 24" aria-hidden="true"><use href="#b-camera"/></svg>
-                                {% elif field.name == "allow_student_screen_share" %}<svg viewBox="0 0 24 24" aria-hidden="true"><use href="#b-screen"/></svg>
-                                {% elif field.name == "allow_student_whiteboard" %}<svg viewBox="0 0 24 24" aria-hidden="true"><use href="#b-board"/></svg>
                                 {% else %}<svg viewBox="0 0 24 24" aria-hidden="true"><use href="#b-file"/></svg>{% endif %}
                             </span>
                             <span class="ft-text">
@@ -273,8 +275,6 @@
             ['id_allow_student_chat', 'گفتگو'],
             ['id_allow_student_mic', 'میکروفون'],
             ['id_allow_student_camera', 'دوربین'],
-            ['id_allow_student_screen_share', 'اشتراک صفحه'],
-            ['id_allow_student_whiteboard', 'تخته سفید'],
             ['id_allow_file_upload', 'فایل'],
         ];
         const list = $('cp-features');

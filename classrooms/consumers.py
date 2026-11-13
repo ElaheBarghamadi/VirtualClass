@@ -234,7 +234,13 @@ class ClassroomConsumer(SafeJsonWebsocketConsumer):
 
         if action == "reaction":
             # Ephemeral by design: reactions are never stored, they only
-            # animate everyone's screen for a couple of seconds.
+            # animate everyone's screen for a couple of seconds.  They are a
+            # voice signal like a raised hand, so they ride the same grant: a
+            # view-only member sends nothing at all until the owner allows it.
+            perms = await self._effective_permissions()
+            if not perms.get("can_raise_hand"):
+                await self.send_json({"type": "error", "message": "اجازهٔ ارسال واکنش ندارید."})
+                return
             key = content.get("reaction")
             if key not in REACTION_KEYS:
                 return
@@ -254,6 +260,11 @@ class ClassroomConsumer(SafeJsonWebsocketConsumer):
             # Speech-to-text happens in the speaker's browser; the server only
             # relays the text to the room.  Never stored, hard length cap and a
             # per-connection throttle so a scripted client cannot flood peers.
+            perms = await self._effective_permissions()
+            if not perms.get("can_use_microphone"):
+                # Captions are the speaker's own words: no microphone grant, no
+                # text to relay.  Silently dropped — captions are fire-and-forget.
+                return
             text = content.get("text")
             if not isinstance(text, str):
                 return
@@ -327,9 +338,15 @@ class ClassroomConsumer(SafeJsonWebsocketConsumer):
             return
 
         if action == "whiteboard_state":
-            perms = await self._effective_permissions()
-            if not perms.get("can_use_whiteboard"):
-                await self.send_json({"type": "error", "message": "اجازهٔ استفاده از تخته را ندارید."})
+            # Opening/closing the board switches the view for the WHOLE room,
+            # so it belongs to the authority roles.  A student may look at the
+            # board (their client opens the view locally) but can never take
+            # the class there.
+            if not await self._is_authority_now():
+                await self.send_json({
+                    "type": "error",
+                    "message": "فقط مالک، مدیر جلسه یا ارائه‌دهنده می‌تواند تخته را باز یا بسته کند.",
+                })
                 return
             opened = content.get("open")
             if type(opened) is not bool:
@@ -537,6 +554,21 @@ class ClassroomConsumer(SafeJsonWebsocketConsumer):
         return effective_permissions(member, member.classroom)
 
     @database_sync_to_async
+    def _is_authority_now(self) -> bool:
+        """Live OWNER/MODERATOR/PRESENTER check (roles can change mid-session)."""
+        from .permissions import is_authority
+
+        member = (
+            ClassroomMember.objects.filter(
+                id=self.member.id, is_active=True, in_waiting_room=False,
+                classroom__is_active=True,
+            )
+            .select_related("classroom", "user")
+            .first()
+        )
+        return bool(member and is_authority(member))
+
+    @database_sync_to_async
     def _set_hand_raised(self, raised: bool) -> None:
         from .permissions import effective_permissions
 
@@ -573,14 +605,14 @@ class ClassroomConsumer(SafeJsonWebsocketConsumer):
 
     @database_sync_to_async
     def _set_whiteboard_open(self, opened: bool) -> None:
-        from .permissions import effective_permissions
+        from .permissions import may_control_board
         from .services import broadcast
 
         member = ClassroomMember.objects.filter(
             id=self.member.id, is_active=True, in_waiting_room=False,
             classroom__is_active=True,
         ).select_related("classroom", "user").first()
-        if member is None or not effective_permissions(member, member.classroom).get("can_use_whiteboard"):
+        if member is None or not may_control_board(member, member.classroom):
             return
         Classroom.objects.filter(id=member.classroom_id).update(whiteboard_open=opened)
         broadcast(member.classroom.room_code, {

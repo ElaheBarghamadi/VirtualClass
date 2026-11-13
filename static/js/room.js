@@ -36,6 +36,9 @@ const MEMBER_ID = Number(root.dataset.memberId);
 const SELF_ROLE = root.dataset.role || '';
 const PRIVILEGED = root.dataset.privileged === '1';
 const IS_OWNER = root.dataset.owner === '1';
+// OWNER/MODERATOR/PRESENTER: the roles that own the shared surface (open the
+// board for the room, add/switch its pages, drive the slide deck).
+const CAN_CONTROL_BOARD = root.dataset.canControlBoard === '1';
 const MEDIA_ENABLED = root.dataset.mediaEnabled === '1';
 const MEDIA_URL = root.dataset.mediaUrl;
 const MESH_ENABLED = root.dataset.meshEnabled === '1';
@@ -68,7 +71,7 @@ const PERM_LABELS = {
     can_use_whiteboard: 'تختهٔ اشتراکی',
     can_send_messages: 'ارسال پیام',
     can_upload_files: 'بارگذاری فایل',
-    can_raise_hand: 'بالا بردن دست',
+    can_raise_hand: 'بالا بردن دست و واکنش',
     can_present: 'ارائهٔ فایل',
 };
 
@@ -902,6 +905,7 @@ function applyOwnPermissionUpdate(permissions, moderation = {}) {
     );
     applyFilePresentability();
     applyUploadVisibility();
+    syncReadOnlyBanner();
     refreshControlStates();
 }
 
@@ -1559,10 +1563,10 @@ function initControls() {
     bind('btn-whiteboard', () => {
         if (Whiteboard.unavailable) return toast('کتابخانهٔ تخته بارگذاری نشد؛ صفحه را تازه کنید.', 'error');
         const showing = !document.getElementById('view-whiteboard').classList.contains('hidden');
-        if (!PERMISSIONS.can_use_whiteboard) {
+        if (!CAN_CONTROL_BOARD) {
             // Read-only members may still *watch* the board.  This is a local
-            // view switch only — opening it for the whole class is a
-            // presenter action and stays server-gated.
+            // view switch only — opening it for the whole class belongs to the
+            // authority roles and is enforced server-side too.
             switchView(showing ? 'media' : 'whiteboard');
             document.getElementById('btn-whiteboard')?.classList.toggle('active', !showing);
             if (!showing) setTimeout(() => Whiteboard.resize(), 60);
@@ -1928,12 +1932,23 @@ window.__switchView = switchView; // used by presentation module below
 window.__media = Media;           // debugging + automated smoke tests
 window.__wb = Whiteboard;         // debugging + automated smoke tests
 
+/** Mirror «nothing is granted yet» into the read-only notice. */
+function syncReadOnlyBanner() {
+    const banner = document.getElementById('readonly-banner');
+    if (!banner) return;
+    // Read-only means *no* capability at all — the same rule the server uses
+    // for the `read_only` context flag.  A single grant (chat, a raised hand,
+    // ink) is already "allowed to do something".
+    banner.hidden = PERM_ORDER.some((key) => Boolean(PERMISSIONS[key]));
+}
+
 function refreshControlStates() {
     const micBtn = document.getElementById('btn-mic');
     micBtn?.classList.toggle('off', !PERMISSIONS.can_use_microphone);
     document.getElementById('btn-camera')?.classList.toggle('off', !PERMISSIONS.can_use_camera);
     document.getElementById('btn-screen')?.classList.toggle('off', !PERMISSIONS.can_share_screen);
     document.getElementById('btn-hand')?.classList.toggle('off', !PERMISSIONS.can_raise_hand);
+    document.getElementById('btn-reactions')?.classList.toggle('off', !PERMISSIONS.can_raise_hand);
     // Not dimmed: read-only members still open the board to watch it — but the
     // button says so, and the toolbar hides its tools (the server re-checks
     // permission on every operation anyway).
@@ -2259,6 +2274,12 @@ function showReaction(key, name) {
 /** Send a reaction and paint it here first — the source of truth is the echo. */
 function sendReaction(key) {
     if (!REACTION_ICONS[key]) return false;
+    // A reaction is a voice signal like a raised hand: the same grant covers
+    // both, and the server re-checks it on every frame.
+    if (!PERMISSIONS.can_raise_hand) {
+        toast('شما اجازهٔ ارسال واکنش ندارید.', 'warning');
+        return false;
+    }
     const sent = presence.send({ action: 'reaction', reaction: key });
     if (sent) {
         _noteLocalReaction(key);
@@ -2295,6 +2316,10 @@ function initReactions() {
 
     btn.addEventListener('click', (e) => {
         e.stopPropagation();
+        if (!PERMISSIONS.can_raise_hand) {
+            toast('شما اجازهٔ ارسال واکنش ندارید.', 'warning');
+            return;
+        }
         tray.classList.contains('hidden') ? open() : close();
     });
 
@@ -2897,6 +2922,7 @@ safe('roster-tools', initRosterTools);
 safe('perms-dialog', initPermsDialog);
 safe('clock', initClock);
 safe('control-states', refreshControlStates);
+safe('readonly-banner', syncReadOnlyBanner);
 if (!PERMISSIONS.can_send_messages) {
     safe('chat-send-state', () => ChatClient.setSendEnabled(false, 'شما اجازهٔ ارسال پیام ندارید.'));
 }
@@ -2938,12 +2964,14 @@ safe('whiteboard', () => Whiteboard.init({
     roomCode: ROOM_CODE,
     identity: IDENTITY,
     canDraw: PERMISSIONS.can_use_whiteboard,
+    canControlBoard: CAN_CONTROL_BOARD,
 }));
 safe('presentation', () => Presentation.init({
     roomCode: ROOM_CODE,
     identity: IDENTITY,
     canAnnotate: PERMISSIONS.can_use_whiteboard,
     canPresent: PERMISSIONS.can_present,
+    isAuthority: CAN_CONTROL_BOARD,
     annotationOpen: document.getElementById('view-presentation')?.dataset.annotationOpen === '1',
     presentedFileId: document.getElementById('view-presentation')?.dataset.currentFile || null,
     api,

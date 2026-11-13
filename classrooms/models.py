@@ -66,6 +66,10 @@ class Classroom(models.Model):
     allow_student_chat = models.BooleanField(default=True, verbose_name="گفتگوی دانش‌آموز")
     allow_student_mic = models.BooleanField(default=True, verbose_name="میکروفون دانش‌آموز")
     allow_student_camera = models.BooleanField(default=True, verbose_name="دوربین دانش‌آموز")
+    # Legacy room-wide grants.  Kept for existing databases and old API
+    # clients, but they no longer widen anything: the whiteboard and screen
+    # sharing are per-member grants the owner makes by hand, so a view-only
+    # student cannot be switched on for the whole room by accident.
     allow_student_screen_share = models.BooleanField(default=False, verbose_name="اشتراک صفحه دانش‌آموز")
     allow_student_whiteboard = models.BooleanField(default=False, verbose_name="تختهٔ دانش‌آموز")
     allow_file_upload = models.BooleanField(default=True, verbose_name="بارگذاری فایل (غیر مالک)")

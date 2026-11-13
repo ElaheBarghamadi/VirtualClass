@@ -16,7 +16,13 @@ from .models import (
     SharedFile,
 )
 from .permissions import Role, defaults_for_role
-from .services import ClassroomFull, create_classroom, join_classroom, WrongClassroomPassword
+from .services import (
+    ClassroomFull,
+    WrongClassroomPassword,
+    create_classroom,
+    join_classroom,
+    set_member_permission,
+)
 
 User = get_user_model()
 
@@ -107,10 +113,18 @@ class ClassroomModelTests(TestCase):
         self.assertEqual(classroom.members.filter(user=student).count(), 1)
 
     def test_role_defaults(self):
-        student_defaults = defaults_for_role(Role.STUDENT)
-        self.assertFalse(student_defaults.can_share_screen)
-        self.assertFalse(student_defaults.can_use_whiteboard)
-        self.assertTrue(student_defaults.can_send_messages)
+        """A student (and a guest) starts with *nothing* switched on.
+
+        Every bit of participation is a manual, revocable grant the owner makes
+        per member — see ``classrooms.tests_view_only`` for the enforcement
+        contract.  Only the authority roles carry capabilities by default.
+        """
+        for role in (Role.STUDENT, Role.GUEST):
+            defaults = defaults_for_role(role)
+            for name, value in vars(defaults).items():
+                self.assertFalse(value, f"{role} should get no {name} by default")
+        self.assertTrue(defaults_for_role(Role.PRESENTER).can_use_whiteboard)
+        self.assertTrue(defaults_for_role(Role.OWNER).can_present)
 
 
 class ClassroomViewTests(TestCase):
@@ -167,13 +181,25 @@ class ClassroomViewTests(TestCase):
         )
 
     def test_room_view_shows_only_own_permissions(self):
-        join_classroom(self.classroom, self.student, "roompass1")
+        member = join_classroom(self.classroom, self.student, "roompass1")
         self.client.login(username="student", password="testpass-123")
+
+        # Untouched student: fully read-only, and the room says so.
         response = self.client.get(reverse("room:room", args=[self.classroom.room_code]))
         self.assertEqual(response.status_code, 200)
         perms = response.context["permissions"]
+        self.assertFalse(any(perms.values()), perms)
+        self.assertTrue(response.context["read_only"])
+        self.assertContains(response, 'id="readonly-banner" role="status">')
+
+        # One grant by hand flips exactly that flag (and nothing else).
+        set_member_permission(self.classroom, self.owner, member.id, "can_send_messages", True)
+        response = self.client.get(reverse("room:room", args=[self.classroom.room_code]))
+        perms = response.context["permissions"]
         self.assertTrue(perms["can_send_messages"])
-        self.assertFalse(perms["can_share_screen"])  # STUDENT default
+        self.assertFalse(perms["can_share_screen"])
+        self.assertFalse(perms["can_use_whiteboard"])
+        self.assertFalse(response.context["read_only"])
 
     def test_public_link_redirects_to_lobby(self):
         self.client.login(username="student", password="testpass-123")
@@ -649,7 +675,6 @@ class ClassroomCreateSettingsTests(TestCase):
                 "enable_waiting_room": "on",
                 "allow_guests": "on",
                 "allow_student_chat": "on",
-                "allow_student_whiteboard": "on",
                 "show_chat_default": "on",
                 "accent_color": "#0ea5e9",
                 "welcome_message": "خوش آمدید",
@@ -660,8 +685,11 @@ class ClassroomCreateSettingsTests(TestCase):
         self.assertEqual(room.max_participants, 20)
         self.assertTrue(room.enable_waiting_room)
         self.assertTrue(room.allow_guests)
-        self.assertTrue(room.allow_student_whiteboard)
-        self.assertFalse(room.allow_student_screen_share)  # unchecked → off
+        # The whiteboard / screen-share grants are per member now, so the
+        # creation form no longer offers them and a new room starts with the
+        # legacy room-wide flags off.
+        self.assertFalse(room.allow_student_whiteboard)
+        self.assertFalse(room.allow_student_screen_share)
         self.assertEqual(room.accent_color, "#0ea5e9")
         self.assertEqual(room.welcome_message, "خوش آمدید")
 

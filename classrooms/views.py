@@ -36,7 +36,7 @@ from .media import generate_media_token, media_config_payload, media_enabled
 from .storage import private_file_response
 from .tasks import convert_office_file
 from .models import Classroom, ClassroomSession, SharedFile
-from .permissions import Role, effective_permissions, is_privileged
+from .permissions import Role, effective_permissions, is_authority, is_privileged
 from .services import (
     MAX_FILES_PER_CLASSROOM,
     ClassroomAccessError,
@@ -356,6 +356,14 @@ def _room_context(request, classroom: Classroom, member) -> dict:
         "members": [m for m in active_members(classroom)],
         "permissions": perms,
         "is_privileged": is_privileged(member),
+        # Owner/moderator/presenter own the shared surface (board open/close,
+        # pages, slide deck).  Everything the room renders about «who may
+        # control» comes from this one flag.
+        "can_control_board": is_authority(member),
+        # Nothing at all is switched on for this member yet (student/guest
+        # before the owner grants anything): the room says so instead of
+        # showing a wall of dead buttons.
+        "read_only": not any(perms.values()),
         "is_owner": member.role == Role.OWNER,
         "live_session": session,
         "files": files,

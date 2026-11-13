@@ -128,6 +128,26 @@ body.full-page .messages {
 .net-banner.show { animation: net-in .2s ease-out; }
 @keyframes net-in { from { opacity: 0; transform: translateY(-5px); } }
 
+/* View-only notice — a student/guest with no grant yet.  Same geometry as the
+   network banner so it never shifts the stage, but neutral instead of alarming. */
+.readonly-banner {
+    display: flex; align-items: center; justify-content: center; gap: .5rem;
+    flex: none; padding: .42rem 1rem;
+    font-size: .78rem; font-weight: 650; line-height: 1.5; text-align: center;
+    color: color-mix(in srgb, var(--accent) 40%, var(--room-text));
+    background: color-mix(in srgb, var(--accent) 10%, var(--room-surface));
+    border-bottom: 1px solid color-mix(in srgb, var(--accent) 26%, transparent);
+    animation: net-in .2s ease-out;
+}
+.readonly-banner .ic {
+    width: 15px; height: 15px; flex: none;
+    fill: none; stroke: currentColor; stroke-width: 1.9;
+    stroke-linecap: round; stroke-linejoin: round;
+}
+.readonly-banner[hidden] { display: none; }
+.readonly-banner strong { font-weight: 800; }
+@media (max-width: 560px) { .readonly-banner { font-size: .72rem; padding: .36rem .6rem; } }
+
 /* On a phone the header is a single row: while the pill is busy explaining a
    problem it gets the space, and the clock steps aside instead of clipping. */
 @media (max-width: 560px) {
@@ -831,6 +851,14 @@ video:fullscreen { width: 100%; height: 100%; object-fit: contain; background: #
 .wb-toolbar.no-draw .wb-action[data-action="undo"],
 .wb-toolbar.no-draw .wb-action[data-action="redo"],
 .wb-toolbar.no-draw .wb-action[data-action="clear"] { display: none; }
+/* Structural controls belong to the owner/moderator/presenter — and disappear
+   for EVERYBODY else, including a student who was granted ink.  A viewer who
+   may not even flip pages gets the page strip removed as well. */
+.wb-toolbar.no-structure .wb-pages,
+.wb-toolbar.no-structure #wb-bg,
+.wb-toolbar.no-structure #wb-grid,
+.wb-toolbar.no-structure .wb-action[data-action="clear"] { display: none; }
+.wb-toolbar.no-draw .wb-pages { display: none; }
 .shortcut-sep { margin-top: .55rem; list-style: none; font-weight: 600; }
 .wb-action.active { background: var(--accent); color: var(--accent-contrast); }
 
@@ -2688,3 +2716,18 @@ body.class-is-over .room-side { pointer-events: none; }
         font-size: 16px;
     }
 }
+
+/* Policy note under the room settings switches: the row it replaces (a
+   room-wide whiteboard/screen-share grant) is gone on purpose. */
+.settings-policy-note {
+    margin: .55rem 0 .1rem;
+    padding: .6rem .7rem;
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 26%, transparent);
+    color: var(--room-muted, var(--muted));
+    font-size: .78rem;
+    line-height: 1.85;
+}
+.settings-policy-note strong { color: var(--room-text); }
+

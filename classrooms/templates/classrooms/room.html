@@ -103,6 +103,7 @@
      data-is-guest="{{ member.is_guest|yesno:'1,0' }}"
      data-privileged="{{ is_privileged|yesno:'1,0' }}"
      data-owner="{{ is_owner|yesno:'1,0' }}"
+     data-can-control-board="{{ can_control_board|yesno:'1,0' }}"
      data-live-session="{{ live_session.id|default:'' }}"
      data-media-url="{{ media.url }}"
      data-media-enabled="{{ media.enabled|yesno:'1,0' }}"
@@ -151,6 +152,16 @@
     <div class="net-banner" id="net-banner" role="status" aria-live="polite" hidden>
         <svg class="ic" aria-hidden="true"><use href="#i-wifi-off"/></svg>
         <span>اتصال اینترنت قطع شده است — به‌محض برقراری، کلاس خودکار وصل می‌شود.</span>
+    </div>
+
+    {% comment %} An ungranted student or guest: every capability is off until
+       the owner hands one out, so say it plainly instead of leaving a wall of
+       dimmed buttons with no explanation.  Always in the DOM — room.js shows or
+       hides it as grants come and go during the lesson (the `hidden` attribute
+       here is just the state the server rendered). {% endcomment %}
+    <div class="readonly-banner" id="readonly-banner" role="status"{% if not read_only %} hidden{% endif %}>
+        <svg class="ic" aria-hidden="true"><use href="#i-lock"/></svg>
+        <span>شما در حالت <strong>فقط‌خواندنی</strong> هستید. برای صحبت، نوشتن روی تخته یا ارسال پیام، از میزبان بخواهید دسترسی بدهد.</span>
     </div>
 
     <div class="room-body" id="room-body">
@@ -741,12 +752,21 @@
         </div>
         <div class="app-dialog-body">
             <label class="switch-row"><input type="checkbox" name="enable_waiting_room" {% if classroom.enable_waiting_room %}checked{% endif %}><span class="switch-text">اتاق انتظار (تأیید ورود توسط میزبان)</span></label>
-            <label class="switch-row"><input type="checkbox" name="allow_student_mic" {% if classroom.allow_student_mic %}checked{% endif %}><span class="switch-text">میکروفون دانش‌آموزان</span></label>
-            <label class="switch-row"><input type="checkbox" name="allow_student_camera" {% if classroom.allow_student_camera %}checked{% endif %}><span class="switch-text">دوربین دانش‌آموزان</span></label>
-            <label class="switch-row"><input type="checkbox" name="allow_student_chat" {% if classroom.allow_student_chat %}checked{% endif %}><span class="switch-text">گفتگوی دانش‌آموزان</span></label>
-            <label class="switch-row"><input type="checkbox" name="allow_student_screen_share" {% if classroom.allow_student_screen_share %}checked{% endif %}><span class="switch-text">اشتراک صفحهٔ دانش‌آموزان</span></label>
-            <label class="switch-row"><input type="checkbox" name="allow_student_whiteboard" {% if classroom.allow_student_whiteboard %}checked{% endif %}><span class="switch-text">تختهٔ دانش‌آموزان</span></label>
+            <label class="switch-row"><input type="checkbox" name="allow_student_mic" {% if classroom.allow_student_mic %}checked{% endif %}><span class="switch-text">سقف کلی میکروفون دانش‌آموزان</span></label>
+            <label class="switch-row"><input type="checkbox" name="allow_student_camera" {% if classroom.allow_student_camera %}checked{% endif %}><span class="switch-text">سقف کلی دوربین دانش‌آموزان</span></label>
+            <label class="switch-row"><input type="checkbox" name="allow_student_chat" {% if classroom.allow_student_chat %}checked{% endif %}><span class="switch-text">سقف کلی گفتگوی دانش‌آموزان</span></label>
             <label class="switch-row"><input type="checkbox" name="allow_file_upload" {% if classroom.allow_file_upload %}checked{% endif %}><span class="switch-text">بارگذاری فایل توسط غیرمالک</span></label>
+            {% comment %} Whiteboard and screen sharing are not room-wide
+               switches any more: the owner grants them to one student at a time
+               from the participants panel.  A room-wide switch handed both to
+               every student at once, which is exactly what view-only means not
+               to. {% endcomment %}
+            <p class="settings-policy-note">
+                دانش‌آموز و مهمان به‌صورت پیش‌فرض <strong>هیچ</strong> دسترسی‌ای ندارند — نه تخته، نه
+                میکروفون، نه گفتگو. برای دادن هر دسترسی، در فهرست شرکت‌کنندگان روی نام دانش‌آموز
+                بزنید و همان مجوز را روشن کنید. کلیدهای «سقف کلی» بالا فقط می‌توانند مجوزهای تکی را
+                از همه بگیرند.
+            </p>
             <label class="switch-row"><input type="checkbox" name="allow_guests" {% if classroom.allow_guests %}checked{% endif %}><span class="switch-text">ورود مهمان با لینک (بدون حساب کاربری)</span></label>
             <label class="switch-row"><input type="checkbox" name="chat_disabled" {% if classroom.chat_disabled %}checked{% endif %}><span class="switch-text">قطع کامل گفتگو</span></label>
             <label class="switch-row"><input type="checkbox" name="is_locked" {% if classroom.is_locked %}checked{% endif %}><span class="switch-text">قفل کردن کلاس (ورود اعضای جدید مسدود)</span></label>
@@ -767,7 +787,8 @@
     <div class="app-dialog-body">
         <p class="perms-hint muted small">تغییرها بلافاصله اعمال می‌شود و برای همهٔ میزبان‌ها همگام می‌شود.</p>
         <p class="perms-hint perms-policy-note hidden" id="perms-whiteboard-policy-note" role="note">
-            برای دانش‌آموزان، دسترسی تخته علاوه بر این مجوز به گزینهٔ «تختهٔ دانش‌آموزان» در تنظیمات کلاس هم وابسته است.
+            «تختهٔ اشتراکی» فقط اجازهٔ نوشتن می‌دهد؛ باز و بسته کردن تخته، ساختن و عوض کردن
+            صفحه، و پاک‌کردن صفحهٔ مشترک در اختیار مالک، مدیر جلسه و ارائه‌دهنده است.
         </p>
         <div class="perms-list" id="perms-list"></div>
         <div class="perms-role hidden" id="perms-role-wrap">
