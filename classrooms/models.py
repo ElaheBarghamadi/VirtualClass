@@ -95,6 +95,13 @@ class Classroom(models.Model):
     logo = models.ImageField(upload_to="classroom_logos/", blank=True, null=True, verbose_name="لوگوی کلاس")
     show_chat_default = models.BooleanField(default=True, verbose_name="نمایش گفتگو به‌صورت پیش‌فرض")
     whiteboard_open = models.BooleanField(default=False, verbose_name="تختهٔ سفید باز است")
+    # -- board geometry (chosen by the presenter, identical for every device) --
+    # The reference surface every stroke is stored against.  It is NOT a screen
+    # size: the same two numbers reach every participant, and the client fits
+    # that rectangle into whatever stage it has.  Defaults keep the historical
+    # 12:7 page, so old boards keep rendering exactly where they were.
+    whiteboard_width = models.PositiveSmallIntegerField(default=1200, verbose_name="عرض سطح تخته")
+    whiteboard_height = models.PositiveSmallIntegerField(default=700, verbose_name="ارتفاع سطح تخته")
 
     # -- presentation state (synced over WebSocket) ----------------------------
     current_file = models.ForeignKey(

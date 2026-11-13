@@ -9,8 +9,10 @@
  *
  * Geometry
  * --------
- * The page is a FIXED rectangle (``REF_W × REF_H``, 12:7) and it keeps that
- * shape on *every* device: the viewport transform is a single uniform scale
+ * The page is a FIXED rectangle (``refW × refH``, 12:7 by default) and it keeps
+ * that shape on *every* device.  The presenter may pick another format from the
+ * toolbar and the room is told over the presence socket, but the numbers are
+ * room-wide — never per screen.  The viewport transform is a single uniform scale
  * (``_fit()``, the smaller of the two axes) and the leftover space becomes an
  * even letterbox on both sides.  Scaling x and y independently — the old
  * behaviour — stretched the board to whatever the wrapper happened to be, so
@@ -79,9 +81,19 @@ const SmoothPolyline = fabric.util.createClass(fabric.Polyline, {
     },
 });
 
-/** Internal drawing surface. All coordinates/shapes are expressed in it. */
+/** Default drawing surface. All coordinates/shapes are expressed in it. */
 const REF_W = 1200;
 const REF_H = 700;
+/** Reference-surface bounds; the server (classrooms/board.py) owns the presets. */
+const MIN_REF = 480;
+const MAX_REF = 2000;
+const BOARD_PRESETS = {
+    '12:7': [1200, 700],
+    '16:9': [1244, 700],
+    '4:3': [1200, 900],
+    '1:1': [1200, 1200],
+    a4: [1200, 1697],
+};
 /** Minimum distance (in reference px) between two recorded stroke points. */
 const POINT_EPSILON = 1.6;
 /** Laser pointer updates: at most this often, and never while backed up. */
@@ -151,14 +163,20 @@ class WhiteboardImpl {
         this.zoom = MIN_ZOOM;
         this.panX = 0;
         this.panY = 0;
+        // The reference surface (page) in reference units.  Chosen by the
+        // presenter, identical for every device.  Ops record the size they were
+        // written against (`ow`/`oh`), so a format change never rewrites ink.
+        this.refW = REF_W;
+        this.refH = REF_H;
         this._pan = null;            // active pan gesture
         this._spaceDown = false;
     }
 
-    init({ roomCode, identity, canDraw, canControlBoard }) {
+    init({ roomCode, identity, canDraw, canControlBoard, boardWidth, boardHeight }) {
         this.identity = identity;
         this.canDraw = canDraw;
         this.canControlBoard = Boolean(canControlBoard);
+        if (boardWidth && boardHeight) this.setRefSize(boardWidth, boardHeight, { silent: true });
         this._syncDrawGate();
         // Clear, permanent feedback for viewers who may not draw — instead of
         // a toolbar that looks usable but silently does nothing.
@@ -205,6 +223,7 @@ class WhiteboardImpl {
         }
 
         this._bindToolbar();
+        this._bindSize();
         this._bindPages();
         this._bindZoom();
         this._bindDrawing();
@@ -257,12 +276,12 @@ class WhiteboardImpl {
      * identical on a phone, a tablet and a projector.
      */
     _fit() {
-        const s = Math.min(this._w() / REF_W, this._h() / REF_H);
+        const s = Math.min(this._w() / this.refW, this._h() / this.refH);
         return s > 0 ? s : 1;
     }
     /** Letterbox margins: where the page starts inside the wrapper. */
-    _ox() { return (this._w() - REF_W * this._fit()) / 2; }
-    _oy() { return (this._h() - REF_H * this._fit()) / 2; }
+    _ox() { return (this._w() - this.refW * this._fit()) / 2; }
+    _oy() { return (this._h() - this.refH * this._fit()) / 2; }
     /** Effective scale: fit-to-page × user zoom. */
     _zs() { return this._fit() * this.zoom; }
     /** The page itself, in CSS px inside the wrapper (what ink may cover). */
@@ -271,8 +290,8 @@ class WhiteboardImpl {
         return {
             x: this._ox() + this.panX,
             y: this._oy() + this.panY,
-            w: REF_W * s,
-            h: REF_H * s,
+            w: this.refW * s,
+            h: this.refH * s,
         };
     }
     /** CSS px → reference units. Uniform now, so both axes call the same one. */
@@ -300,8 +319,8 @@ class WhiteboardImpl {
         const s = this._zs();
         const ox = this._ox();
         const oy = this._oy();
-        const pw = REF_W * s;
-        const ph = REF_H * s;
+        const pw = this.refW * s;
+        const ph = this.refH * s;
         // page-left ∈ [w - pw, 0] and page-left = ox + panX
         this.panX = pw >= w ? Math.min(-ox, Math.max(w - pw - ox, this.panX)) : 0;
         this.panY = ph >= h ? Math.min(-oy, Math.max(h - ph - oy, this.panY)) : 0;
@@ -873,8 +892,8 @@ class WhiteboardImpl {
         // Fixed output — 1200×700 at 2× — like the page itself.  Sizing the
         // export from the wrapper meant the "same" board saved as 2×1920×1080
         // on a laptop and a tall sliver on a phone.
-        const outW = REF_W * mult;
-        const outH = REF_H * mult;
+        const outW = this.refW * mult;
+        const outH = this.refH * mult;
         // Ink goes on its own transparent layer first: eraser strokes are
         // `destination-out`, so they must punch holes in the ink only — if the
         // page background were already under them, they would erase it too.
@@ -883,7 +902,7 @@ class WhiteboardImpl {
         art.height = outH;
         const actx = art.getContext('2d');
         actx.save();
-        actx.setTransform(outW / REF_W, 0, 0, outH / REF_H, 0, 0);
+        actx.setTransform(outW / this.refW, 0, 0, outH / this.refH, 0, 0);
         // The export is the whole page, so it must not depend on where the
         // user happens to be looking: fabric skips objects outside the current
         // viewport, which would silently crop a zoomed-in export.
@@ -1047,8 +1066,8 @@ class WhiteboardImpl {
      * begin off-canvas and then jump.
      */
     _clampToPage(p) {
-        const x = Math.min(REF_W, Math.max(0, Number.isFinite(p.x) ? p.x : 0));
-        const y = Math.min(REF_H, Math.max(0, Number.isFinite(p.y) ? p.y : 0));
+        const x = Math.min(this.refW, Math.max(0, Number.isFinite(p.x) ? p.x : 0));
+        const y = Math.min(this.refH, Math.max(0, Number.isFinite(p.y) ? p.y : 0));
         return { x, y };
     }
 
@@ -1184,7 +1203,8 @@ class WhiteboardImpl {
             if ((this.ws?.bufferedAmount || 0) > WS_BUFFER_LIMIT) return; // socket is behind: drop this frame
             this._sendOp({
                 type: 'laser', page: this.page, norm: 1,
-                x: +(p.x / REF_W).toFixed(4), y: +(p.y / REF_H).toFixed(4),
+                ow: this.refW, oh: this.refH,
+                x: +(p.x / this.refW).toFixed(4), y: +(p.y / this.refH).toFixed(4),
             });
             return;
         }
@@ -1373,8 +1393,84 @@ class WhiteboardImpl {
 
     /** World (reference) position stored in an op. */
     _opPoint(op) {
-        if (op.norm) return { x: op.x * REF_W, y: op.y * REF_H };
-        return { x: op.x * (REF_W / this._w()), y: op.y * (REF_H / this._h()) };
+        const ref = this._opRef(op);
+        if (op.norm) return { x: op.x * ref.w, y: op.y * ref.h };
+        return { x: op.x * (this.refW / this._w()), y: op.y * (this.refH / this._h()) };
+    }
+
+    /**
+     * Change the board's format.  Authority-only; the caller is the presence
+     * socket's echo, so every device lands on the same numbers.
+     */
+    setRefSize(width, height, { silent = false } = {}) {
+        const clamp = (v, fallback) => {
+            const n = Math.round(Number(v));
+            return Number.isFinite(n) && n > 0
+                ? Math.min(MAX_REF, Math.max(MIN_REF, n))
+                : fallback;
+        };
+        const w = clamp(width, REF_W);
+        const h = clamp(height, REF_H);
+        const changed = w !== this.refW || h !== this.refH;
+        this.refW = w;
+        this.refH = h;
+        this._syncSizeUI();
+        if (changed && this.canvas) {
+            this._clampPan();
+            this._applyTransform();
+        }
+        if (changed && !silent) this._render();
+        return changed;
+    }
+
+    /** Preset key for the current surface ('custom' when it is not one). */
+    sizeKey() {
+        for (const [key, [w, h]] of Object.entries(BOARD_PRESETS)) {
+            if (w === this.refW && h === this.refH) return key;
+        }
+        return 'custom';
+    }
+
+    /** The toolbar's size picker follows whatever the room is on. */
+    _syncSizeUI() {
+        const sel = document.getElementById('wb-size');
+        const hint = document.getElementById('wb-size-hint');
+        const key = this.sizeKey();
+        if (sel) {
+            if (key !== 'custom') sel.value = key;
+            else if (sel.value !== 'custom') sel.value = '';
+        }
+        if (hint) hint.textContent = `${this.refW}×${this.refH}`;
+    }
+
+    /**
+     * The picker itself: one change → one room-wide action.  Only a member who
+     * owns the board gets the control (it is not even rendered otherwise), and
+     * the server checks the same gate again.
+     */
+    _bindSize() {
+        const sel = document.getElementById('wb-size');
+        if (!sel || !this.canControlBoard) return;
+        sel.addEventListener('change', () => {
+            const preset = sel.value;
+            const size = BOARD_PRESETS[preset];
+            if (!size) return;
+            this.onSizeRequest?.(preset);
+        });
+        this._syncSizeUI();
+    }
+
+    /**
+     * The surface an op was written on.  New ops carry it (`ow`/`oh`); ops
+     * stored before board formats existed were all drawn on the 12:7 default.
+     */
+    _opRef(op) {
+        const w = Number(op && op.ow);
+        const h = Number(op && op.oh);
+        return {
+            w: Number.isFinite(w) && w >= MIN_REF ? w : REF_W,
+            h: Number.isFinite(h) && h >= MIN_REF ? h : REF_H,
+        };
     }
 
     _opById(id) {
@@ -1414,7 +1510,8 @@ class WhiteboardImpl {
         }
         const op = {
             type: 'text', id: this._id(), page: this.page, norm: 1,
-            x: +(point.x / REF_W).toFixed(4), y: +(point.y / REF_H).toFixed(4),
+            ow: this.refW, oh: this.refH,
+            x: +(point.x / this.refW).toFixed(4), y: +(point.y / this.refH).toFixed(4),
             text, color: this.color, size: +fontSizeWorld.toFixed(1),
         };
         this._applyOp(op);
@@ -1525,11 +1622,14 @@ class WhiteboardImpl {
         // Coordinates travel NORMALISED (0..1 of the reference surface) so the
         // same op renders in the same relative place on any screen size.
         // `norm:1` marks new ops; legacy pixel ops render 1:1.
-        const nx = (v) => +(v / REF_W).toFixed(4);
-        const ny = (v) => +(v / REF_H).toFixed(4);
+        const nx = (v) => +(v / this.refW).toFixed(4);
+        const ny = (v) => +(v / this.refH).toFixed(4);
         const tool = obj._wbTool || 'pen';
         const common = {
             id: obj.data?.opId || this._id(), tool, norm: 1,
+            // The surface this op was drawn on.  Without it a later format
+            // change would silently stretch or crop everybody's old ink.
+            ow: this.refW, oh: this.refH,
             // Width is already in reference px (see _makeStroke), so it means
             // the same thing on every screen. Server cap is 512.
             width: +Math.min(512, Math.max(0.4, Number(obj.strokeWidth) || 1)).toFixed(2),
@@ -1597,12 +1697,14 @@ class WhiteboardImpl {
         if (op.type === 'laser') {
             if (!this._replaying && pg === this.page) {
                 let { x, y } = op;
+                const ref = this._opRef(op);
                 if (op.norm) {
-                    // Normalised → reference units → this view's CSS pixels.
-                    x *= REF_W; y *= REF_H;
+                    // Normalised → the writer's reference units → this view's
+                    // CSS pixels.
+                    x *= ref.w; y *= ref.h;
                 } else {
                     // (Legacy pixel ops are CSS pixels of the sender.)
-                    x *= REF_W / this._w(); y *= REF_H / this._h();
+                    x *= this.refW / this._w(); y *= this.refH / this._h();
                 }
                 const at = this._worldToCss({ x, y });
                 this._showLaser(at.x, at.y);
@@ -1699,9 +1801,10 @@ class WhiteboardImpl {
         if (this._objects.has(op.id)) return;    // already on screen (O(1) dedupe)
         if (op.type === 'text') {
             const n = !!op.norm;
-            const x = n ? op.x * REF_W : op.x * (REF_W / this._w());
-            const y = n ? op.y * REF_H : op.y * (REF_H / this._h());
-            const size = n ? (op.size || 20) : (op.size || 20) * (REF_H / this._h());
+            const ref = this._opRef(op);
+            const x = n ? op.x * ref.w : op.x * (this.refW / this._w());
+            const y = n ? op.y * ref.h : op.y * (this.refH / this._h());
+            const size = n ? (op.size || 20) : (op.size || 20) * (this.refH / this._h());
             const text = new fabric.Text(op.text, {
                 left: x,
                 top: y,
@@ -1739,7 +1842,8 @@ class WhiteboardImpl {
         // New ops (norm:1) carry 0..1 coordinates of the reference surface;
         // legacy ops carry CSS px of whatever size the sender had.
         const n = !!op.norm;
-        const px = (v, dim) => (n ? v * dim : v * (dim / (dim === REF_W ? this._w() : this._h())));
+        const ref = this._opRef(op);
+        const px = (v, dim) => (n ? v * dim : v * (dim / (dim === ref.w ? this._w() : this._h())));
         const common = {
             stroke: isEraser ? 'rgba(0,0,0,1)' : (op.color || '#000'),
             strokeWidth: Math.max(0.4, op.width || 3),
@@ -1764,13 +1868,13 @@ class WhiteboardImpl {
                     // pen's dots legible (a Persian «ن» is unreadable without them).
                     const r = Math.max(3.5, (op.width || 3) / 2);
                     return new fabric.Circle({
-                        left: px(dx, REF_W) - r, top: px(dy, REF_H) - r,
+                        left: px(dx, ref.w) - r, top: px(dy, ref.h) - r,
                         radius: r, fill: op.color || '#000', stroke: '',
                         selectable: false, evented: false,
                         opacity: op.tool === 'highlighter' ? 0.32 : 1,
                     });
                 }
-                const pts = (op.points || []).map(([x, y]) => ({ x: px(x, REF_W), y: px(y, REF_H) }));
+                const pts = (op.points || []).map(([x, y]) => ({ x: px(x, ref.w), y: px(y, ref.h) }));
                 // A stored single-point op (a tap) becomes a dot.
                 if (pts.length === 1) pts.push({ x: pts[0].x, y: pts[0].y });
                 if (pts.length < 2) return null;
@@ -1782,17 +1886,17 @@ class WhiteboardImpl {
             case 'line':
             case 'arrow': {
                 const [a, b] = op.points || [[0, 0], [0, 0]];
-                const A = { x: px(a[0], REF_W), y: px(a[1], REF_H) };
-                const B = { x: px(b[0], REF_W), y: px(b[1], REF_H) };
+                const A = { x: px(a[0], ref.w), y: px(a[1], ref.h) };
+                const B = { x: px(b[0], ref.w), y: px(b[1], ref.h) };
                 return new fabric.Line([A.x, A.y, B.x, B.y], common);
             }
             case 'rectangle': {
-                const w = op.w !== undefined ? px(op.w, REF_W) : (op.width || 0);
-                const h = op.h !== undefined ? px(op.h, REF_H) : (op.height || 0);
-                return new fabric.Rect({ left: px(op.left, REF_W), top: px(op.top, REF_H), width: w, height: h, ...common });
+                const w = op.w !== undefined ? px(op.w, ref.w) : (op.width || 0);
+                const h = op.h !== undefined ? px(op.h, ref.h) : (op.height || 0);
+                return new fabric.Rect({ left: px(op.left, ref.w), top: px(op.top, ref.h), width: w, height: h, ...common });
             }
             case 'circle':
-                return new fabric.Ellipse({ left: px(op.left, REF_W), top: px(op.top, REF_H), rx: px(op.rx, REF_W), ry: px(op.ry, REF_H), ...common });
+                return new fabric.Ellipse({ left: px(op.left, ref.w), top: px(op.top, ref.h), rx: px(op.rx, ref.w), ry: px(op.ry, ref.h), ...common });
             default:
                 return null;
         }

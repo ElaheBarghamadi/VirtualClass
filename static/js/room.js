@@ -1207,6 +1207,11 @@ function handleEvent(data) {
             applyWhiteboardState(data.open);
             if (data.open && data.by) toast(`${data.by} تختهٔ سفید را باز کرد.`, 'info', 2500);
             break;
+        case 'whiteboard_size':
+            // The board's shape is room-wide: apply the numbers we were given,
+            // never our own idea of the size.
+            Whiteboard.setRefSize(data.width, data.height);
+            break;
         case 'rtc_signal':
             Media.handleSignal(data);
             break;
@@ -1263,6 +1268,9 @@ function applyClassroomState(state) {
         state.chat_disabled ? 'گفتگو توسط میزبان قطع شده است.' : 'شما اجازهٔ ارسال پیام ندارید.',
     );
     if (typeof state.whiteboard_open === 'boolean') applyWhiteboardState(state.whiteboard_open);
+    if (state.whiteboard_width && state.whiteboard_height) {
+        Whiteboard.setRefSize(state.whiteboard_width, state.whiteboard_height);
+    }
     if (state.current_file_id) {
         applyPresentation({
             file_id: state.current_file_id,
@@ -3014,12 +3022,21 @@ safe('conn-pill-retry', () => {
 
 // Optional subsystems — each isolated, each optional.
 safe('device-test', () => initDeviceTest({ roomCode: ROOM_CODE }));
-safe('whiteboard', () => Whiteboard.init({
-    roomCode: ROOM_CODE,
-    identity: IDENTITY,
-    canDraw: PERMISSIONS.can_use_whiteboard,
-    canControlBoard: CAN_CONTROL_BOARD,
-}));
+safe('whiteboard', () => {
+    const boardView = document.getElementById('view-whiteboard');
+    Whiteboard.onSizeRequest = (preset) => {
+        if (!CAN_CONTROL_BOARD) return;
+        presence.send({ action: 'whiteboard_size', preset });
+    };
+    Whiteboard.init({
+        roomCode: ROOM_CODE,
+        identity: IDENTITY,
+        canDraw: PERMISSIONS.can_use_whiteboard,
+        canControlBoard: CAN_CONTROL_BOARD,
+        boardWidth: Number(boardView?.dataset.boardWidth) || undefined,
+        boardHeight: Number(boardView?.dataset.boardHeight) || undefined,
+    });
+});
 safe('presentation', () => Presentation.init({
     roomCode: ROOM_CODE,
     identity: IDENTITY,

@@ -23,6 +23,7 @@ from django.views.decorators.cache import never_cache
 
 from core.queue import dispatch
 
+from .board import BOARD_PRESETS, preset_key
 from .file_validation import ALLOWED_EXTENSIONS, validate_upload
 from .forms import (
     ClassroomCustomizationForm,
@@ -373,6 +374,15 @@ def _room_context(request, classroom: Classroom, member) -> dict:
         "media": media_config_payload(),
         "waiting_room_count": classroom.members.filter(is_active=True, in_waiting_room=True).count(),
         "annotation_open": classroom.annotation_open,
+        # The board's reference surface: the presenter's choice, identical for
+        # every device (classrooms/board.py owns the allow-list).
+        "board_width": classroom.whiteboard_width,
+        "board_height": classroom.whiteboard_height,
+        "board_preset": preset_key(classroom.whiteboard_width, classroom.whiteboard_height),
+        "board_presets": [
+            {"key": key, "width": width, "height": height}
+            for key, (width, height) in BOARD_PRESETS.items()
+        ],
         # the room takes over the whole viewport — no header/footer/margins
         "full_page": True,
     }

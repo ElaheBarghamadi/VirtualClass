@@ -83,7 +83,9 @@ class FixedBoardTests(SimpleTestCase):
 
     def test_both_axes_share_one_fit_scale(self):
         fit = rule(self.src, "    _fit()")
-        self.assertIn("Math.min(this._w() / REF_W, this._h() / REF_H)", fit)
+        # the page is one rectangle with one scale — its own numbers now come
+        # from the presenter's chosen format, not a module constant
+        self.assertIn("Math.min(this._w() / this.refW, this._h() / this.refH)", fit)
         # `_sx`/`_sy` are kept for their many call sites (pen width, labels)
         # but they must now be the same number.
         self.assertIn("return this._fit()", rule(self.src, "    _sx()"))
@@ -110,8 +112,8 @@ class FixedBoardTests(SimpleTestCase):
     def test_png_export_has_a_fixed_size_too(self):
         export = self.src[self.src.index("exportPNG() {"):]
         export = export[: export.index("\n    }")]
-        self.assertIn("const outW = REF_W * mult;", export)
-        self.assertIn("const outH = REF_H * mult;", export)
+        self.assertIn("const outW = this.refW * mult;", export)
+        self.assertIn("const outH = this.refH * mult;", export)
 
     def test_pointer_is_clamped_to_the_page(self):
         self.assertIn("_clampToPage", rule(self.src, "    _pt(opt)"))
@@ -288,6 +290,78 @@ class ControlBarTests(SimpleTestCase):
         pop = pop[: pop.index("\n}\n")]
         self.assertIn("pop.style.maxHeight", pop)
         self.assertIn("overflowY", pop)
+
+class SettableBoardSizeTests(SimpleTestCase):
+    """The presenter picks the board's shape; the room agrees on the numbers.
+
+    A board that is only ever 12:7 is a board that is wrong for the two things
+    teachers actually draw on: a 16:9 slide and an A4 worksheet.  The size is a
+    *room-wide* number — chosen by an authority, broadcast, persisted — and each
+    device merely fits that rectangle into its own stage.  Nothing about it may
+    depend on the screen the presenter happens to be using.
+    """
+
+    def setUp(self):
+        self.src = read(JS / "whiteboard.js")
+        self.room = read(JS / "room.js")
+        self.tpl = read(TEMPLATES / "room.html")
+        self.css = read(CSS / "room.css")
+
+    def test_the_page_geometry_reads_the_chosen_size(self):
+        fit = rule(self.src, "    _fit()")
+        self.assertIn("Math.min(this._w() / this.refW, this._h() / this.refH)", fit)
+        self.assertIn("this.refW * this._fit()", rule(self.src, "    _ox()"))
+        self.assertIn("this.refH * this._fit()", rule(self.src, "    _oy()"))
+        self.assertIn("w: this.refW * s", rule(self.src, "    _pageRect()"))
+
+    def test_the_size_is_per_instance_not_a_module_constant(self):
+        self.assertIn("this.refW = REF_W;", self.src)
+        self.assertIn("this.refH = REF_H;", self.src)
+        setter = self.src[self.src.index("    setRefSize(width, height,"):]
+        setter = setter[: setter.index("\n    }\n")]
+        self.assertIn("Math.min(MAX_REF, Math.max(MIN_REF", setter)
+        self.assertIn("this._applyTransform();", setter)
+
+    def test_an_old_stroke_keeps_the_surface_it_was_drawn_on(self):
+        # `ow`/`oh` travel with every op, so a later format change can never
+        # stretch or crop ink that is already on the board.
+        self.assertIn("ow: this.refW, oh: this.refH,", self.src)
+        ref = rule(self.src, "    _opRef(op)")
+        self.assertIn("REF_W", ref)
+        self.assertIn("REF_H", ref)
+        # and the painters ask the op, not the module
+        self.assertIn("const ref = this._opRef(op);", self.src)
+        self.assertNotIn("px(x, REF_W)", self.src)
+
+    def test_the_picker_is_presenter_only_and_sends_one_room_wide_action(self):
+        self.assertIn('{% if can_control_board %}', self.tpl)
+        self.assertIn('id="wb-size"', self.tpl)
+        for preset in ("12:7", "16:9", "4:3", "1:1", "a4"):
+            self.assertIn(f'value="{preset}"', self.tpl)
+        self.assertIn("if (!sel || !this.canControlBoard) return;", self.src)
+        self.assertIn("this.onSizeRequest?.(preset);", self.src)
+        self.assertIn(
+            "presence.send({ action: 'whiteboard_size', preset });", self.room
+        )
+
+    def test_every_device_applies_the_numbers_it_was_given(self):
+        self.assertIn("case 'whiteboard_size':", self.room)
+        self.assertIn("Whiteboard.setRefSize(data.width, data.height);", self.room)
+        self.assertIn(
+            "Whiteboard.setRefSize(state.whiteboard_width, state.whiteboard_height);",
+            self.room,
+        )
+
+    def test_the_rendered_page_starts_at_the_stored_size(self):
+        self.assertIn('data-board-width="{{ board_width }}"', self.tpl)
+        self.assertIn('data-board-height="{{ board_height }}"', self.tpl)
+        self.assertIn("boardWidth: Number(boardView?.dataset.boardWidth) || undefined,", self.room)
+
+    def test_the_picker_is_minimal_pastel_not_a_native_box(self):
+        select = rule(self.css, ".wb-size-select", "appearance")
+        self.assertIn("appearance: none;", select)
+        self.assertIn("box-shadow: none", self.css.replace("box-shadow: none;", "box-shadow: none"))
+
 
 class PresentationEndTests(SimpleTestCase):
     """A PDF or an image on the big screen needs a visible way out."""

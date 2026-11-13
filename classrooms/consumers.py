@@ -227,7 +227,8 @@ class ClassroomConsumer(SafeJsonWebsocketConsumer):
                 await self.send_json({"type": "pong"})
             return
 
-        if action in ("raise_hand", "media_state", "rtc_signal", "whiteboard_state", "reaction", "caption"):
+        if action in ("raise_hand", "media_state", "rtc_signal", "whiteboard_state",
+                      "whiteboard_size", "reaction", "caption"):
             if not await self._member_active_now():
                 await self.close(code=4403)
                 return
@@ -335,6 +336,24 @@ class ClassroomConsumer(SafeJsonWebsocketConsumer):
             if len(encoded) > RTC_SIGNAL_MAX_BYTES:
                 return
             await self._relay_rtc_signal(to_member_id, data)
+            return
+
+        if action == "whiteboard_size":
+            # The board is one shared page: its shape is the presenter's call,
+            # and every device must agree on it.  Same gate as opening it.
+            if not await self._is_authority_now():
+                await self.send_json({
+                    "type": "error",
+                    "message": "فقط مالک، مدیر جلسه یا ارائه‌دهنده می‌تواند اندازهٔ تخته را تغییر دهد.",
+                })
+                return
+            preset = content.get("preset")
+            if not isinstance(preset, str):
+                await self.send_json({"type": "error", "message": "اندازهٔ تخته نامعتبر است."})
+                return
+            result = await self._set_whiteboard_size(preset)
+            if result is None:
+                await self.send_json({"type": "error", "message": "اندازهٔ تخته نامعتبر است."})
             return
 
         if action == "whiteboard_state":
@@ -512,6 +531,8 @@ class ClassroomConsumer(SafeJsonWebsocketConsumer):
             "chat_disabled": classroom.chat_disabled,
             "chat_private": classroom.chat_private,
             "whiteboard_open": classroom.whiteboard_open,
+            "whiteboard_width": classroom.whiteboard_width,
+            "whiteboard_height": classroom.whiteboard_height,
             "current_file_id": classroom.current_file_id,
             "current_file_name": classroom.current_file.original_name if classroom.current_file else None,
             "current_file_has_pdf": bool(classroom.current_file and classroom.current_file.pdf_version),
@@ -603,6 +624,38 @@ class ClassroomConsumer(SafeJsonWebsocketConsumer):
             "from_member_id": sender.id,
             "data": data,
         })
+
+    @database_sync_to_async
+    def _set_whiteboard_size(self, preset: str) -> dict | None:
+        from .board import preset_key, size_for
+        from .permissions import may_control_board
+        from .services import broadcast
+
+        size = size_for(preset)
+        if size is None:
+            return None
+        member = ClassroomMember.objects.filter(
+            id=self.member.id, is_active=True, in_waiting_room=False,
+            classroom__is_active=True,
+        ).select_related("classroom", "user").first()
+        if member is None or not may_control_board(member, member.classroom):
+            return None
+        width, height = size
+        classroom = member.classroom
+        if classroom.whiteboard_width == width and classroom.whiteboard_height == height:
+            return {"width": width, "height": height, "preset": preset_key(width, height)}
+        Classroom.objects.filter(id=classroom.id).update(
+            whiteboard_width=width, whiteboard_height=height,
+        )
+        payload = {
+            "type": "whiteboard_size",
+            "width": width,
+            "height": height,
+            "preset": preset_key(width, height),
+            "by": member.participant_name,
+        }
+        broadcast(classroom.room_code, payload)
+        return {"width": width, "height": height, "preset": payload["preset"]}
 
     @database_sync_to_async
     def _set_whiteboard_open(self, opened: bool) -> None:

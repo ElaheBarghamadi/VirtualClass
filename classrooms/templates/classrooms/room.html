@@ -279,7 +279,9 @@
                     </div>
                 </div>
 
-                <div class="stage-view hidden" id="view-whiteboard">
+                <div class="stage-view hidden" id="view-whiteboard"
+                     data-board-width="{{ board_width }}" data-board-height="{{ board_height }}"
+                     data-board-preset="{{ board_preset }}">
                     <div class="wb-nodraw-hint hidden" id="wb-nodraw-hint" role="note">
                         تخته در حالت نمایش است — ابزار نوشتن فقط برای مالک و افراد مجاز فعال می‌شود.
                     </div>
@@ -319,6 +321,23 @@
                             <button type="button" class="wb-action wb-danger" id="wb-clear" data-action="clear" title="پاک کردن صفحه" aria-label="پاک کردن صفحه"><svg class="ic"><use href="#i-trash"/></svg></button>
                         </div>
                         <span class="wb-sep" aria-hidden="true"></span>
+                        {% if can_control_board %}
+                        <div class="wb-group wb-format" role="group" aria-label="اندازهٔ تخته">
+                            <select id="wb-size" class="wb-size-select" aria-label="اندازهٔ تخته"
+                                    title="ابعاد تخته برای همه یکسان تغییر می‌کند">
+                                <option value="12:7" {% if board_preset == '12:7' %}selected{% endif %}>۱۲:۷ کلاس</option>
+                                <option value="16:9" {% if board_preset == '16:9' %}selected{% endif %}>۱۶:۹ اسلاید</option>
+                                <option value="4:3" {% if board_preset == '4:3' %}selected{% endif %}>۴:۳</option>
+                                <option value="1:1" {% if board_preset == '1:1' %}selected{% endif %}>مربع</option>
+                                <option value="a4" {% if board_preset == 'a4' %}selected{% endif %}>A4 عمودی</option>
+                                {% if board_preset == 'custom' %}
+                                <option value="custom" selected>{{ board_width }}×{{ board_height }}</option>
+                                {% endif %}
+                            </select>
+                            <span class="wb-size-hint" id="wb-size-hint">{{ board_width }}×{{ board_height }}</span>
+                        </div>
+                        <span class="wb-sep" aria-hidden="true"></span>
+                        {% endif %}
                         <div class="wb-pages" role="group" aria-label="صفحه‌های تخته">
                             <button type="button" id="wb-prev" title="صفحهٔ قبل" aria-label="صفحهٔ قبل" disabled><svg class="ic"><use href="#i-chevron-right"/></svg></button>
                             <span id="wb-page-label" aria-live="polite">صفحهٔ ۱ از ۱</span>
