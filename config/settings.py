@@ -92,6 +92,9 @@ MIDDLEWARE = [
     # the container by IP (see core.middleware.HealthProbeHostMiddleware).
     "core.middleware.HealthProbeHostMiddleware",
     "django.middleware.security.SecurityMiddleware",
+    # An unmigrated database answers with a page + 503 instead of a traceback
+    # (see core.middleware.DatabaseNotReadyMiddleware).
+    "core.middleware.DatabaseNotReadyMiddleware",
     # Serves /static/ straight from the app (compressed, cached), so a
     # deployment needs no nginx rule — and static is never missing on a
     # platform where you cannot edit one. Directly after SecurityMiddleware,

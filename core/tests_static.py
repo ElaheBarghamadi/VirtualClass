@@ -66,12 +66,14 @@ class StaticServingTests(SimpleTestCase):
         self.assertEqual(settings.WHITENOISE_MAX_AGE, 0)  # DEBUG=true in this suite
         # ... and the middleware sits directly after SecurityMiddleware, i.e.
         # before anything (session, auth, CSRF) that a static request needs.
-        self.assertEqual(
-            settings.MIDDLEWARE[1:3],
-            [
-                "django.middleware.security.SecurityMiddleware",
-                "whitenoise.middleware.WhiteNoiseMiddleware",
-            ],
+        chain = list(settings.MIDDLEWARE)
+        self.assertEqual(chain[0], "core.middleware.HealthProbeHostMiddleware")
+        self.assertEqual(chain[1], "django.middleware.security.SecurityMiddleware")
+        # WhiteNoise must still come before anything that needs a session, auth
+        # or a database (the database-not-ready guard sits between them).
+        self.assertLess(
+            chain.index("whitenoise.middleware.WhiteNoiseMiddleware"),
+            chain.index("django.contrib.sessions.middleware.SessionMiddleware"),
         )
 
 

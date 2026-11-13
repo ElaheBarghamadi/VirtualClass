@@ -402,3 +402,119 @@ class MediaPathTests(SimpleTestCase):
             self._ids_for(DEBUG=True, MEDIA_SERVER_URL="", MESH_ENABLED=True, WEBRTC_ICE_SERVERS=[]),
             set(),
         )
+
+
+class UnmigratedDatabaseTests(SimpleTestCase):
+    """`no such table` is a deployment step that has not run, not a crash.
+
+    The visitor must not receive Django's technical page (which prints settings
+    and paths), the platform must see a retryable status, and the operator must
+    get one line saying which command to run.
+    """
+
+    def setUp(self):
+        import core.middleware as middleware
+
+        middleware._db_reported = False
+
+    def _middleware(self, exc):
+        from core.middleware import DatabaseNotReadyMiddleware
+        from django.http import HttpResponse
+
+        def boom(request):
+            raise exc
+
+        def ok(request):
+            return HttpResponse("ok")
+
+        return DatabaseNotReadyMiddleware(boom), DatabaseNotReadyMiddleware(ok)
+
+    def test_a_missing_table_becomes_a_designed_503(self):
+        from django.db.utils import OperationalError
+        from django.test import RequestFactory
+
+        middleware, _ = self._middleware(OperationalError("no such table: classrooms_classroom"))
+        request = RequestFactory().get("/class/abc/room/")
+        with self.assertLogs("core.middleware", level="CRITICAL") as captured:
+            response = middleware(request)
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response["Retry-After"], "60")
+        self.assertEqual(response["Cache-Control"], "no-store")
+        body = response.content.decode()
+        self.assertIn("migrate", body)
+        self.assertNotIn("no such table", body)          # no driver text for users
+        self.assertNotIn("SECRET_KEY", body)
+        self.assertIn("database_not_migrated", captured.records[0].getMessage())
+
+    def test_postgres_and_mysql_wording_is_recognised(self):
+        from django.db.utils import OperationalError, ProgrammingError
+        from django.test import RequestFactory
+
+        for exc in (
+            ProgrammingError('relation "classrooms_classroom" does not exist'),
+            OperationalError("Table 'db.classrooms_classroom' doesn't exist"),
+        ):
+            middleware, _ = self._middleware(exc)
+            response = middleware(RequestFactory().get("/class/abc/room/"))
+            self.assertEqual(response.status_code, 503, exc)
+
+    def test_a_real_bug_is_not_swallowed(self):
+        from django.test import RequestFactory
+
+        middleware, _ = self._middleware(ValueError("boom in a view"))
+        with self.assertRaises(ValueError):
+            middleware(RequestFactory().get("/class/abc/room/"))
+
+    def test_an_unrelated_database_error_still_raises(self):
+        from django.db.utils import OperationalError
+        from django.test import RequestFactory
+
+        middleware, _ = self._middleware(OperationalError("database is locked"))
+        with self.assertRaises(OperationalError):
+            middleware(RequestFactory().get("/class/abc/room/"))
+
+    def test_the_health_probe_handles_its_own_database_errors(self):
+        from django.test import RequestFactory
+
+        middleware, _ = self._middleware(ValueError("never reached"))
+        from django.http import HttpResponse
+
+        from core.middleware import DatabaseNotReadyMiddleware
+
+        seen = {}
+
+        def health(request):
+            seen["path"] = request.path
+            return HttpResponse('{"status": "ok"}')
+
+        response = DatabaseNotReadyMiddleware(health)(
+            RequestFactory().get("/healthz?db=1")
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(seen["path"], "/healthz")
+
+    def test_it_logs_once_per_process(self):
+        from django.db.utils import OperationalError
+        from django.test import RequestFactory
+
+        middleware, _ = self._middleware(OperationalError("no such table: x"))
+        with self.assertLogs("core.middleware", level="CRITICAL") as captured:
+            for _ in range(3):
+                middleware(RequestFactory().get("/class/abc/room/"))
+        self.assertEqual(len(captured.records), 1)
+
+
+class EmptyDatabaseCheckTests(SimpleTestCase):
+    """`check` has to say it, before the first request does."""
+
+    def test_a_missing_migrations_table_is_reported(self):
+        from unittest import mock
+
+        with mock.patch(
+            "django.db.migrations.recorder.MigrationRecorder.has_table", return_value=False
+        ):
+            ids = _ids(checks.database_has_a_schema(None))
+        self.assertIn("deploy.W010", ids)
+
+    def test_a_migrated_database_is_quiet(self):
+        self.assertNotIn("deploy.W010", _ids(checks.database_has_a_schema(None)))

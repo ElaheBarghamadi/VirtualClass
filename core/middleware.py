@@ -118,3 +118,79 @@ class HealthProbeHostMiddleware:
         from django.http.request import validate_host
 
         return validate_host(host, allowed) if host else True
+
+
+class DatabaseNotReadyMiddleware:
+    """Answer an unmigrated database with a page, not a traceback.
+
+    The first thing a fresh container (or an empty PostgreSQL) does is fail on
+    the first query: ``no such table: classrooms_classroom``.  With DEBUG on,
+    the visitor gets Django's technical page — which lists settings, paths and
+    versions — for what is really a deployment step that has not run yet.  With
+    DEBUG off it is an opaque 500.
+
+    This middleware catches exactly that class of error (missing table/relation)
+    and answers ``503`` with a designed page plus ``Retry-After``, so a teacher
+    sees "the database is being prepared", the platform's probe sees a
+    retryable status, and a log line tells the operator the one command to run.
+    Anything else still propagates untouched — this must never swallow a real
+    bug.
+    """
+
+    #: Fragments that mean "this database has no schema yet", across backends.
+    MISSING_SCHEMA_HINTS = (
+        "no such table",
+        "does not exist",          # PostgreSQL: relation "…" does not exist
+        "doesn't exist",           # MySQL: Table 'db.x' doesn't exist
+        "doesn’t exist",
+        "unknown table",
+        "no such column",
+    )
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        from django.db import Error as DatabaseError
+
+        # The health probe reports database trouble itself (503 + JSON), and it
+        # must never render a page or touch a template.
+        path = request.path_info or "/"
+        if path.rstrip("/") == "/healthz":
+            return self.get_response(request)
+        try:
+            return self.get_response(request)
+        except DatabaseError as exc:
+            if not self._is_missing_schema(exc):
+                raise
+            self._report_once(request, exc)
+            return self._response()
+
+    @classmethod
+    def _is_missing_schema(cls, exc: Exception) -> bool:
+        message = str(exc).lower()
+        return any(hint in message for hint in cls.MISSING_SCHEMA_HINTS)
+
+    def _report_once(self, request, exc) -> None:
+        if _db_reported:
+            return
+        globals()["_db_reported"] = True
+        logger.critical(
+            "database_not_migrated path=%s error=%s — run `python manage.py migrate` "
+            "(and link a durable DATABASE_URL on a container platform)",
+            getattr(request, "path", "?"), exc,
+        )
+
+    def _response(self):
+        from django.http import HttpResponse
+        from django.template import loader
+
+        body = loader.get_template("errors/db_not_ready.html").render({})
+        response = HttpResponse(body, status=503, content_type="text/html; charset=utf-8")
+        response["Retry-After"] = "60"
+        response["Cache-Control"] = "no-store"
+        return response
+
+
+#: One log line per process is enough; the 503s themselves are self-explanatory.
+_db_reported = False

@@ -314,6 +314,8 @@ WEBRTC_ICE_SERVERS=[{"urls":["turn:openrelay.metered.ca:80","turn:openrelay.mete
 | هر POST `403` (ورود هم) | `CSRF_TRUSTED_ORIGINS` خالی/قدیمی یا هدر پروکسی | `CSRF_TRUSTED_ORIGINS=https://virtualclass.weblines.ir` + `TRUST_X_FORWARDED_PROTO=true` |
 | «صفحه بدون CSS» | `collectstatic` نشده یا `STATIC_ROOT` دستی ست شده | `STATIC_ROOT` را در کانتینر خالی کنید و Full rebuild بزنید |
 | بعد از هر دیپلوی کاربران رفته‌اند | `DATABASE_URL` خالی → SQLite در کانتینر | PostgreSQL را لینک کنید (`deploy_check` → `postgresql`) |
+| `no such table: classrooms_classroom` | کانتینر تازه بالا آمده و `migrate` اجرا نشده (Start command پنل `entrypoint` را رد کرده) | از Shell: `python manage.py migrate --noinput`؛ Start command را خالی/`/usr/local/bin/entrypoint` کنید و PostgreSQL لینک کنید تا دیگر تکرار نشود. کد فعلی برای همین حالت صفحهٔ ۵۰۳ با پیام «پایگاه‌داده آماده نیست» می‌دهد، نه traceback |
+| در `check --deploy` می‌بینید `deploy.W010` | دیتابیسِ جلوی این پروسه خالی/بدون مایگریشن است | همان `migrate` |
 | چت/تخته بین دو تب یا دو نفر همگام نیست | `REDIS_URL` خالی → channel layer درون‌پروسه | سرویس Redis + `REDIS_URL` |
 | `/healthz` از داخل کانتینر ۲۰۰ است ولی پنل می‌گوید unhealthy | پروب با IP صدا می‌زند | کد فعلی `/healthz` را از بررسی Host مستثنی می‌کند؛ مسیر Health check را روی `/healthz` بگذارید |
 | دوربین/میکروفون بی‌صدا است | `MEDIA_SERVER_URL` خالی و `MESH_ENABLED=0` | بخش ۵ |

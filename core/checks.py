@@ -234,3 +234,44 @@ def media_can_reach_both_sides(app_configs, **kwargs) -> list[CheckWarning]:
             id="deploy.W008",
         ))
     return issues
+
+
+@register()
+def database_has_a_schema(app_configs, **kwargs) -> list[CheckWarning]:
+    """Warn when the database this process is connected to has no migrations.
+
+    ``deploy.W003`` talks about SQLite being *ephemeral*; this one is about the
+    database in front of us being **empty**, which is what a container that
+    started without running ``migrate`` looks like.  It fires regardless of
+    DEBUG, because the symptom (``no such table: classrooms_classroom``) is not
+    a development-only problem.
+    """
+    issues: list[CheckWarning] = []
+    try:
+        from django.db import connections
+        from django.db.migrations.recorder import MigrationRecorder
+
+        connection = connections["default"]
+        recorder = MigrationRecorder(connection)
+        if not recorder.has_table():
+            issues.append(CheckWarning(
+                "The database has no migrations table: this deployment has never "
+                "run `migrate`, so every page that touches the database fails "
+                "with “no such table”.",
+                hint="Run `python manage.py migrate --noinput` (the container "
+                     "entrypoint does it on boot; a platform that overrides the "
+                     "start command skips it). On a container platform also link "
+                     "DATABASE_URL so the schema survives the next deploy.",
+                id="deploy.W010",
+            ))
+            return issues
+        if not recorder.applied_migrations():
+            issues.append(CheckWarning(
+                "The database is empty: migrations table exists but no migration "
+                "has been applied.",
+                hint="Run `python manage.py migrate --noinput`.",
+                id="deploy.W010",
+            ))
+    except Exception:  # pragma: no cover - diagnostics must never crash
+        return issues
+    return issues
