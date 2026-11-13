@@ -417,6 +417,11 @@ body.full-page .messages {
     box-shadow: 0 1px 3px rgba(0, 0, 0, .07);
 }
 .tile-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Who is talking has to be readable at a glance, in a grid of eight tiles: the
+   badge says "someone here", this says WHOSE name it is — one still change of
+   colour/weight, no movement. */
+.tile.speaking .tile-name { font-weight: 750; color: var(--room-text); }
+.tile-overlay { transition: color var(--speed) var(--ease); }
 .tile-icons i { font-style: normal; font-size: .7rem; margin-inline-start: .3rem; }
 
 /* Camera-off tile: the name belongs under the avatar, not in a pill in the

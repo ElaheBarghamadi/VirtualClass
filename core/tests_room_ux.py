@@ -554,6 +554,39 @@ class SpeakingHighlightTests(SimpleTestCase):
         self.assertIn(".tile.speaking .tile-speaking { display: inline-flex; }", self.css)
 
 
+class WhoIsSpeakingTests(SimpleTestCase):
+    """In a full grid the room must answer "who is that?" without guessing.
+
+    The level meter proves a microphone is live; the name is what makes the cue
+    useful.  Nothing here may animate: a bouncing name is worse than none.
+    """
+
+    def setUp(self):
+        self.css = read(CSS / "room.css")
+        self.media = read(JS / "media.js")
+        self.mesh = read(JS / "mesh.js")
+
+    def test_every_tile_carries_a_name(self):
+        self.assertIn('<span class="tile-name"></span>', self.media)
+        self.assertIn('<span class="tile-name"></span>', self.mesh)
+        self.assertIn("tile.querySelector('.tile-name').textContent", self.media)
+        self.assertIn("overlay.querySelector('.tile-name').textContent", self.mesh)
+
+    def test_speaking_emphasises_that_name_still(self):
+        emph = rule(self.css, ".tile.speaking .tile-name")
+        self.assertIn("font-weight:", emph)
+        self.assertIn("color:", emph)
+        self.assertNotIn("animation", emph)
+
+    def test_a_speaking_badge_exists_on_the_tile(self):
+        self.assertIn(".tile-speaking {", self.css)
+        self.assertIn(".tile.speaking .tile-speaking { display: inline-flex; }", self.css)
+
+    def test_self_is_named_as_self(self):
+        self.assertIn("(شما)", self.media)
+        self.assertIn("(شما)", self.mesh)
+
+
 class MediaTuningTests(SimpleTestCase):
     """A mesh multiplies every upload by the size of the room.
 
