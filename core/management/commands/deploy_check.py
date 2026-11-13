@@ -80,6 +80,7 @@ class Command(BaseCommand):
             ("secret_key", "set" if settings.SECRET_KEY and "insecure" not in settings.SECRET_KEY[:20] else "development default"),
             ("database", f"{engine} · {db.get('NAME')}"),
             ("migrations", _count_migrations()),
+            ("health", "/healthz  (add ?db=1 for a database probe)"),
             ("allowed_hosts", ", ".join(settings.ALLOWED_HOSTS) or "-"),
             ("csrf_trusted_origins", ", ".join(settings.CSRF_TRUSTED_ORIGINS) or "-"),
             ("trust_x_forwarded_proto", str(getattr(settings, "SECURE_PROXY_SSL_HEADER", None) is not None)),

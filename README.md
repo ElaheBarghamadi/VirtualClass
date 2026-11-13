@@ -980,10 +980,34 @@ python tests_e2e/run_e2e.py --room <CODE>
 | **سرور مجازی** (nginx + Daphne + systemd) | کنترل کامل، WebSocket تضمینی | [`deploy/nginx/virtualclass.conf`](deploy/nginx/virtualclass.conf) · [`deploy/systemd/`](deploy/systemd) |
 | **ابر وب‌لاینز** (PaaS) | بدون کار سرور، دامنه/SSL/دیتابیس از پنل | [`deploy/weblines/Dockerfile`](deploy/weblines/Dockerfile) · [`.env.production.example`](.env.production.example) |
 
+### حداقلِ تنظیمات و پروب سلامت
+
+شش متغیر، و بقیه پیش‌فرضِ امن دارند:
+
+```env
+SECRET_KEY=<۶۴ کاراکتر تصادفی>      DEBUG=false
+ALLOWED_HOSTS=class.example.com      CSRF_TRUSTED_ORIGINS=https://class.example.com
+DATABASE_URL=postgres://u:p@host:5432/db?sslmode=require
+TRUST_X_FORWARDED_PROTO=true         # اگر TLS را پروکسی تمام می‌کند
+```
+
+`python manage.py check --deploy` حالا چهار اشتباه رایج هاست را با کد گزارش می‌کند:
+`deploy.W004` (هاست عمومی در `ALLOWED_HOSTS` نیست → همه `400`)، `deploy.W005`
+(`CSRF_TRUSTED_ORIGINS` خالی → هر فرم `403`)، `deploy.W006` (پوشهٔ آپلود نیست/نوشتنی نیست)،
+`deploy.W007` (ریدایرکت HTTPS بدون هدر پروکسی → حلقه). برای زیردامنه‌های پلتفرمی، `*`
+ممنوع است اما `ALLOWED_HOSTS=.weblines.app` و `CSRF_TRUSTED_ORIGINS=https://*.weblines.app`
+کار می‌کنند.
+
+**پروب سلامت** برای health check هاست: `GET /healthz` (پروسه بالاست) و `GET /healthz?db=1`
+(دیتابیس هم جواب می‌دهد، وگرنه `503`). بدون احراز هویت، بدون session، بدون کش، و از
+ریدایرکت HTTPS مستثنی است تا پروبِ داخلی هم جواب بگیرد.
+
 ### علائم یک استقرار اشتباه (قبل از اینکه دنبال باگ بگردید)
 
 ```bash
 python manage.py deploy_check        # دیتابیس، مسیرها، تعداد استاتیک، Redis، نوع سرور
+python manage.py check --deploy      # تنظیمات امنیتی و چهار خطای رایج هاست
+curl -fsS localhost:8000/healthz?db=1
 ```
 
 | در لاگ می‌بینید | یعنی |

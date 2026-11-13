@@ -78,3 +78,114 @@ def database_is_not_ephemeral(app_configs, **kwargs) -> list[CheckWarning]:
             id="deploy.W003",
         ))
     return issues
+
+
+@register()
+def hosts_before_traffic(app_configs, **kwargs) -> list[CheckWarning]:
+    """Warn when a production deployment cannot answer for its own domain.
+
+    ``ALLOWED_HOSTS`` defaults to the loopback names on purpose (fail closed),
+    but a host that was never told its domain answers every request with a bare
+    ``400 Bad Request`` — which reads like a broken deployment, not like a
+    missing setting.
+    """
+    issues: list[CheckWarning] = []
+    if settings.DEBUG:
+        return issues
+    public = [h for h in settings.ALLOWED_HOSTS if h not in _LOCAL_HOSTS]
+    if not public:
+        issues.append(CheckWarning(
+            "DEBUG=false and ALLOWED_HOSTS has no public host name "
+            f"({', '.join(settings.ALLOWED_HOSTS) or 'empty'}): every request "
+            "will be answered with 400.",
+            hint="Set ALLOWED_HOSTS=your-domain.example (comma separated, no "
+                 "scheme, no wildcard). See .env.production.example.",
+            id="deploy.W004",
+        ))
+    return issues
+
+
+@register()
+def csrf_origins_match_the_host(app_configs, **kwargs) -> list[CheckWarning]:
+    """Warn when HTTPS form posts will be rejected by CSRF.
+
+    With DEBUG off, Django only accepts a POST whose Origin header is in
+    ``CSRF_TRUSTED_ORIGINS``.  Leaving it empty is the single most common
+    "login does nothing / 403" report from a fresh host.
+    """
+    issues: list[CheckWarning] = []
+    if settings.DEBUG or settings.CSRF_TRUSTED_ORIGINS:
+        return issues
+    issues.append(CheckWarning(
+        "DEBUG=false and CSRF_TRUSTED_ORIGINS is empty: browsers post an "
+        "https:// Origin, so every form (login first) will fail with 403.",
+        hint="Set CSRF_TRUSTED_ORIGINS=https://your-domain.example (scheme + "
+             "host, comma separated for several).",
+        id="deploy.W005",
+    ))
+    return issues
+
+
+@register()
+def upload_directories_are_writable(app_configs, **kwargs) -> list[CheckWarning]:
+    """Warn when the uploads' directories cannot be written.
+
+    On a container platform MEDIA_ROOT has to be on the mounted volume; on a
+    VPS the systemd user has to own it.  Either way the symptom is the same and
+    only appears at the first upload — so check it at boot instead.
+    """
+    issues: list[CheckWarning] = []
+    if settings.DEBUG:
+        # Django creates the directory on the first write in development.
+        return issues
+    import tempfile
+
+    for label, root in (
+        ("MEDIA_ROOT", settings.MEDIA_ROOT),
+        ("PRIVATE_MEDIA_ROOT", settings.PRIVATE_MEDIA_ROOT),
+    ):
+        path = os.path.abspath(str(root))
+        if not os.path.isdir(path):
+            issues.append(CheckWarning(
+                f"{label} does not exist: {path}",
+                hint="Create it (and put it on the persistent volume in a "
+                     "container) before the first upload.",
+                id="deploy.W006",
+            ))
+            continue
+        try:
+            with tempfile.NamedTemporaryFile(dir=path, prefix=".write-check-"):
+                pass
+        except OSError:
+            issues.append(CheckWarning(
+                f"{label} is not writable by this process: {path}",
+                hint="Fix the owner/permissions of that directory (systemd "
+                     "user, container user, or the mounted volume).",
+                id="deploy.W006",
+            ))
+    return issues
+
+
+@register()
+def https_redirect_without_a_proxy_header(app_configs, **kwargs) -> list[CheckWarning]:
+    """Warn about the redirect loop behind a TLS-terminating proxy.
+
+    ``SECURE_SSL_REDIRECT`` asks Django to send HTTP to HTTPS.  When the proxy
+    terminates TLS, Django sees plain HTTP for *every* request and keeps
+    redirecting — an infinite loop that looks like the site is down.
+    """
+    issues: list[CheckWarning] = []
+    if settings.DEBUG or not getattr(settings, "SECURE_SSL_REDIRECT", False):
+        return issues
+    if getattr(settings, "SECURE_PROXY_SSL_HEADER", None):
+        return issues
+    issues.append(CheckWarning(
+        "SECURE_SSL_REDIRECT is on but SECURE_PROXY_SSL_HEADER is not: behind "
+        "a proxy that terminates TLS every request looks like HTTP, so "
+        "Django redirects in a loop.",
+        hint="Set TRUST_X_FORWARDED_PROTO=true when a proxy/edge forwards "
+             "X-Forwarded-Proto: https, or set SECURE_SSL_REDIRECT=false when "
+             "the app itself is reachable over plain HTTP.",
+        id="deploy.W007",
+    ))
+    return issues

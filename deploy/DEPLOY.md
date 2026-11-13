@@ -26,6 +26,45 @@
 
 ---
 
+## ۰.۰) حداقل تنظیمات برای هر هاست (کپی‌پیست)
+
+هر هاستی — ابر، VPS یا پنل — با همین شش متغیر بالا می‌آید؛ بقیه پیش‌فرضِ امن دارند:
+
+```env
+SECRET_KEY=<۶۴ کاراکتر تصادفی: python -c "import secrets;print(secrets.token_urlsafe(48))">
+DEBUG=false
+ALLOWED_HOSTS=class.example.com            # بدون https:// و بدون *
+CSRF_TRUSTED_ORIGINS=https://class.example.com
+DATABASE_URL=postgres://u:p@host:5432/db?sslmode=require
+TRUST_X_FORWARDED_PROTO=true               # اگر TLS را پروکسی تمام می‌کند
+```
+
+قواعدی که همیشه اشتباه می‌شوند و حالا در `manage.py check` گزارش می‌شوند:
+
+| کد | چه می‌گوید | رفع |
+|---|---|---|
+| `deploy.W004` | `ALLOWED_HOSTS` هیچ هاست عمومی ندارد → همه‌چیز `400` | همان شش خط بالا |
+| `deploy.W005` | `CSRF_TRUSTED_ORIGINS` خالی است → هر فرم (اول از همه ورود) `403` | `https://دامنه` را بگذارید |
+| `deploy.W006` | `MEDIA_ROOT`/`PRIVATE_MEDIA_ROOT` نیست یا نوشتنی نیست | volume در کانتینر، مالکیت در VPS |
+| `deploy.W007` | `SECURE_SSL_REDIRECT` روشن است ولی هدر پروکسی نه → حلقهٔ ریدایرکت | `TRUST_X_FORWARDED_PROTO=true` |
+| `deploy.W002` | بدون `REDIS_URL` → تک‌پروسه | Redis؛ در نصب تک‌پروسه پذیرفتنی است |
+| `deploy.W003` | SQLite با `DEBUG=false` | PostgreSQL، یا `ALLOW_SQLITE_IN_PRODUCTION=true` روی هاست دائمی |
+
+**دامنهٔ پلتفرمی (زیردامنه‌های متغیر):** `*` در `ALLOWED_HOSTS` با `DEBUG=false` عمداً
+رد می‌شود، اما جنگو دو الگوی امن دارد: `ALLOWED_HOSTS=.weblines.app` (هر زیردامنه) و
+`CSRF_TRUSTED_ORIGINS=https://*.weblines.app`.
+
+**پروب سلامت:** در پنل هاست، Health check را روی `/healthz` بگذارید (فقط «پروسه بالا
+است») یا `/healthz?db=1` (دیتابیس هم جواب می‌دهد و در غیر این صورت `503`). این مسیر از
+ریدایرکت HTTPS **مستثنی** است تا پروبِ داخلیِ HTTP هم جواب بگیرد.
+
+**DB میزبانی‌شده:** رشتهٔ اتصال با query string پشتیبانی می‌شود
+(`?sslmode=require&connect_timeout=5`)، اعتبارنامهٔ percent-encoded هم درست باز می‌شود
+(`p%40ss` → `p@ss`). برای PostgreSQL مدیریت‌شده `DB_CONN_MAX_AGE=60` منطقی است و اگر
+pgbouncer در حالت transaction pooling است `DB_DISABLE_SERVER_SIDE_CURSORS=true`.
+
+---
+
 ## ۰.۱) لاگِ سالم چه شکلی است؟
 
 هر دیپلوی (با ایمیجِ ما) با این دو خط شروع می‌شود — و اگر شروع نشود، همان‌جا مشکل را پیدا کرده‌اید:
@@ -314,12 +353,16 @@ curl -I https://class.example.com/static/css/main.css   # 200 + Content-Type: te
 
 ### بررسی سلامت تنظیمات قبل از تحویل
 
+سه دستور، روی همان هاست، قبل از تحویل:
+
 ```bash
+python manage.py deploy_check                       # چه چیزی سرو می‌شود (DB، استاتیک، Redis)
 DEBUG=false SECRET_KEY=<کلید واقعی> ALLOWED_HOSTS=… CSRF_TRUSTED_ORIGINS=… \
-  python manage.py check --deploy
+  python manage.py check --deploy                   # W004…W007 باید خالی باشد
+curl -fsS localhost:${PORT:-8000}/healthz?db=1      # {"status": "ok", "database": "ok"}
 ```
 
-خروجی سالم: فقط دو هشدار. `deploy.W002` (بدون `REDIS_URL`) که در یک نصب تک‌پروسه پذیرفتنی است، و `security.W021` (`SECURE_HSTS_PRELOAD`) که **عمداً** روشن نشده — ثبت در preload list کاری یک‌طرفه است و باید آگاهانه انجام شود.
+خروجی سالم `check --deploy`: فقط دو هشدار. `deploy.W002` (بدون `REDIS_URL`) که در یک نصب تک‌پروسه پذیرفتنی است، و `security.W021` (`SECURE_HSTS_PRELOAD`) که **عمداً** روشن نشده — ثبت در preload list کاری یک‌طرفه است و باید آگاهانه انجام شود. اگر `deploy.W004`…`deploy.W007` دیدید، همان جدول بخش ۰.۰.
 
 دو تنظیم امنیتی که در حالت `DEBUG=false` خودکار روشن می‌شوند و ممکن است در تست اول غافلگیرتان کنند:
 

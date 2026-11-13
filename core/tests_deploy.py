@@ -103,3 +103,190 @@ class MiddlewareSettingTests(SimpleTestCase):
 
         self.assertEqual(settings.MIDDLEWARE[-1], "core.middleware.ASGIOnlyWebSocketsMiddleware")
         self.assertTrue(hasattr(ASGIOnlyWebSocketsMiddleware, "__call__"))
+
+
+class ProductionReadinessTests(SimpleTestCase):
+    """The four settings a fresh host always gets wrong.
+
+    Each one fails *after* a successful deploy — 400 on every page, 403 on every
+    form, a redirect loop, or uploads that only break at the first file — so
+    they are checked at boot and reported in one place instead of being
+    rediscovered in class.
+    """
+
+    def _checks(self, **want):
+        with self.settings(**want):
+            ids = set()
+            for check in (
+                checks.hosts_before_traffic,
+                checks.csrf_origins_match_the_host,
+                checks.https_redirect_without_a_proxy_header,
+            ):
+                ids |= _ids(check(None))
+        return ids
+
+    def test_a_production_host_needs_its_own_host_name(self):
+        self.assertIn(
+            "deploy.W004",
+            self._checks(
+                DEBUG=False, ALLOWED_HOSTS=["localhost", "127.0.0.1"],
+                CSRF_TRUSTED_ORIGINS=["https://class.example.com"],
+                SECURE_SSL_REDIRECT=False,
+            ),
+        )
+
+    def test_a_real_host_name_silences_it(self):
+        self.assertNotIn(
+            "deploy.W004",
+            self._checks(
+                DEBUG=False, ALLOWED_HOSTS=["class.example.com"],
+                CSRF_TRUSTED_ORIGINS=["https://class.example.com"],
+                SECURE_SSL_REDIRECT=False,
+            ),
+        )
+
+    def test_https_posts_need_trusted_origins(self):
+        self.assertIn(
+            "deploy.W005",
+            self._checks(
+                DEBUG=False, ALLOWED_HOSTS=["class.example.com"],
+                CSRF_TRUSTED_ORIGINS=[], SECURE_SSL_REDIRECT=False,
+            ),
+        )
+
+    def test_the_redirect_loop_behind_a_proxy_is_reported(self):
+        ids = self._checks(
+            DEBUG=False, ALLOWED_HOSTS=["class.example.com"],
+            CSRF_TRUSTED_ORIGINS=["https://class.example.com"],
+            SECURE_SSL_REDIRECT=True, SECURE_PROXY_SSL_HEADER=None,
+        )
+        self.assertIn("deploy.W007", ids)
+
+    def test_the_proxy_header_is_the_fix(self):
+        ids = self._checks(
+            DEBUG=False, ALLOWED_HOSTS=["class.example.com"],
+            CSRF_TRUSTED_ORIGINS=["https://class.example.com"],
+            SECURE_SSL_REDIRECT=True,
+            SECURE_PROXY_SSL_HEADER=("HTTP_X_FORWARDED_PROTO", "https"),
+        )
+        self.assertNotIn("deploy.W007", ids)
+
+    def test_development_is_never_nagged(self):
+        self.assertEqual(
+            self._checks(
+                DEBUG=True, ALLOWED_HOSTS=["*"], CSRF_TRUSTED_ORIGINS=[],
+                SECURE_SSL_REDIRECT=False,
+            ),
+            set(),
+        )
+
+    def test_missing_upload_directories_are_reported(self):
+        import tempfile
+        from pathlib import Path
+
+        missing = Path(tempfile.mkdtemp()) / "not-here"
+        with self.settings(
+            DEBUG=False, MEDIA_ROOT=missing,
+            PRIVATE_MEDIA_ROOT=tempfile.mkdtemp(),
+        ):
+            self.assertIn("deploy.W006", _ids(checks.upload_directories_are_writable(None)))
+
+    def test_a_writable_directory_passes(self):
+        import tempfile
+
+        with self.settings(
+            DEBUG=False,
+            MEDIA_ROOT=tempfile.mkdtemp(),
+            PRIVATE_MEDIA_ROOT=tempfile.mkdtemp(),
+        ):
+            self.assertNotIn(
+                "deploy.W006", _ids(checks.upload_directories_are_writable(None))
+            )
+
+
+class HealthProbeTests(TestCase):
+    """The one URL a host's health check can be pointed at."""
+
+    def test_it_answers_without_a_session_or_a_login(self):
+        response = self.client.get("/healthz")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(json.loads(response.content)["status"], "ok")
+        self.assertEqual(response["Cache-Control"], "no-store")
+        self.assertEqual(response["X-Robots-Tag"], "noindex")
+
+    def test_the_database_probe_reports_ok(self):
+        payload = json.loads(self.client.get("/healthz?db=1").content)
+        self.assertEqual(payload["database"], "ok")
+        self.assertEqual(payload["status"], "ok")
+
+    def test_a_broken_database_is_503_not_a_traceback(self):
+        from unittest import mock
+
+        with mock.patch("core.views.connection") as fake:
+            fake.cursor.side_effect = RuntimeError("connection refused")
+            response = self.client.get("/healthz?db=1")
+        self.assertEqual(response.status_code, 503)
+        body = json.loads(response.content)
+        self.assertEqual(body["database"], "unavailable")
+        self.assertNotIn("refused", response.content.decode())  # no driver detail
+
+    def test_the_probe_is_exempt_from_the_https_redirect(self):
+        import re
+
+        from django.conf import settings
+
+        with self.settings(SECURE_REDIRECT_EXEMPT=[r"^healthz$"]):
+            self.assertTrue(any(re.search(pattern, "healthz") for pattern in settings.SECURE_REDIRECT_EXEMPT))
+
+
+class DatabaseUrlTests(SimpleTestCase):
+    """A hosted DSN is not just host/user/password — its query string counts."""
+
+    def _entry(self, url, **env):
+        import importlib
+        import os
+        from unittest import mock
+
+        from config import settings as settings_module
+
+        with mock.patch.dict(os.environ, env):
+            return importlib.reload(settings_module)._database_from_url(url)
+
+    def test_percent_encoded_credentials_are_decoded(self):
+        entry = self._entry("postgres://us%40er:p%40ss%23word@db.example:5432/class")
+        self.assertEqual(entry["USER"], "us@er")
+        self.assertEqual(entry["PASSWORD"], "p@ss#word")
+        self.assertEqual(entry["NAME"], "class")
+        self.assertEqual(entry["PORT"], "5432")
+
+    def test_ssl_parameters_survive(self):
+        entry = self._entry(
+            "postgres://u:p@db.example:5432/class?sslmode=require&connect_timeout=5"
+        )
+        self.assertEqual(entry["OPTIONS"]["sslmode"], "require")
+        self.assertEqual(entry["OPTIONS"]["connect_timeout"], 5)
+
+    def test_a_sane_connect_timeout_is_always_present(self):
+        entry = self._entry("postgres://u:p@db.example:5432/class")
+        self.assertIn("connect_timeout", entry["OPTIONS"])
+
+    def test_connection_reuse_is_opt_in(self):
+        entry = self._entry("postgres://u:p@db.example:5432/class")
+        self.assertEqual(entry["CONN_MAX_AGE"], 0)
+        self.assertNotIn("CONN_HEALTH_CHECKS", entry)
+        reuse = self._entry("postgres://u:p@db.example:5432/class", DB_CONN_MAX_AGE="60")
+        self.assertEqual(reuse["CONN_MAX_AGE"], 60)
+        self.assertTrue(reuse["CONN_HEALTH_CHECKS"])
+
+    def test_mysql_speaks_utf8mb4_and_an_unknown_scheme_is_refused(self):
+        from django.core.exceptions import ImproperlyConfigured
+
+        entry = self._entry("mysql://u:p@db.example/db")
+        self.assertEqual(entry["OPTIONS"]["charset"], "utf8mb4")
+        with self.assertRaises(ImproperlyConfigured):
+            self._entry("mongodb://u:p@db.example/db")
+
+    def test_sqlite_is_the_development_default(self):
+        entry = self._entry("")
+        self.assertEqual(entry["ENGINE"], "django.db.backends.sqlite3")
+        self.assertEqual(entry["OPTIONS"], {"timeout": 20})

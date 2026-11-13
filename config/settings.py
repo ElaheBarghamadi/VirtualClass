@@ -7,7 +7,7 @@ hard-coded here.
 """
 import os
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
@@ -144,8 +144,17 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "")
 def _database_from_url(url: str) -> dict:
     """Translate a DATABASE_URL DSN into a Django DATABASES entry.
 
-    Supported schemes: ``postgres(ql)://`` and ``mysql://``. An empty URL
-    selects SQLite for development; an unsupported URL is rejected.
+    Supported schemes: ``postgres(ql)://`` and ``mysql://``.  An empty URL
+    selects SQLite for development; an unsupported URL is rejected instead of
+    silently falling back (data must never land in the wrong place).
+
+    Managed hosts hand out DSNs that carry their TLS requirements in the query
+    string — ``postgres://u:p@h:5432/db?sslmode=require`` — and percent-encoded
+    credentials (``p%40ss`` for ``p@ss``).  Both were dropped before, which on a
+    real host means either a refused connection ("no pg_hba.conf entry … SSL
+    off") or a wrong password.  Query parameters are honoured, credentials are
+    decoded, and ``DB_CONN_MAX_AGE`` / ``DB_DISABLE_SERVER_SIDE_CURSORS`` cover
+    the two connection-pooling setups managed PostgreSQL usually uses.
     """
     if url:
         parsed = urlparse(url)
@@ -155,19 +164,66 @@ def _database_from_url(url: str) -> dict:
         elif scheme in {"mysql", "mysql2"}:
             engine, default_port = "django.db.backends.mysql", 3306
         else:
-            raise ImproperlyConfigured("Unsupported DATABASE_URL scheme; refusing SQLite fallback.")
-        if engine:
-            return {
-                "ENGINE": engine,
-                "NAME": parsed.path.lstrip("/") or os.environ.get("DB_NAME", ""),
-                "USER": parsed.username or os.environ.get("DB_USER", ""),
-                "PASSWORD": parsed.password or os.environ.get("DB_PASSWORD", ""),
-                "HOST": parsed.hostname or os.environ.get("DB_HOST", "localhost"),
-                "PORT": str(parsed.port or os.environ.get("DB_PORT", default_port)),
-            }
+            raise ImproperlyConfigured(
+                "Unsupported DATABASE_URL scheme; refusing SQLite fallback. "
+                "Use postgres:// or mysql://."
+            )
+
+        query = parse_qs(parsed.query)
+
+        def param(name: str) -> str | None:
+            values = query.get(name)
+            return unquote(values[0]) if values else None
+
+        options: dict[str, object] = {}
+        if engine.endswith("postgresql"):
+            # libpq parameters a hosted database asks for explicitly.
+            for key in ("sslmode", "connect_timeout", "application_name", "options"):
+                value = param(key)
+                if not value:
+                    continue
+                options[key] = int(value) if key == "connect_timeout" and value.isdigit() else value
+        else:
+            # Persian text needs the 4-byte charset on MySQL/MariaDB.
+            options["charset"] = "utf8mb4"
+
+        try:
+            connect_timeout = int(os.environ.get("DB_CONNECT_TIMEOUT", "10"))
+        except ValueError:
+            connect_timeout = 10
+        if engine.endswith("postgresql") and "connect_timeout" not in options:
+            # A hung database must fail a request, not freeze a worker.
+            options["connect_timeout"] = connect_timeout
+
+        entry = {
+            "ENGINE": engine,
+            "NAME": unquote(parsed.path.lstrip("/")) or os.environ.get("DB_NAME", ""),
+            "USER": unquote(parsed.username or os.environ.get("DB_USER", "")),
+            "PASSWORD": unquote(parsed.password or os.environ.get("DB_PASSWORD", "")),
+            "HOST": parsed.hostname or os.environ.get("DB_HOST", "localhost"),
+            "PORT": str(parsed.port or os.environ.get("DB_PORT", default_port)),
+            "OPTIONS": options,
+        }
+        # Persistent connections are what make a Django process cheap under
+        # load — but a supervised/pooled database drops them, so the default is
+        # 0 (open per request) unless the operator asks for reuse.
+        try:
+            entry["CONN_MAX_AGE"] = int(os.environ.get("DB_CONN_MAX_AGE", "0"))
+        except ValueError:
+            entry["CONN_MAX_AGE"] = 0
+        if entry["CONN_MAX_AGE"]:
+            entry["CONN_HEALTH_CHECKS"] = True
+        # A transaction-pooling pgbouncer cannot use server-side cursors.
+        entry["DISABLE_SERVER_SIDE_CURSORS"] = env_bool(
+            "DB_DISABLE_SERVER_SIDE_CURSORS", "false"
+        )
+        return entry
     return {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": BASE_DIR / "db.sqlite3",
+        # SQLite under several workers: fail loudly instead of "database is
+        # locked" after a 5-second stall.
+        "OPTIONS": {"timeout": 20},
     }
 
 
@@ -463,9 +519,21 @@ if not DEBUG:
     SESSION_COOKIE_SECURE = env_bool("SESSION_COOKIE_SECURE", "true")
     CSRF_COOKIE_SECURE = env_bool("CSRF_COOKIE_SECURE", "true")
     SECURE_SSL_REDIRECT = env_bool("SECURE_SSL_REDIRECT", "true")
-    SECURE_HSTS_SECONDS = 60 * 60 * 24 * 30
-    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    # 30 days by default: long enough to protect a real class, short enough
+    # that a mistake (or a domain move) is not permanent.  Set 0 on a host
+    # that is not on HTTPS yet.
+    SECURE_HSTS_SECONDS = int(os.environ.get("SECURE_HSTS_SECONDS", str(60 * 60 * 24 * 30)))
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = env_bool("SECURE_HSTS_INCLUDE_SUBDOMAINS", "true")
+    # Only meaningful once the domain is submitted to the browser preload list;
+    # blanket-enabling it is a decision the operator has to make.
+    SECURE_HSTS_PRELOAD = env_bool("SECURE_HSTS_PRELOAD", "false")
+    SECURE_REFERRER_POLICY = os.environ.get("SECURE_REFERRER_POLICY", "same-origin")
+    SECURE_CONTENT_TYPE_NOSNIFF = True
     X_FRAME_OPTIONS = "DENY"
+    # A platform probe must get an answer, not a 301 to the same machine over
+    # TLS it cannot speak.  `/healthz` returns no data, so serving it over the
+    # internal HTTP port leaks nothing.
+    SECURE_REDIRECT_EXEMPT = env_list("SECURE_REDIRECT_EXEMPT", r"^healthz$")
 
 # Structured application logging.  Sensitive data (passwords, tokens,
 # credentials) is never logged — loggers receive identifiers only.
