@@ -141,10 +141,21 @@ class ChatModeTests(SimpleTestCase):
         self.assertIn('id="chat-channel-hint"', self.room)
 
     def test_the_mode_is_rendered_from_the_server_value(self):
-        self.assertIn("{% if classroom.chat_private %}پیام شما فقط برای معلم دیده می‌شود.", self.room)
+        self.assertIn('{% if not classroom.chat_private %}پیام‌ها برای همهٔ کلاس', self.room)
         self.assertIn('data-chat-private="{{ classroom.chat_private|yesno:', self.room)
         # the client boots from that attribute instead of assuming «عمومی»
         self.assertIn("dataset.chatPrivate === '1'", self.chat_js)
+
+    def test_the_same_mode_reads_differently_for_a_host_and_a_student(self):
+        # a host still writes to the whole class; telling them «only the
+        # teacher sees your message» would be a lie
+        self.assertIn("{% elif is_privileged %}پیام دانش‌آموزان فقط برای میزبان", self.room)
+        self.assertIn("پیام‌های شما برای همه دیده می‌شود؛ پیام دانش‌آموزان فقط برای تیم میزبان.", self.room)
+        self.assertIn("{% else %}پیام شما فقط برای معلم دیده می‌شود؛ همکلاسی‌ها آن را نمی‌بینند.{% endif %}", self.room)
+        # … and the live client mirrors the same rule
+        self.assertIn("writesPrivately()", self.chat_js)
+        self.assertIn("this.mode === 'private' && !this.privileged", self.chat_js)
+        self.assertIn("hostLabel", self.chat_js)
 
     def test_composer_is_shared_by_everybody_and_carries_no_channel(self):
         self.assertIn('id="chat-form"', self.room)

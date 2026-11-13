@@ -30,6 +30,9 @@ const COUNTER_FROM = 800;
 const BOTTOM_SLACK = 90;          // px from the end that still counts as "at the bottom"
 const GROUP_WINDOW = 5 * 60 * 1000; // same author within 5 min reads as one group
 
+// The same mode reads differently to the two sides of it: a student writes
+// into a room only the host team can see, a host reads the class in a room
+// where *their* messages still reach everybody.
 const MODE_TEXT = {
     public: {
         label: 'پیام‌ها برای همهٔ کلاس',
@@ -38,6 +41,8 @@ const MODE_TEXT = {
     private: {
         label: 'پیام‌ها فقط برای معلم',
         hint: 'پیام شما فقط برای معلم دیده می‌شود؛ همکلاسی‌ها آن را نمی‌بینند.',
+        hostLabel: 'پیام دانش‌آموزان فقط برای میزبان',
+        hostHint: 'پیام‌های شما برای همه دیده می‌شود؛ پیام دانش‌آموزان فقط برای تیم میزبان.',
     },
 };
 const PRIVATE_PLACEHOLDER = 'پیام شما فقط برای معلم…';
@@ -237,13 +242,21 @@ class ChatClientImpl {
         }
     }
 
+    /** Does «private» apply to *my* messages?  Never for a host. */
+    writesPrivately() {
+        return this.mode === 'private' && !this.privileged;
+    }
+
     syncMode() {
         const privateMode = this.mode === 'private';
         const text = MODE_TEXT[privateMode ? 'private' : 'public'];
-        if (this.modeTextEl) this.modeTextEl.textContent = text.label;
+        const label = privateMode && this.privileged ? (text.hostLabel || text.label) : text.label;
+        const hint = privateMode && this.privileged ? (text.hostHint || text.hint) : text.hint;
+        if (this.modeTextEl) this.modeTextEl.textContent = label;
         if (this.modeBarEl) this.modeBarEl.classList.toggle('is-private', privateMode);
         document.getElementById('panel-chat')
-            ?.classList.toggle('is-private-view', privateMode);
+            ?.classList.toggle('is-private-view', this.writesPrivately());
+        this.emptyEl?.classList.toggle('is-private', this.writesPrivately());
         if (this.modeToggleEl) {
             this.modeToggleEl.setAttribute('aria-checked', String(privateMode));
             this.modeToggleEl.title = privateMode
@@ -251,20 +264,19 @@ class ChatClientImpl {
                 : 'پیام دانش‌آموزان برای همه — برای خصوصی‌کردن بزنید';
         }
         if (this.hintEl) {
-            this.hintEl.textContent = text.hint;
-            this.hintEl.classList.toggle('is-private', privateMode);
+            this.hintEl.textContent = hint;
+            this.hintEl.classList.toggle('is-private', this.writesPrivately());
         }
         if (this.inputEl && !this.inputEl.disabled) {
-            this.inputEl.placeholder = privateMode
-                ? 'پیام شما فقط برای معلم…'
+            this.inputEl.placeholder = this.writesPrivately()
+                ? PRIVATE_PLACEHOLDER
                 : 'پیام خود را بنویسید…';
         }
-        this.emptyEl?.classList.toggle('is-private', privateMode);
         const emptyTitle = this.emptyEl?.querySelector('.chat-empty-title');
         const emptyText = this.emptyEl?.querySelector('.chat-empty-text');
         if (emptyTitle) emptyTitle.textContent = 'هنوز پیامی نیست';
         if (emptyText) {
-            emptyText.textContent = privateMode
+            emptyText.textContent = this.writesPrivately()
                 ? 'اولین پیام را بنویسید؛ فقط معلم آن را می‌بیند.'
                 : 'اولین پیام را بفرستید تا گفتگوی کلاس شروع شود.';
         }
@@ -663,7 +675,7 @@ class ChatClientImpl {
         if (this.inputEl) {
             this.inputEl.disabled = !enabled;
             this.inputEl.placeholder = enabled
-                ? (this.mode === 'private' ? PRIVATE_PLACEHOLDER : 'پیام خود را بنویسید…')
+                ? (this.writesPrivately() ? PRIVATE_PLACEHOLDER : 'پیام خود را بنویسید…')
                 : (reason || 'ارسال پیام بسته است.');
         }
         this.syncComposer();

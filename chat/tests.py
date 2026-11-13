@@ -731,9 +731,10 @@ class ChatPrivacyModeTests(TransactionTestCase):
             await owner_ws.receive_json_from()
             await other_ws.receive_nothing()
 
+            # the browser sends no privacy flag at all: the server decides
             await owner_ws.send_json_to({
                 "action": "send_message", "message": "جواب شما",
-                "private": True, "reply_to": asked["message"]["id"],
+                "reply_to": asked["message"]["id"],
             })
             answer = await student_ws.receive_json_from()
             assert answer["message"]["message"] == "جواب شما"
@@ -749,6 +750,68 @@ class ChatPrivacyModeTests(TransactionTestCase):
         reply = ChatMessage.objects.exclude(reply_to=None).get()
         self.assertTrue(reply.is_private)
         self.assertEqual(reply.audience_member.user, self.student)
+
+    def test_a_reply_to_a_private_message_stays_private_after_the_room_turns_public(self):
+        """A quote must never drag its parent into the class."""
+        from chat.models import ChatMessage
+
+        self._set_mode(True)
+
+        async def scenario():
+            from asgiref.sync import sync_to_async
+
+            owner_ws, student_ws, other_ws = self._ws(self.owner), self._ws(self.student), self._ws(self.other)
+            for ws in (owner_ws, student_ws, other_ws):
+                await ws.connect()
+                await ws.receive_json_from()
+
+            await student_ws.send_json_to({"action": "send_message", "message": "سوال خصوصی"})
+            asked = await student_ws.receive_json_from()
+            await owner_ws.receive_json_from()
+            assert await other_ws.receive_nothing()
+
+            # the owner flips the room back to public before answering
+            await sync_to_async(self._set_mode)(False)
+
+            await owner_ws.send_json_to({
+                "action": "send_message", "message": "جواب خصوصی",
+                "reply_to": asked["message"]["id"],
+            })
+            answer = await student_ws.receive_json_from()
+            assert answer["message"]["is_private"] is True, answer["message"]
+            assert answer["message"]["reply_to"]["message"] == "سوال خصوصی"
+            assert await other_ws.receive_nothing(), "the quoted private question leaked"
+
+            for ws in (owner_ws, student_ws, other_ws):
+                await ws.disconnect()
+
+        async_to_sync(scenario)()
+        reply = ChatMessage.objects.exclude(reply_to=None).get()
+        self.assertTrue(reply.is_private)
+        self.assertEqual(reply.audience_member.user, self.student)
+
+    def test_a_student_cannot_make_a_private_message_public(self):
+        """Whatever the client claims, ``chat_private`` wins."""
+        from chat.models import ChatMessage
+        from classrooms.models import ClassroomMember
+
+        self._set_mode(True)
+
+        async def scenario():
+            student_ws, other_ws = self._ws(self.student), self._ws(self.other)
+            for ws in (student_ws, other_ws):
+                await ws.connect()
+                await ws.receive_json_from()
+
+            await student_ws.send_json_to({"action": "send_message", "message": "ببینید!"})
+            await student_ws.receive_json_from()
+            assert await other_ws.receive_nothing(), "a classmate received a private message"
+
+            await student_ws.disconnect()
+            await other_ws.disconnect()
+
+        async_to_sync(scenario)()
+        self.assertTrue(ChatMessage.objects.get().is_private)
 
     def test_public_reply_carries_a_snippet(self):
         from chat.models import ChatMessage

@@ -281,6 +281,28 @@ class ControlBarTests(SimpleTestCase):
         self.assertIn("pop.style.maxHeight", pop)
         self.assertIn("overflowY", pop)
 
+class SpeakingHighlightTests(SimpleTestCase):
+    """Who is talking is information, not an alarm."""
+
+    def setUp(self):
+        self.css = read(CSS / "room.css")
+
+    def test_a_speaking_tile_is_ringed_not_shouted_at(self):
+        speaking = rule(self.css, ".tile.speaking")
+        self.assertIn("color-mix(", speaking)
+        self.assertNotIn("var(--success);", speaking)      # no saturated border
+        self.assertNotIn("var(--success-soft)", speaking)  # and no green glow
+        self.assertIn("box-shadow: 0 0 0 2px color-mix(", speaking)
+
+    def test_the_badge_is_a_pastel_pill(self):
+        badge = rule(self.css, ".tile-speaking")
+        self.assertNotIn("color: #fff;", badge)
+        self.assertIn("background: color-mix(in srgb, var(--success) 16%, var(--room-surface));", badge)
+        self.assertNotIn("box-shadow", badge)
+        # it still has to be *visible* (an e2e check reads its display value)
+        self.assertIn(".tile.speaking .tile-speaking { display: inline-flex; }", self.css)
+
+
 class MediaTuningTests(SimpleTestCase):
     """A mesh multiplies every upload by the size of the room.
 

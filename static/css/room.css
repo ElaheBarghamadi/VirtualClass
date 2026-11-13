@@ -313,14 +313,17 @@ body.full-page .messages {
     transition: border-color var(--speed) var(--ease), box-shadow var(--speed) var(--ease);
 }
 .tile:focus-visible { outline: none; box-shadow: var(--focus-ring); }
-.tile.speaking { border-color: var(--success); box-shadow: 0 0 0 3px var(--success-soft), 0 10px 26px -14px color-mix(in srgb, var(--success) 80%, transparent); }
+/* Speaking is a pastel ring, not an alarm: the corner meter and the badge
+   already say who talks, so the tile only gets a soft outline. */
+.tile.speaking { border-color: color-mix(in srgb, var(--success) 46%, var(--room-border)); box-shadow: 0 0 0 2px color-mix(in srgb, var(--success) 16%, transparent); }
 .tile-speaking {
     display: none; position: absolute; top: .5rem; inset-inline-start: .5rem; z-index: 4;
     align-items: center; gap: .3rem; padding: .25rem .6rem;
-    border: 1px solid color-mix(in srgb, var(--success) 60%, transparent);
-    border-radius: var(--radius-pill); background: color-mix(in srgb, var(--success) 88%, #000 12%);
-    color: #fff; font-size: .72rem; font-weight: 750; line-height: 1.2;
-    box-shadow: 0 2px 10px color-mix(in srgb, var(--success) 35%, transparent);
+    border: 1px solid color-mix(in srgb, var(--success) 38%, transparent);
+    border-radius: var(--radius-pill);
+    background: color-mix(in srgb, var(--success) 16%, var(--room-surface));
+    color: color-mix(in srgb, var(--success) 72%, var(--room-text));
+    font-size: .72rem; font-weight: 750; line-height: 1.2;
     pointer-events: none;
 }
 .tile-speaking::before { content: '●'; font-size: .55rem; animation: speaking-pulse 1s ease-in-out infinite; }

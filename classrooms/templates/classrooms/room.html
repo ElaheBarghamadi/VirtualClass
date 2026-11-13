@@ -574,7 +574,7 @@
                 <div class="chat-mode-bar" id="chat-mode-bar">
                     <span class="chat-mode-label" id="chat-mode-label">
                         <svg class="ic" aria-hidden="true"><use href="#i-users"/></svg>
-                        <span id="chat-mode-text">{% if classroom.chat_private %}پیام‌ها فقط برای معلم{% else %}پیام‌ها برای همهٔ کلاس{% endif %}</span>
+                        <span id="chat-mode-text">{% if not classroom.chat_private %}پیام‌ها برای همهٔ کلاس{% elif is_privileged %}پیام دانش‌آموزان فقط برای میزبان{% else %}پیام‌ها فقط برای معلم{% endif %}</span>
                     </span>
                     {% if is_owner %}
                         <button type="button" class="chat-mode-switch" id="chat-mode-toggle"
@@ -585,7 +585,7 @@
                     {% endif %}
                 </div>
                 <p class="chat-channel-hint" id="chat-channel-hint" role="note">
-                    {% if classroom.chat_private %}پیام شما فقط برای معلم دیده می‌شود.{% else %}همهٔ اعضای کلاس این پیام‌ها را می‌بینند.{% endif %}
+                    {% if not classroom.chat_private %}همهٔ اعضای کلاس این پیام‌ها را می‌بینند.{% elif is_privileged %}پیام‌های شما برای همه دیده می‌شود؛ پیام دانش‌آموزان فقط برای تیم میزبان.{% else %}پیام شما فقط برای معلم دیده می‌شود؛ همکلاسی‌ها آن را نمی‌بینند.{% endif %}
                 </p>
                 <div class="chat-scroll" id="chat-scroll">
                     <div class="chat-messages" id="chat-messages" aria-live="polite" aria-label="پیام‌های گفتگو"></div>

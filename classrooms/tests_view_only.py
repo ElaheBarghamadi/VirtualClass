@@ -259,8 +259,18 @@ class ViewOnlyRoomTests(TestCase):
         self.classroom.save(update_fields=["chat_private"])
         response = self._room(self.student_user)
         self.assertContains(response, 'data-chat-private="1"')
-        self.assertContains(response, "پیام شما فقط برای معلم دیده می‌شود.")
+        self.assertContains(response, "پیام شما فقط برای معلم دیده می‌شود؛ همکلاسی‌ها آن را نمی‌بینند.")
+        self.assertNotContains(response, "پیام‌های شما برای همه دیده می‌شود")
         self.assertTrue(response.context["classroom"].chat_private)
+
+    def test_a_host_reads_the_mode_from_its_own_side(self):
+        self.classroom.chat_private = True
+        self.classroom.save(update_fields=["chat_private"])
+        response = self._room(self.owner)
+        self.assertContains(response, "پیام دانش‌آموزان فقط برای میزبان")
+        self.assertContains(response, "پیام‌های شما برای همه دیده می‌شود")
+        # the liar's version is nowhere on the host page
+        self.assertNotContains(response, "پیام شما فقط برای معلم دیده می‌شود")
 
 
 class BoardOpenWebSocketTests(TransactionTestCase):

@@ -122,20 +122,18 @@ class ChatConsumer(SafeJsonWebsocketConsumer):
             return
         message = message[:MAX_MESSAGE_LENGTH]
 
-        # Privacy is the owner's room-wide decision, not a per-message switch a
-        # student could flip: when ``chat_private`` is on, a student's message
-        # is addressed to the host team (and to its author), and classmates
-        # never receive the row.  Host messages stay public.
+        # Privacy is decided *here*, never by the browser: a student cannot make
+        # a message public, and nobody can turn a private thread public by
+        # answering it.  See ``_save_message`` for the rule.
         reply_to = _as_positive_int(content.get("reply_to"))
         host = await self._is_privileged_now()
-        mode_private = await self._chat_is_private_now()
-        is_private = (mode_private and not host) or (host and content.get("private") is True)
-
-        payload = await self._save_message(message, private=is_private, reply_to=reply_to)
+        payload = await self._save_message(
+            message, reply_to=reply_to, private=content.get("private") is True
+        )
         if payload is None:
             await self.send_json({"type": "error", "message": "شما اجازهٔ ارسال پیام ندارید."})
             return
-        if not is_private:
+        if not payload.get("is_private"):
             await self.channel_layer.group_send(
                 self.group_name, {"type": "chat.message", "message": payload}
             )
@@ -232,16 +230,6 @@ class ChatConsumer(SafeJsonWebsocketConsumer):
         return effective_permissions(member, member.classroom)["can_send_messages"]
 
     @database_sync_to_async
-    def _chat_is_private_now(self) -> bool:
-        """Live read: the owner may flip the chat mode mid-sentence."""
-        return bool(
-            ClassroomMember.objects.filter(
-                id=self.member.id, is_active=True, in_waiting_room=False,
-                classroom__is_active=True, classroom__chat_private=True,
-            ).exists()
-        )
-
-    @database_sync_to_async
     def _is_privileged_now(self) -> bool:
         member = ClassroomMember.objects.filter(
             id=self.member.id, is_active=True, in_waiting_room=False,
@@ -274,6 +262,20 @@ class ChatConsumer(SafeJsonWebsocketConsumer):
             # Only answer something you are allowed to see.
             if parent is not None and not _can_read(parent, member, host):
                 parent = None
+        # Who reads this line, in order of precedence:
+        #   * the client asked for privacy (a host note, or an old client) —
+        #     honoured for everybody, it can only narrow the audience;
+        #   * the owner turned the room's chat private and this is a student —
+        #     classmates must never see what a student writes;
+        #   * this answers a private message — a reply may quote its parent,
+        #     so it inherits the thread even after the room flips back to
+        #     public.  Without this a host's «جواب شما» on a private question
+        #     would have broadcast the question to the whole class.
+        private = bool(
+            private
+            or (member.classroom.chat_private and not host)
+            or (parent is not None and parent.is_private)
+        )
         audience = None
         if private:
             if not host:
