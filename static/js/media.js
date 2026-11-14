@@ -12,6 +12,7 @@
  */
 import { toast } from './toast.js';
 import { MeshMedia } from './mesh.js';
+import { loadVendor } from './vendor.js';
 import {
     createAnalyser, createLevelTracker, createSpeakingGate, disposeAnalyser,
     paintMic, paintTile, resetMic, startLevelLoop,
@@ -20,7 +21,16 @@ import {
 /** Camera capture shared by both engines: 16:9, 720p, 30 fps. */
 const CAMERA_CAPTURE = { resolution: { width: 1280, height: 720, frameRate: 30 }, aspectRatio: 16 / 9 };
 
-const LivekitClient = window.LivekitClient;
+/**
+ * The LiveKit client (~423 KB) is fetched only when this deployment actually
+ * uses an SFU.  A mesh-only room — which is what a server without
+ * MEDIA_SERVER_URL runs — never downloads it at all.
+ */
+function livekit() {
+    const L = window.LivekitClient;
+    if (!L) throw new Error('LiveKit client is not loaded');
+    return L;
+}
 
 /**
  * How long mic/camera announcements are coalesced before going to the server.
@@ -100,6 +110,18 @@ class LivekitMedia {
     }
 
     async connect() {
+        // The SFU client (~423 KB) is fetched on demand.  Asking for a token
+        // first would waste one on a library we may never get, so this happens
+        // before the fetch — and its failure is marked, so Media.init() can
+        // fall back to a peer-to-peer room instead of a dead stage.
+        try {
+            await loadVendor('livekit');
+        } catch (err) {
+            const wrapped = new Error('livekit client unavailable');
+            wrapped.vendorMissing = true;
+            wrapped.cause = err;
+            throw wrapped;
+        }
         try {
             const res = await fetch(`/class/${this.roomCode}/media-token/`, {
                 headers: { 'X-Requested-With': 'fetch' },
@@ -107,7 +129,7 @@ class LivekitMedia {
             if (!res.ok) throw new Error(`token ${res.status}`);
             const { token, url } = await res.json();
 
-            this.room = new LivekitClient.Room({
+            this.room = new (livekit().Room)({
                 adaptiveStream: true,
                 dynacast: true,
                 publishDefaults: { simulcast: true },
@@ -129,7 +151,7 @@ class LivekitMedia {
     }
 
     _wireEvents() {
-        const R = LivekitClient.RoomEvent;
+        const R = livekit().RoomEvent;
         this.room
             .on(R.ParticipantConnected, (p) => this._addTile(p))
             .on(R.ParticipantDisconnected, (p) => this._removeTile(p.identity))
@@ -204,7 +226,7 @@ class LivekitMedia {
         if (!peer) return true;
         const permissions = peer.permissions || {};
         const source = track?.source;
-        const S = LivekitClient.Track.Source;
+        const S = livekit().Track.Source;
         if (source === S.Microphone) {
             return permissions.can_use_microphone !== false && peer.muted !== true;
         }
@@ -228,7 +250,7 @@ class LivekitMedia {
             this._remotePermissionState.set(track, allowed);
             if (!allowed) {
                 track.detach();
-                if (track.source === LivekitClient.Track.Source.ScreenShare) {
+                if (track.source === livekit().Track.Source.ScreenShare) {
                     this._hideScreenShare(participant.identity);
                 }
                 this._refreshTrackState(participant);
@@ -330,7 +352,7 @@ class LivekitMedia {
         if (!allowed) {
             if (track.mediaStreamTrack) track.mediaStreamTrack.enabled = false;
             track.detach();
-            if (track.source === LivekitClient.Track.Source.ScreenShare) {
+            if (track.source === livekit().Track.Source.ScreenShare) {
                 this._hideScreenShare(participant.identity);
             }
             this._refreshTrackState(participant);
@@ -343,7 +365,7 @@ class LivekitMedia {
             track.attach(video);
             video.style.display = '';
             tile.querySelector('.tile-placeholder').classList.add('hidden');
-            if (track.source === LivekitClient.Track.Source.ScreenShare) {
+            if (track.source === livekit().Track.Source.ScreenShare) {
                 this._showScreenShare(participant, video);
             }
         } else if (track.kind === 'audio') {
@@ -356,7 +378,7 @@ class LivekitMedia {
         if (!participant) return;
         track.detach();
         this._refreshTrackState(participant);
-        if (track.source === LivekitClient.Track.Source.ScreenShare) {
+        if (track.source === livekit().Track.Source.ScreenShare) {
             this._hideScreenShare(participant.identity);
         }
     }
@@ -365,8 +387,8 @@ class LivekitMedia {
         if (!participant) return;
         const tile = this.tiles.get(participant.identity);
         if (!tile) return;
-        const micPub = participant.getTrackPublication(LivekitClient.Track.Source.Microphone);
-        const camPub = participant.getTrackPublication(LivekitClient.Track.Source.Camera);
+        const micPub = participant.getTrackPublication(livekit().Track.Source.Microphone);
+        const camPub = participant.getTrackPublication(livekit().Track.Source.Camera);
         const micOn = Boolean(
             micPub && micPub.track && !micPub.isMuted
             && this._remoteTrackAllowed(participant, micPub.track)
@@ -436,14 +458,14 @@ class LivekitMedia {
         let track = null;
         let name = '';
         const myPub = this.localParticipant
-            && this.localParticipant.getTrackPublication(LivekitClient.Track.Source.Camera);
+            && this.localParticipant.getTrackPublication(livekit().Track.Source.Camera);
         if (this.cameraOn && myPub && myPub.track) {
             track = myPub.track.mediaStreamTrack;
             name = `${this.localParticipant.name || ''} (شما)`;
             vid.muted = true;
         } else if (this.activeSpeaker && this.activeSpeaker !== (this.localParticipant && this.localParticipant.identity)) {
             const p = this.room.remoteParticipants.get(this.activeSpeaker);
-            const pub = p && p.getTrackPublication(LivekitClient.Track.Source.Camera);
+            const pub = p && p.getTrackPublication(livekit().Track.Source.Camera);
             if (pub && pub.track) {
                 track = pub.track.mediaStreamTrack;
                 name = p.name || '';
@@ -475,7 +497,7 @@ class LivekitMedia {
      */
     _startLocalLevel() {
         const pub = this.localParticipant
-            && this.localParticipant.getTrackPublication(LivekitClient.Track.Source.Microphone);
+            && this.localParticipant.getTrackPublication(livekit().Track.Source.Microphone);
         const track = pub && pub.track && pub.track.mediaStreamTrack;
         if (!track) return;
         // Already metering this exact track: tearing the analyser down and
@@ -706,7 +728,7 @@ class LivekitMedia {
 
     async switchCamera() {
         if (!this.enabled || !this.room) return;
-        const pub = this.room.localParticipant.getTrackPublication(LivekitClient.Track.Source.Camera);
+        const pub = this.room.localParticipant.getTrackPublication(livekit().Track.Source.Camera);
         if (pub?.track) {
             await pub.track.switchActiveDevice('videoinput');
         }
@@ -726,7 +748,7 @@ class LivekitMedia {
         if (this._screenBusy) return true;
         this._screenBusy = true;
         try {
-            const pub = this.room.localParticipant.getTrackPublication(LivekitClient.Track.Source.ScreenShare);
+            const pub = this.room.localParticipant.getTrackPublication(livekit().Track.Source.ScreenShare);
             if (pub?.track) await this.room.localParticipant.setScreenShareEnabled(false);
             else await this.room.localParticipant.setScreenShareEnabled(true);
         } catch (err) {
@@ -741,7 +763,7 @@ class LivekitMedia {
     /** Stop an active screen share (used when the host revokes the right). */
     async stopScreenShare() {
         if (!this.enabled || !this.room) return;
-        const pub = this.room.localParticipant.getTrackPublication(LivekitClient.Track.Source.ScreenShare);
+        const pub = this.room.localParticipant.getTrackPublication(livekit().Track.Source.ScreenShare);
         if (pub?.track) await this.room.localParticipant.setScreenShareEnabled(false);
     }
 
@@ -803,7 +825,7 @@ class LivekitMedia {
         // a flag nothing ever assigned, so every UI sync rebuilt the analyser
         // and the meter visibly dropped to zero.
         const micPub = this.localParticipant
-            && this.localParticipant.getTrackPublication(LivekitClient.Track.Source.Microphone);
+            && this.localParticipant.getTrackPublication(livekit().Track.Source.Microphone);
         const micTrack = micPub && micPub.track && micPub.track.mediaStreamTrack;
         if (this.micOn && micTrack) this._startLocalLevel();
         else if (this._levelTrack) this._stopLocalLevel();
@@ -855,7 +877,7 @@ class LivekitMedia {
                 console.warn('[media] reconnect failed', err);
             }
             this._retryDelay = Math.min(this._retryDelay * 2, 15000);
-            if (!this.room || this.room.state !== LivekitClient.ConnectionState.Connected) {
+            if (!this.room || this.room.state !== livekit().ConnectionState.Connected) {
                 this._retryTimer = setTimeout(() => this._scheduleReconnect(), this._retryDelay);
             }
         }, this._retryDelay);
@@ -939,7 +961,9 @@ class MediaFacade {
             window.addEventListener('pagehide', () => this._flushState());
         }
         const engineOpts = { ...opts, onStateChange: (state) => this._emitState(state) };
-        if (opts.mediaEnabled && opts.mediaUrl && LivekitClient) {
+        // The engine is chosen from the server's configuration alone; whether
+        // the client library has arrived yet is not its business any more.
+        if (opts.mediaEnabled && opts.mediaUrl) {
             this.engine = 'livekit';
             this.impl = livekitMedia;
         } else if (opts.meshEnabled) {
@@ -955,6 +979,21 @@ class MediaFacade {
             await this.impl.init(engineOpts);
         } catch (err) {
             console.warn(`[media:${this.engine}] init failed:`, err);
+            // The payment for a lazy library is that it can fail to arrive.  A
+            // peer-to-peer room is a degraded lesson; an empty stage is a lost
+            // one — so fall back when the mesh is allowed here.
+            if (this.engine === 'livekit' && err && err.vendorMissing && opts.meshEnabled) {
+                console.warn('[media] falling back to the peer-to-peer engine');
+                this.engine = 'mesh';
+                this.impl = new MeshMedia();
+                try {
+                    await this.impl.init(engineOpts);
+                } catch (meshErr) {
+                    console.warn('[media:mesh] init failed:', meshErr);
+                    this.engine = 'none';
+                    this.impl = null;
+                }
+            }
         }
     }
 

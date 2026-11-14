@@ -14,6 +14,7 @@
  * annotations land in the same place regardless of their screen size.
  */
 import { toast } from './toast.js';
+import { loadVendor } from './vendor.js';
 
 class PresentationImpl {
     constructor() {
@@ -333,13 +334,18 @@ class PresentationImpl {
             return;
         }
         if (gen !== this._renderGen) return;
-        this._ensureAnnotCanvas();
+        // The annotation layer is fabric too; an image presentation reaches
+        // here without pdf.js having pulled it in.
+        await this.ensureAnnotCanvas();
+        if (gen !== this._renderGen) return;
         this._repaintAnnot();
         this._syncAnnotGate();
     }
 
     /** Single-flight document load: concurrent callers share ONE fetch. */
-    _loadPdfDoc() {
+    async _loadPdfDoc() {
+        // pdf.js (~377 KB) is fetched the first time a PDF is actually shown.
+        await loadVendor('pdf');
         if (this._pdfCache && this._pdfCache.fileId === this.fileId) {
             return Promise.resolve(this._pdfCache.doc);
         }
@@ -369,6 +375,7 @@ class PresentationImpl {
     }
 
     async _renderPdfPage(gen) {
+        await loadVendor('pdf');
         if (typeof pdfjsLib === 'undefined') throw new Error('pdf.js not loaded');
         if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
             pdfjsLib.GlobalWorkerOptions.workerSrc = window.PDF_WORKER_URL || '/static/vendor/pdf.worker.min.js';
@@ -460,6 +467,16 @@ class PresentationImpl {
     }
 
     // ------------------------------------------------------------ annotation layer
+    async ensureAnnotCanvas() {
+        try {
+            await loadVendor('fabric');
+        } catch (err) {
+            console.warn('[presentation] fabric.js failed to load', err);
+            return null;
+        }
+        return this._ensureAnnotCanvas();
+    }
+
     _ensureAnnotCanvas() {
         const canvas = document.getElementById('pres-canvas');
         const el = document.getElementById('pres-annot-canvas');

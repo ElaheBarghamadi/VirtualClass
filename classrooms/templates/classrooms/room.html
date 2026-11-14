@@ -947,11 +947,21 @@
 {% comment %}Pins every ES-module import to the current asset version, so a
    reload after an update never mixes new entry code with stale sub-modules.{% endcomment %}
 <script type="importmap">{{ ASSET_IMPORT_MAP|safe }}</script>
-{# Vendored locally — no CDN dependency, works offline/blocked networks. #}
-<script src="{% static 'vendor/livekit-client.umd.min.js' %}"></script>
-<script src="{% static 'vendor/fabric.min.js' %}"></script>
-<script src="{% static 'vendor/pdf.min.js' %}"></script>
-<script>window.PDF_WORKER_URL = "{% static 'vendor/pdf.worker.min.js' %}";</script>
+{% comment %}
+Vendored locally — no CDN dependency, works offline and on blocked networks.
+None of the three is fetched up front: js/vendor.js pulls one in the first time
+something needs it (~1.1 MB that a listener-only student never pays).  The URLs
+live here so the template still owns every path, and they carry the asset
+version like every other static file.
+{% endcomment %}
+<script>
+    window.VC_VENDOR = {
+        fabric: "{% static 'vendor/fabric.min.js' %}?v={{ ASSET_V }}",
+        pdf: "{% static 'vendor/pdf.min.js' %}?v={{ ASSET_V }}",
+        livekit: "{% static 'vendor/livekit-client.umd.min.js' %}?v={{ ASSET_V }}",
+    };
+    window.PDF_WORKER_URL = "{% static 'vendor/pdf.worker.min.js' %}?v={{ ASSET_V }}";
+</script>
 <script>
     // A failed module graph is silent by design; surface it instead of leaving
     // a room that looks ready but does nothing.

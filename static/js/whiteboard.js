@@ -57,7 +57,16 @@
  * kept by ending with a straight segment to the newest point, so the ink
  * always reaches the pen tip.
  */
-const SmoothPolyline = fabric.util.createClass(fabric.Polyline, {
+let _SmoothPolyline = null;
+
+/**
+ * The subclass is created on first use: `fabric` is fetched on demand (see
+ * vendor.js), so importing this module must not touch it.  Creating it once and
+ * caching the class keeps identical behaviour with one extra check per stroke.
+ */
+function SmoothPolylineClass() {
+    if (_SmoothPolyline) return _SmoothPolyline;
+    _SmoothPolyline = fabric.util.createClass(fabric.Polyline, {
     type: 'polyline',   // keep the base type: serialisers/checks stay valid
     commonRender(ctx) {
         const pts = this.points;
@@ -79,7 +88,9 @@ const SmoothPolyline = fabric.util.createClass(fabric.Polyline, {
         ctx.lineTo(pts[n - 1].x - ox, pts[n - 1].y - oy);
         return true;
     },
-});
+    });
+    return _SmoothPolyline;
+}
 
 /** Default drawing surface. All coordinates/shapes are expressed in it. */
 const REF_W = 1200;
@@ -116,6 +127,7 @@ const ZOOM_STEP = 1.25;
 const WHEEL_ZOOM_RATE = 0.0015;
 
 import { toast } from './toast.js';
+import { loadVendor } from './vendor.js';
 
 class WhiteboardImpl {
     constructor() {
@@ -172,7 +184,7 @@ class WhiteboardImpl {
         this._spaceDown = false;
     }
 
-    init({ roomCode, identity, canDraw, canControlBoard, boardWidth, boardHeight }) {
+    async init({ roomCode, identity, canDraw, canControlBoard, boardWidth, boardHeight }) {
         this.identity = identity;
         this.canDraw = canDraw;
         this.canControlBoard = Boolean(canControlBoard);
@@ -181,9 +193,14 @@ class WhiteboardImpl {
         // Clear, permanent feedback for viewers who may not draw — instead of
         // a toolbar that looks usable but silently does nothing.
 
-        if (typeof fabric === 'undefined') {
+        // fabric.js is fetched on demand (~313 KB nobody needs until the board
+        // is actually opened).  The toolbar and the socket are wired already, so
+        // only the canvas waits.
+        try {
+            await loadVendor('fabric');
+        } catch (err) {
             this._showUnavailable('کتابخانهٔ تخته بارگذاری نشد. صفحه را تازه‌سازی کنید؛ اگر مشکل ادامه داشت، به پشتیبانی اطلاع دهید.');
-            console.warn('[whiteboard] fabric.js is not loaded');
+            console.warn('[whiteboard] fabric.js failed to load', err);
             return;
         }
         const el = document.getElementById('whiteboard-canvas');
@@ -1143,13 +1160,13 @@ class WhiteboardImpl {
         if (tool === 'eraser') {
             // destination-out really removes ink: the (transparent) canvas is
             // punched through and the page background below shows up again.
-            shape = new SmoothPolyline([p, p], {
+            shape = new (SmoothPolylineClass())([p, p], {
                 ...opaque,
                 stroke: 'rgba(0,0,0,1)',
                 globalCompositeOperation: 'destination-out',
             });
         } else {
-            shape = new SmoothPolyline([p, p], {
+            shape = new (SmoothPolylineClass())([p, p], {
                 ...opaque,
                 stroke: this.color,
                 opacity: tool === 'highlighter' ? 0.32 : 1,
@@ -1878,7 +1895,7 @@ class WhiteboardImpl {
                 // A stored single-point op (a tap) becomes a dot.
                 if (pts.length === 1) pts.push({ x: pts[0].x, y: pts[0].y });
                 if (pts.length < 2) return null;
-                return new SmoothPolyline(pts, {
+                return new (SmoothPolylineClass())(pts, {
                     ...common,
                     opacity: op.tool === 'highlighter' ? 0.32 : 1,
                 });

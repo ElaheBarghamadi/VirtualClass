@@ -2704,7 +2704,9 @@ function applyFilePresentability() {
     });
 }
 
-function formatBytes(n) {
+// A compact size for the file list ("1.4 MB"); `formatBytes` from netstats.js
+// spells the unit out in Persian and is used by the network panel instead.
+function shortBytes(n) {
     if (n < 1024) return `${n} B`;
     let v = n;
     for (const u of ['KB', 'MB', 'GB']) {
@@ -2785,7 +2787,7 @@ function initFiles() {
                 // broadcast reaches everyone else (dedup keeps one row).
                 addFileItem({
                     id: data.id, name: data.name,
-                    size: formatBytes(file.size),
+                    size: shortBytes(file.size),
                     uploader: 'شما', uploader_id: SELF_USER_ID,
                     has_pdf: data.has_pdf,
                     url: `/class/${ROOM_CODE}/files/${data.id}/download/`,
@@ -3225,6 +3227,8 @@ safe('whiteboard', () => {
         if (!CAN_CONTROL_BOARD) return;
         presence.send({ action: 'whiteboard_size', preset });
     };
+    // init() waits for fabric.js (~313 KB, fetched on demand) — the pair
+    // explains itself if the library cannot be had, and never rejects.
     Whiteboard.init({
         roomCode: ROOM_CODE,
         identity: IDENTITY,
@@ -3232,7 +3236,7 @@ safe('whiteboard', () => {
         canControlBoard: CAN_CONTROL_BOARD,
         boardWidth: Number(boardView?.dataset.boardWidth) || undefined,
         boardHeight: Number(boardView?.dataset.boardHeight) || undefined,
-    });
+    }).catch((err) => console.error('[room] whiteboard init failed', err));
 });
 safe('presentation', () => Presentation.init({
     roomCode: ROOM_CODE,

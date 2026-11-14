@@ -1079,3 +1079,91 @@ class MediaHardeningTests(SimpleTestCase):
         sync = rule(self.media, "    _syncLocalUI()")
         self.assertIn("if (this.micOn && micTrack) this._startLocalLevel();", sync)
         self.assertIn("else if (this._levelTrack) this._stopLocalLevel();", sync)
+
+
+class LazyVendorTests(SimpleTestCase):
+    """The room must not download — or crash on — what a visit does not need.
+
+    Every visit used to fetch fabric.js (313 KB), pdf.js (377 KB) and the
+    LiveKit client (423 KB) as four blocking classic scripts, before the module
+    that drives the room even started parsing.  On a phone on a school network
+    the room sat behind a megabyte and a half of code that a student who only
+    wanted to listen would never use.
+
+    They are fetched by ``static/js/vendor.js`` on first use now, which only
+    works while nothing reads the libraries at import time — the import graph
+    must survive their absence.  These tests keep both halves honest.
+    """
+
+    def setUp(self):
+        self.template = read(TEMPLATES / "room.html")
+        self.vendor = read(JS / "vendor.js")
+
+    def test_the_room_does_not_block_on_the_big_libraries(self):
+        for name in ("fabric.min.js", "pdf.min.js", "livekit-client.umd.min.js"):
+            self.assertNotIn(
+                f"<script src=\"{{% static 'vendor/{name}' %}}\">", self.template,
+                f"{name} must not be a blocking script tag",
+            )
+        self.assertNotRegex(
+            self.template, r"<script[^>]+src=\"[^\"]*vendor/(fabric|pdf|livekit)",
+            "vendor libraries are pulled in by js/vendor.js, not by the template",
+        )
+
+    def test_the_template_still_owns_every_vendor_url(self):
+        config = re.search(r"window\.VC_VENDOR = \{(.*?)\};", self.template, re.S)
+        self.assertIsNotNone(config, "room.html must publish window.VC_VENDOR")
+        for key in ("fabric", "pdf", "livekit"):
+            self.assertIn(f"{key}:", config.group(1))
+
+    def test_the_loader_fetches_each_library_once(self):
+        self.assertIn("const _pending = new Map();", self.vendor)
+        self.assertIn("if (_pending.has(name)) return _pending.get(name);", self.vendor)
+        self.assertIn("script.async = true;", self.vendor)
+        # A failed load must be retryable, not cached forever.
+        self.assertIn("_pending.delete(name);", self.vendor)
+
+    def test_nothing_reads_a_vendor_global_at_import_time(self):
+        whiteboard = read(JS / "whiteboard.js")
+        media = read(JS / "media.js")
+        self.assertNotIn("\nconst SmoothPolyline = fabric.util.createClass(", whiteboard)
+        self.assertIn("function SmoothPolylineClass()", whiteboard)
+        self.assertIn("await loadVendor('fabric');", whiteboard)
+        self.assertNotIn("\nconst LivekitClient = window.LivekitClient;", media)
+        self.assertIn("function livekit()", media)
+        self.assertIn("await loadVendor('livekit');", media)
+
+    def test_no_module_shadows_a_name_it_imports(self):
+        """A duplicate top-level declaration is a hard SyntaxError.
+
+        ``room.js`` once imported ``formatBytes`` from ``netstats.js`` *and*
+        declared its own at the bottom; the module never executed and the whole
+        room fell through to the boot fallback.  Nothing else catches this
+        without a browser, so the collision is spelled out here.
+        """
+        top_level_decl = re.compile(
+            r"^(?:export\s+)?(?:async\s+)?(?:function|const|let|var|class)\s+([A-Za-z_$][\w$]*)",
+            re.M,
+        )
+        import_block = re.compile(
+            r"^import\s+(?:([A-Za-z_$][\w$]*)\s*,\s*)?\{([^}]*)\}\s*from\s*['\"]\./",
+            re.M,
+        )
+        offenders = []
+        for path in sorted(JS.glob("*.js")):
+            source = read(path)
+            imported = set()
+            for match in import_block.finditer(source):
+                if match.group(1):
+                    imported.add(match.group(1))
+                for part in match.group(2).split(","):
+                    part = part.strip()
+                    if part:
+                        imported.add(part.split(" as ")[-1].strip())
+            if not imported:
+                continue
+            declared = {m.group(1) for m in top_level_decl.finditer(source)}
+            clash = imported & declared
+            if clash:
+                offenders.append(f"{path.name}: {sorted(clash)}")
+        self.assertEqual(offenders, [], "a module declares a name it also imports")
