@@ -82,12 +82,17 @@ class KeywordRibbonTests(TestCase):
         self.home = read(HOME)
         self.css = read(MAIN_CSS) + read(LANDING_CSS)
 
-    def test_it_is_two_identical_rows_so_the_loop_has_no_seam(self):
+    def test_each_band_is_two_identical_rows_so_the_loop_has_no_seam(self):
         rows = re.findall(r"<ul class=\"ribbon-row\"[^>]*>(.*?)</ul>", self.home, re.S)
-        self.assertEqual(len(rows), 2)
-        # identical content; only the second copy hides its separators from AT
-        self.assertEqual(rows[0].replace(' aria-hidden="true"', ""), rows[1])
-        self.assertIn('<ul class="ribbon-row" aria-hidden="true">', self.home)
+        # two bands (Persian, then Latin), two copies each
+        self.assertEqual(len(rows), 4)
+        for first, second in ((rows[0], rows[1]), (rows[2], rows[3])):
+            # identical content; only the second copy hides its separators from AT
+            self.assertEqual(first.replace(' aria-hidden="true"', ""), second)
+        self.assertEqual(self.home.count('<ul class="ribbon-row" aria-hidden="true">'), 2)
+        # the Latin band runs the other way and is not read out
+        self.assertIn('<div class="ribbon ribbon-latin" aria-hidden="true">', self.home)
+        self.assertIn("html.js-anim body.is-home .ribbon-track-reverse { animation:", self.css)
         # the separators are shapes, not glyphs — the UI never uses emoji
         self.assertIn('<li class="ribbon-sep" aria-hidden="true"></li>', self.home)
         self.assertIn(".ribbon-row .ribbon-sep {", self.css)

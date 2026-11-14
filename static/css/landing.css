@@ -1059,3 +1059,20 @@ html.js-anim body.is-home .scroll-cue-line::after {
     body.is-home .hero-chips { margin-inline: 0; }
     body.is-home .hero-preview { margin-inline: 0; }
 }
+
+/* ---------- the second ribbon: Latin, and the other way ---------- */
+.ribbon-latin {
+    margin-top: 0;
+    border-block-start: 0;
+    padding-block: .55rem;
+    background: color-mix(in srgb, var(--text) 4%, var(--background));
+}
+.ribbon-latin .ribbon-row {
+    direction: ltr;
+    font-size: .72rem;
+    font-weight: 700;
+    letter-spacing: .16em;
+    color: color-mix(in srgb, var(--text) 55%, var(--muted));
+}
+html.js-anim body.is-home .ribbon-track-reverse { animation: ribbon-slide 44s linear infinite reverse; }
+.ribbon-latin:hover .ribbon-track-reverse { animation-play-state: paused; }
