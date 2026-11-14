@@ -1,9 +1,12 @@
 """
 Django settings for the Online Classroom project.
 
-All environment-specific values (secrets, hosts, databases, Redis) are read
-from environment variables — see ``.env.example``.  Nothing sensitive is
-hard-coded here.
+**Nothing here is required.**  Every value has a working default, so the project
+boots on a bare server with no ``.env`` and no environment variable at all —
+that is the "just put it on a host and look at it" mode, and ``ZERO_CONFIG``
+below records whether that is the mode this process is in.  Variables still
+exist for a real deployment (see ``.env.example``), and an explicitly provided
+value always wins over the default.
 """
 import os
 from pathlib import Path
@@ -27,30 +30,24 @@ def env_list(name: str, default: str = "") -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
-# ---------------------------------------------------------------------------
-# Core
-# ---------------------------------------------------------------------------
-_DEV_SECRET_KEY = "django-insecure-dev-only-key-change-me-in-production"
-SECRET_KEY = os.environ.get(
-    "SECRET_KEY",
-    # Fallback ONLY for local development convenience.  In production the
-    # SECRET_KEY environment variable MUST be set to a random secret —
-    # the fail-fast check below refuses to boot otherwise.
-    _DEV_SECRET_KEY,
-)
-DEBUG = env_bool("DEBUG", "true")
-# Development default: accept any Host header, so the app answers on
-# localhost, a LAN IP, a phone on the same network and preview/proxy hosts
-# (host names such as ``<port>-<sandbox>.e2b.app``) without extra setup.
-# This is deliberately tied to DEBUG: with DEBUG off the default is strict and
-# a literal ``*`` is refused by the guard right below.
-ALLOWED_HOSTS = env_list("ALLOWED_HOSTS", "*" if DEBUG else "localhost,127.0.0.1,[::1]")
+def env_first(*names: str) -> str:
+    """The first of ``names`` that is set and non-empty.
 
-# A hosting platform usually knows the address the browser will type: it is the
-# domain of the service the app just got deployed on.  Reading it back means the
-# single most common production error — ``DisallowedHost: Invalid HTTP_HOST …
-# You may need to add 'x' to ALLOWED_HOSTS`` — cannot happen on those hosts, and
-# without ever widening the list to a wildcard.
+    Hosting platforms are not consistent about the name of the variable that
+    holds the database DSN or the published address (``DATABASE_URL`` here,
+    ``POSTGRES_URL`` there, ``DATABASE_PRIVATE_URL`` on one PaaS).  Reading them
+    all means a linked add-on is used without the operator retyping anything.
+    """
+    for name in names:
+        value = (os.environ.get(name) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+# ---------------------------------------------------------------------------
+# Where this deployment lives (optional, read from the platform when provided)
+# ---------------------------------------------------------------------------
 _PUBLISHED_URL_VARS = (
     "PUBLIC_URL",
     "APP_URL",
@@ -59,43 +56,125 @@ _PUBLISHED_URL_VARS = (
     "BASE_URL",
     "RENDER_EXTERNAL_URL",
     "RAILWAY_PUBLIC_DOMAIN",
+    "FLY_APP_NAME",
 )
 
 
-def _published_host() -> str:
-    """The host name this deployment is publicly served on, if it says so."""
+def _published_url() -> str:
+    """The address this deployment is publicly served on, if it says so."""
     for name in _PUBLISHED_URL_VARS:
         raw = (os.environ.get(name) or "").strip()
         if not raw:
             continue
-        parsed = urlparse(raw if "://" in raw else f"https://{raw}")
-        if parsed.netloc:
-            return parsed.netloc.lower()
+        if name == "FLY_APP_NAME":
+            return f"https://{raw}.fly.dev"
+        return raw if "://" in raw else f"https://{raw}"
     return ""
 
 
-PUBLISHED_HOST = _published_host()
-if PUBLISHED_HOST and PUBLISHED_HOST not in ALLOWED_HOSTS:
-    ALLOWED_HOSTS = [*ALLOWED_HOSTS, PUBLISHED_HOST]
+_PUBLISHED_URL = _published_url()
+_PUBLISHED_PARSED = urlparse(_PUBLISHED_URL) if _PUBLISHED_URL else None
+PUBLISHED_HOST = (_PUBLISHED_PARSED.netloc.lower() if _PUBLISHED_PARSED else "")
+PUBLISHED_SCHEME = ((_PUBLISHED_PARSED.scheme or "https").lower() if _PUBLISHED_PARSED else "")
 
-if not DEBUG and "*" in ALLOWED_HOSTS:
-    # Fail fast: Host-header validation is what keeps password-reset links and
-    # cache keys bound to *our* domain.  A wildcard silently disables that.
+# ---------------------------------------------------------------------------
+# Core
+# ---------------------------------------------------------------------------
+_DEV_SECRET_KEY = "django-insecure-dev-only-key-change-me-in-production"
+DEBUG = env_bool("DEBUG", "true")
+
+
+def _secret_key_path() -> Path:
+    """Where an auto-generated SECRET_KEY is kept between restarts."""
+    configured = (os.environ.get("SECRET_KEY_FILE") or "").strip()
+    if configured:
+        return Path(configured)
+    # Inside the private uploads directory: already gitignored, and already the
+    # one folder a container platform mounts as a volume — so the key survives a
+    # redeploy and nobody is logged out by a deployment.
+    private_root = (os.environ.get("PRIVATE_MEDIA_ROOT") or "").strip()
+    if private_root:
+        return Path(private_root) / ".secret_key"
+    return BASE_DIR / "private_media" / ".secret_key"
+
+
+def _load_or_create_secret_key() -> tuple[str, str]:
+    """A random key that survives a restart without being configured.
+
+    Returns ``(key, source)`` where source is ``"file"`` when an earlier run
+    left a key behind, ``"generated"`` when this run minted and stored one, and
+    ``"ephemeral"`` when the file system refused to keep it (a container with a
+    read-only app directory): the app still runs, sessions just end on restart.
+    """
+    from django.core.management.utils import get_random_secret_key
+
+    path = _secret_key_path()
+    try:
+        existing = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        existing = ""
+    if len(existing) >= 40:
+        return existing, "file"
+
+    key = get_random_secret_key()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(key, encoding="utf-8")
+        try:
+            os.chmod(path, 0o600)
+        except OSError:  # pragma: no cover - exotic file systems
+            pass
+        return key, "generated"
+    except OSError:  # pragma: no cover - read-only app directory
+        return key, "ephemeral"
+
+
+_configured_secret_key = (os.environ.get("SECRET_KEY") or "").strip()
+
+if _configured_secret_key and _configured_secret_key != _DEV_SECRET_KEY:
+    SECRET_KEY, SECRET_KEY_SOURCE = _configured_secret_key, "env"
+elif DEBUG:
+    # Local convenience: nothing is public, and sessions may reset at will.
+    SECRET_KEY, SECRET_KEY_SOURCE = _DEV_SECRET_KEY, "dev"
+else:
+    # Zero-config deployment: mint a key and keep it in a gitignored 0600 file,
+    # so logins survive a restart.  Never the public development key — that one
+    # would make sessions and CSRF tokens forgeable by anyone reading the repo.
+    SECRET_KEY, SECRET_KEY_SOURCE = _load_or_create_secret_key()
+
+# Accept the address the browser actually types, without being told which one
+# it is.  A hosting platform usually knows its own domain (PUBLISHED_*), so when
+# it does the list stays a concrete one; when nothing is known the app falls
+# back to accepting any Host header (``HOSTS_AUTO``) instead of refusing to boot
+# or answering ``400 Bad Request`` to every visitor.  ``deploy.W012`` reports
+# that fallback so it cannot be mistaken for a finished configuration.
+_configured_hosts = env_list("ALLOWED_HOSTS")
+
+if not DEBUG and "*" in _configured_hosts:
+    # An explicitly typed wildcard in production is still a refusal: Host-header
+    # validation is what keeps password-reset links and cache keys bound to *our*
+    # domain, and nobody means it literally when they can name the domain.
     raise ImproperlyConfigured(
         "ALLOWED_HOSTS=* is only allowed while DEBUG=true. With DEBUG=false "
-        "list the real host names (e.g. ALLOWED_HOSTS=class.example.com)."
+        "list the real host names (e.g. ALLOWED_HOSTS=class.example.com) — or "
+        "leave ALLOWED_HOSTS unset and the app accepts whatever host it is "
+        "reached on."
     )
 
-if not DEBUG and SECRET_KEY == _DEV_SECRET_KEY:
-    # Fail fast: a production deployment must never run on the public
-    # dev key — sessions/CSRF tokens would be forgeable.
-    raise ImproperlyConfigured(
-        "SECRET_KEY is not set (or is the development default) while "
-        "DEBUG=false. Generate one with:\n"
-        "  python -c \"from django.core.management.utils import "
-        "get_random_secret_key; print(get_random_secret_key())\"\n"
-        "and put it in your .env file."
-    )
+if _configured_hosts:
+    ALLOWED_HOSTS = _configured_hosts
+    HOSTS_AUTO = False
+elif PUBLISHED_HOST:
+    # The platform told us its domain: name it, and keep the loopback names so a
+    # health probe or an SSH tunnel still answers.
+    ALLOWED_HOSTS = [PUBLISHED_HOST, "localhost", "127.0.0.1", "[::1]"]
+    HOSTS_AUTO = False
+else:
+    ALLOWED_HOSTS = ["*"]
+    HOSTS_AUTO = True
+
+if PUBLISHED_HOST and "*" not in ALLOWED_HOSTS and PUBLISHED_HOST not in ALLOWED_HOSTS:
+    ALLOWED_HOSTS = [*ALLOWED_HOSTS, PUBLISHED_HOST]
 
 INSTALLED_APPS = [
     "daphne",  # ASGI server (also powers `runserver` with WebSockets)
@@ -179,7 +258,12 @@ TEMPLATES = [
 # or a MySQL DSN (PythonAnywhere's standard database), e.g.:
 #   DATABASE_URL=mysql://user:password@user.mysql.pythonanywhere-services.com/dbname
 # Models are written to stay PostgreSQL/MySQL-compatible.
-DATABASE_URL = os.environ.get("DATABASE_URL", "")
+DATABASE_URL = env_first(
+    "DATABASE_URL",
+    "POSTGRES_URL",
+    "DATABASE_PRIVATE_URL",
+    "POSTGRESQL_URL",
+)
 
 
 def _database_from_url(url: str) -> dict:
@@ -268,14 +352,66 @@ def _database_from_url(url: str) -> dict:
     }
 
 
-DATABASES = {"default": _database_from_url(DATABASE_URL)}
+def _database_from_env() -> dict:
+    """Pick the database without being told: DSN, then PG* parts, then SQLite.
+
+    A platform that links a PostgreSQL add-on injects either one DSN or the
+    ``PG*`` component variables; both are used as-is.  Only when neither exists
+    does the project fall back to SQLite — which works immediately, and
+    ``deploy.W003`` says out loud that a container's SQLite does not survive the
+    next deploy.
+    """
+    if DATABASE_URL:
+        return _database_from_url(DATABASE_URL)
+
+    host = env_first("PGHOST", "POSTGRES_HOST")
+    name = env_first("PGDATABASE", "POSTGRES_DB")
+    if host and name:
+        entry: dict[str, object] = {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": name,
+            "USER": env_first("PGUSER", "POSTGRES_USER"),
+            "PASSWORD": env_first("PGPASSWORD", "POSTGRES_PASSWORD"),
+            "HOST": host,
+            "PORT": env_first("PGPORT", "POSTGRES_PORT") or "5432",
+            "OPTIONS": {"connect_timeout": 10},
+            "CONN_MAX_AGE": 0,
+            "DISABLE_SERVER_SIDE_CURSORS": env_bool(
+                "DB_DISABLE_SERVER_SIDE_CURSORS", "false"
+            ),
+        }
+        sslmode = env_first("PGSSLMODE")
+        if sslmode:
+            entry["OPTIONS"]["sslmode"] = sslmode  # type: ignore[index]
+        return entry
+
+    return _database_from_url("")
+
+
+DATABASES = {"default": _database_from_env()}
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # ---------------------------------------------------------------------------
 # Channels / WebSockets
 # ---------------------------------------------------------------------------
-REDIS_URL = os.environ.get("REDIS_URL", "")
+# Same idea as the database: the platform links one Redis and names it whatever
+# it likes.  Empty means "no broker" — in-memory channel layer, local cache,
+# background jobs inline — which is exactly what a single-process test deploy
+# needs.
+REDIS_URL = env_first("REDIS_URL", "REDIS_TLS_URL", "REDISCLOUD_URL")
+if REDIS_URL and not REDIS_URL.startswith(("redis://", "rediss://", "unix://")):
+    REDIS_URL = ""
+
+# True when this process runs on defaults: no secret, no host list, no database
+# DSN, no broker — "put it on a server and look at it".  Only the deployment
+# report and `deploy_check` read it; no behaviour depends on it.
+ZERO_CONFIG = (
+    not (_configured_secret_key and _configured_secret_key != _DEV_SECRET_KEY)
+    and not _configured_hosts
+    and not DATABASE_URL
+    and not REDIS_URL
+)
 
 if REDIS_URL:
     CHANNEL_LAYERS = {
@@ -321,9 +457,12 @@ LIVEKIT_API_SECRET = os.environ.get("MEDIA_SERVER_API_SECRET", "")
 # SFU disconnects it (static/js/media.js ``_scheduleReconnect``).
 LIVEKIT_TOKEN_TTL_MINUTES = int(os.environ.get("MEDIA_TOKEN_TTL_MINUTES", "120"))
 
-# Mesh cannot enforce revocation of an existing peer connection. Production
-# defaults off; an explicit opt-in is for trusted/test deployments only.
-MESH_ENABLED = os.environ.get("MESH_ENABLED", "1" if DEBUG else "0") == "1"
+# Mesh cannot enforce revocation of an existing peer connection, so a
+# deployment that *has* an SFU should use it: the mesh is off as soon as
+# MEDIA_SERVER_URL is configured.  With no SFU in front of it, the mesh is the
+# only thing that puts a camera in the room — so it is on by default rather than
+# leaving a zero-config deployment with silently dead microphones.
+MESH_ENABLED = env_bool("MESH_ENABLED", "0" if LIVEKIT_URL else "1")
 
 # ICE servers for the fallback P2P mesh.  STUN alone fails behind strict
 # NATs, so deployments should run coturn and list it here, e.g.:
@@ -530,6 +669,13 @@ STORAGES = {
 WHITENOISE_MAX_AGE = int(os.environ.get("WHITENOISE_MAX_AGE", "0" if DEBUG else "3600"))
 # `runserver` already serves static; collecting on every boot would be noise.
 WHITENOISE_AUTOREFRESH = DEBUG
+# ...and a bare server that never ran `collectstatic` still renders with styles:
+# with no collected files, WhiteNoise serves straight from the source
+# directories instead of answering 404 for every stylesheet.
+_static_files_collected = STATIC_ROOT.is_dir() and any(STATIC_ROOT.iterdir())
+WHITENOISE_USE_FINDERS = env_bool(
+    "WHITENOISE_USE_FINDERS", "false" if _static_files_collected else "true"
+)
 # Must be outside MEDIA_ROOT and any web-server static mapping.
 PRIVATE_MEDIA_ROOT = Path(os.environ.get("PRIVATE_MEDIA_ROOT") or BASE_DIR / "private_media").resolve()
 if (PRIVATE_MEDIA_ROOT == MEDIA_ROOT.resolve()
@@ -545,34 +691,57 @@ SESSION_COOKIE_SAMESITE = "Lax"
 CSRF_COOKIE_SAMESITE = "Lax"
 CSRF_TRUSTED_ORIGINS = env_list("CSRF_TRUSTED_ORIGINS", "")
 
-# Same idea as the Host header: if the deployment publishes its own https URL,
+# Same idea as the Host header: if the deployment publishes its own address,
 # that origin is by definition ours, so form posts from it must not fail CSRF.
 # (The list still has no bare ``*``; every entry is a concrete origin.)
 if PUBLISHED_HOST:
-    _published_origin = f"https://{PUBLISHED_HOST}"
+    _published_origin = f"{PUBLISHED_SCHEME or 'https'}://{PUBLISHED_HOST}"
     if _published_origin not in CSRF_TRUSTED_ORIGINS:
         CSRF_TRUSTED_ORIGINS = [*CSRF_TRUSTED_ORIGINS, _published_origin]
+
 # Preview/sandbox proxies (and most local reverse proxies) terminate TLS and
 # forward plain HTTP.  Without this, Django considers every request insecure,
 # so the browser's ``Origin: https://<host>`` never matches and every form POST
-# — login first of all — dies with 403 CSRF.  Only trusted by default while
-# DEBUG is on: in production the operator opts in explicitly, because a
-# spoofable header must never decide whether a request was secure.
-if env_bool("TRUST_X_FORWARDED_PROTO", "true" if DEBUG else "false"):
+# — login first of all — dies with 403 CSRF.  Trusted by default now: it is what
+# makes a proxy-hosted deployment work with no configuration, and it can no
+# longer decide whether a request is *allowed* to be secure — the redirect and
+# the ``Secure`` cookies below stay off until HTTPS is actually declared.
+if env_bool("TRUST_X_FORWARDED_PROTO", "true"):
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
 # CSRF rejections render the same designed page as every other 403.
 CSRF_FAILURE_VIEW = "core.error_views.csrf_failure"
 
+# Is TLS really in front of this deployment?  Known when it publishes an https
+# address (``PUBLIC_URL``/``APP_URL``/…) or when ``HTTPS_IN_USE=true`` says so;
+# otherwise "not yet".  The default leans this way on purpose, because the two
+# mistakes are not equally bad:
+#   * a cookie without ``Secure`` is still sent over https — nobody notices;
+#   * a ``Secure`` cookie is *never* sent over plain http, so on a bare
+#     ``http://server:8000`` the login form posts, sets a cookie, and the next
+#     request arrives without it — "the login does nothing", the worst possible
+#     first impression of a test deploy.
+# The intermediate state is reported by ``deploy.W013``, and one variable
+# (``HTTPS_IN_USE=true``) turns the strict settings on.
+HTTPS_IN_USE = env_bool(
+    "HTTPS_IN_USE",
+    "true" if (PUBLISHED_HOST and PUBLISHED_SCHEME == "https") else "false",
+)
+
 if not DEBUG:
-    SESSION_COOKIE_SECURE = env_bool("SESSION_COOKIE_SECURE", "true")
-    CSRF_COOKIE_SECURE = env_bool("CSRF_COOKIE_SECURE", "true")
-    SECURE_SSL_REDIRECT = env_bool("SECURE_SSL_REDIRECT", "true")
-    # 30 days by default: long enough to protect a real class, short enough
-    # that a mistake (or a domain move) is not permanent.  Set 0 on a host
-    # that is not on HTTPS yet.
-    SECURE_HSTS_SECONDS = int(os.environ.get("SECURE_HSTS_SECONDS", str(60 * 60 * 24 * 30)))
-    SECURE_HSTS_INCLUDE_SUBDOMAINS = env_bool("SECURE_HSTS_INCLUDE_SUBDOMAINS", "true")
+    SESSION_COOKIE_SECURE = env_bool("SESSION_COOKIE_SECURE", "false" if not HTTPS_IN_USE else "true")
+    CSRF_COOKIE_SECURE = env_bool("CSRF_COOKIE_SECURE", "false" if not HTTPS_IN_USE else "true")
+    SECURE_SSL_REDIRECT = env_bool("SECURE_SSL_REDIRECT", "false" if not HTTPS_IN_USE else "true")
+    # HSTS is a promise to the browser for a whole year: never send it for a
+    # host that may be opened over http (it would make that host unreachable).
+    SECURE_HSTS_SECONDS = int(
+        os.environ.get(
+            "SECURE_HSTS_SECONDS", str(60 * 60 * 24 * 30) if HTTPS_IN_USE else "0"
+        )
+    )
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = env_bool(
+        "SECURE_HSTS_INCLUDE_SUBDOMAINS", "true" if HTTPS_IN_USE else "false"
+    )
     # Only meaningful once the domain is submitted to the browser preload list;
     # blanket-enabling it is a decision the operator has to make.
     SECURE_HSTS_PRELOAD = env_bool("SECURE_HSTS_PRELOAD", "false")

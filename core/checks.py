@@ -1,8 +1,10 @@
 """Deployment-safety system checks (``manage.py check``).
 
-Complement the fail-fast guard in settings: settings refuses to boot in
-production without a real SECRET_KEY; these checks warn about the risky
-*configurations* that are still legal — like DEBUG on a public host.
+The settings module boots on defaults on purpose (no environment variable is
+required), so the job here is to *say out loud* what those defaults give up —
+an open host list, cookies that are not ``Secure``, SQLite inside a container —
+instead of failing the boot.  Warnings are greppable in a deployment log; a
+traceback is not.
 """
 from __future__ import annotations
 
@@ -116,11 +118,29 @@ def csrf_origins_match_the_host(app_configs, **kwargs) -> list[CheckWarning]:
     issues: list[CheckWarning] = []
     if settings.DEBUG or settings.CSRF_TRUSTED_ORIGINS:
         return issues
+    if not getattr(settings, "HTTPS_IN_USE", False):
+        # A deployment that does not claim TLS is served over http: the browser's
+        # Origin is http too, same-origin matches, nothing to configure.
+        return issues
+    if not getattr(settings, "SECURE_PROXY_SSL_HEADER", None):
+        # ...and with no way to learn the real scheme, https Origins can never
+        # match the http request Django sees: a 403 on every form, login first.
+        issues.append(CheckWarning(
+            "HTTPS is in use but the app cannot see it (SECURE_PROXY_SSL_HEADER "
+            "is off) and CSRF_TRUSTED_ORIGINS is empty: every form, login first, "
+            "will be rejected with 403.",
+            hint="Set TRUST_X_FORWARDED_PROTO=true when the proxy forwards "
+                 "X-Forwarded-Proto, and/or CSRF_TRUSTED_ORIGINS="
+                 "https://your-domain.example.",
+            id="deploy.W005",
+        ))
+        return issues
     issues.append(CheckWarning(
-        "DEBUG=false and CSRF_TRUSTED_ORIGINS is empty: browsers post an "
-        "https:// Origin, so every form (login first) will fail with 403.",
+        "HTTPS is in use and CSRF_TRUSTED_ORIGINS is empty: form posts are "
+        "accepted only while the proxy reports the original scheme.",
         hint="Set CSRF_TRUSTED_ORIGINS=https://your-domain.example (scheme + "
-             "host, comma separated for several).",
+             "host, comma separated for several) — or PUBLIC_URL to the "
+             "deployed address, which adds it automatically.",
         id="deploy.W005",
     ))
     return issues
@@ -318,3 +338,53 @@ def allowed_hosts_cover_the_public_domain(app_configs, **kwargs) -> list[CheckWa
         id="deploy.W011",
     )
     return [issue]
+
+
+@register()
+def hosts_are_open(app_configs, **kwargs) -> list[CheckWarning]:
+    """Say that production is accepting any Host header.
+
+    The zero-config default exists so a fresh server answers on whatever name it
+    is reached by.  It is also the one default with a security cost: Host
+    validation is what keeps password-reset links, cache keys and absolute URLs
+    bound to *our* domain.  Report it once, at boot, with the one-line fix.
+    """
+    issues: list[CheckWarning] = []
+    if settings.DEBUG or not getattr(settings, "HOSTS_AUTO", False):
+        return issues
+    issues.append(CheckWarning(
+        "DEBUG=false and ALLOWED_HOSTS was never set: every Host header is "
+        "accepted, so a request for any domain answers as this site.",
+        hint="Set ALLOWED_HOSTS=your-domain.example (comma separated, no "
+             "scheme) — or PUBLIC_URL / APP_URL to the deployed address, which "
+             "is added automatically. Nothing else needs changing.",
+        id="deploy.W012",
+    ))
+    return issues
+
+
+@register()
+def https_is_not_assumed(app_configs, **kwargs) -> list[CheckWarning]:
+    """Say that the app thinks it is served over plain HTTP.
+
+    Until a deployment declares TLS, cookies are not ``Secure``, HSTS is off and
+    HTTP is not redirected.  That is what makes a bare ``http://host:8000`` work
+    (a ``Secure`` cookie is never sent back over http — a login form that "does
+    nothing"), but it must not survive the move to a real https domain.
+    """
+    issues: list[CheckWarning] = []
+    if settings.DEBUG or getattr(settings, "HTTPS_IN_USE", False):
+        return issues
+    if (getattr(settings, "SECURE_SSL_REDIRECT", False)
+            or getattr(settings, "SESSION_COOKIE_SECURE", False)):
+        # The operator already made the choice explicitly; nothing to add.
+        return issues
+    issues.append(CheckWarning(
+        "This deployment is not marked as HTTPS: session and CSRF cookies are "
+        "sent without Secure, HSTS is off and HTTP is not redirected to HTTPS.",
+        hint="On a real domain put TLS in front of the app and set "
+             "HTTPS_IN_USE=true (or PUBLIC_URL=https://your-domain) — that one "
+             "value turns on Secure cookies, the HTTPS redirect and HSTS.",
+        id="deploy.W013",
+    ))
+    return issues

@@ -1058,7 +1058,35 @@ python tests_e2e/run_e2e.py --room <CODE>
 | **سرور مجازی** (nginx + Daphne + systemd) | کنترل کامل، WebSocket تضمینی | [`deploy/nginx/virtualclass.conf`](deploy/nginx/virtualclass.conf) · [`deploy/systemd/`](deploy/systemd) |
 | **ابر وب‌لاینز** (PaaS) | بدون کار سرور، دامنه/SSL/دیتابیس از پنل | [`deploy/weblines/Dockerfile`](deploy/weblines/Dockerfile) · [`.env.production.example`](.env.production.example) · [`deploy/HOSTING-virtualclass-weblines.md`](deploy/HOSTING-virtualclass-weblines.md) |
 
-### حداقلِ تنظیمات و پروب سلامت
+### صفر تنظیم: سرور را با هیچ env بالا بیاورید
+
+برای «بذارم روی سرور تا ببینم کار می‌کند» هیچ متغیری لازم نیست — نه `.env`، نه `export`:
+
+```bash
+python -m pip install -r requirements.txt
+python manage.py migrate                 # فقط یک بار (ایمیج/Procfile خودش انجام می‌دهد)
+daphne -b 0.0.0.0 -p 8000 --proxy-headers config.asgi:application
+```
+
+اپ خودش کلید `SECRET_KEY` را می‌سازد و در `private_media/.secret_key` (مجوز `0600`،
+gitignored) نگه می‌دارد تا ورودها با ری‌استارت نپرند؛ هر Host را می‌پذیرد تا دامنه را
+نگفته باشید؛ کوکی‌ها را روی HTTP هم می‌فرستد (کوکی `Secure` روی `http://` هرگز برنمی‌گردد
+و ورود را «بی‌اثر» نشان می‌دهد)؛ `DATABASE_URL`/`POSTGRES_URL`/`PG*` و
+`REDIS_URL`/`REDIS_TLS_URL` را اگر پلتفرم تزریق کند برمی‌دارد؛ و اگر LiveKit نباشد Mesh
+را خودکار روشن می‌کند تا دوربین/میکروفون کار کند. اگر `collectstatic` هم اجرا نشده باشد،
+WhiteNoise از پوشه‌های منبع سرو می‌کند و صفحه بی‌استایل نمی‌ماند.
+
+در عوض لاگ سه چیز را صادقانه می‌گوید: `deploy.W012` (هر Host پذیرفته می‌شود)،
+`deploy.W013` (بدون HTTPS: کوکی بدون `Secure`، بدون HSTS، بدون ریدایرکت) و `deploy.W003`
+(SQLite در کانتینر با هر دیپلوی پاک می‌شود). برای دامنهٔ واقعی فقط این را اضافه کنید:
+
+```env
+PUBLIC_URL=https://class.example.com     # دامنه + لینک‌های مطلق
+HTTPS_IN_USE=true                        # کوکی Secure + ریدایرکت HTTPS + HSTS
+DATABASE_URL=postgres://u:p@host:5432/db # تا داده با دیپلوی نرود
+```
+
+### تنظیمات کامل (وقتی از حالت تست بیرون آمدید)
 
 شش متغیر، و بقیه پیش‌فرضِ امن دارند:
 
@@ -1066,15 +1094,17 @@ python tests_e2e/run_e2e.py --room <CODE>
 SECRET_KEY=<۶۴ کاراکتر تصادفی>      DEBUG=false
 ALLOWED_HOSTS=class.example.com      CSRF_TRUSTED_ORIGINS=https://class.example.com
 DATABASE_URL=postgres://u:p@host:5432/db?sslmode=require
-TRUST_X_FORWARDED_PROTO=true         # اگر TLS را پروکسی تمام می‌کند
+HTTPS_IN_USE=true                    # اگر دامنه TLS دارد (پشت پروکسی هم)
 ```
 
 `python manage.py check --deploy` حالا چهار اشتباه رایج هاست را با کد گزارش می‌کند:
 `deploy.W004` (هاست عمومی در `ALLOWED_HOSTS` نیست → همه `400`)، `deploy.W005`
-(`CSRF_TRUSTED_ORIGINS` خالی → هر فرم `403`)، `deploy.W006` (پوشهٔ آپلود نیست/نوشتنی نیست)،
-`deploy.W007` (ریدایرکت HTTPS بدون هدر پروکسی → حلقه). برای زیردامنه‌های پلتفرمی، `*`
-ممنوع است اما `ALLOWED_HOSTS=.weblines.app` و `CSRF_TRUSTED_ORIGINS=https://*.weblines.app`
-کار می‌کنند.
+(HTTPS هست ولی `CSRF_TRUSTED_ORIGINS` خالی و هدر پروکسی هم نیست → فرم‌ها `403`)، `deploy.W006` (پوشهٔ آپلود نیست/نوشتنی نیست)،
+`deploy.W007` (ریدایرکت HTTPS بدون هدر پروکسی → حلقه). دو کد تازه هم مخصوص همین حالت
+«بدون تنظیم» است: `deploy.W012` (هاست باز) و `deploy.W013` (HTTPS اعلام نشده). برای
+زیردامنه‌های پلتفرمی، نوشتن `*` در `ALLOWED_HOSTS` با `DEBUG=false` عمداً رد می‌شود اما
+`ALLOWED_HOSTS=.weblines.app` و `CSRF_TRUSTED_ORIGINS=https://*.weblines.app` کار می‌کنند
+(و اگر `ALLOWED_HOSTS` را خالی بگذارید، اپ همه را می‌پذیرد و `deploy.W012` را گزارش می‌کند).
 
 **پروب سلامت** برای health check هاست: `GET /healthz` (پروسه بالاست) و `GET /healthz?db=1`
 (دیتابیس هم جواب می‌دهد، وگرنه `503`). بدون احراز هویت، بدون session، بدون کش، و از

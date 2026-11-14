@@ -17,7 +17,7 @@
 | `DATABASE_URL: ''` و `ENGINE: sqlite3`, `NAME: /app/db.sqlite3` | بدون دیتابیس | **با هر دیپلوی همهٔ کاربران و کلاس‌ها پاک می‌شوند** |
 | `REDIS_URL: ''`, `CHANNEL_LAYERS: InMemory`, `CELERY…EAGER: True` | بدون Redis | رویدادهای چت/تخته فقط داخل همان پروسه می‌رسند؛ کارهای پس‌زمینه درون‌خطی |
 | `MEDIA_ROOT: /app/media` | روی فایل‌سیستم کانتینر | لوگو و فایل‌های کلاس با دیپلوی بعدی می‌روند |
-| `LIVEKIT_URL: ''` (با `MESH_ENABLED: True` که فقط از `DEBUG` می‌آید) | بدون سرور رسانه | بعد از `DEBUG=false` **دوربین/میکروفون کار نمی‌کند** تا LiveKit بدهید یا Mesh را صریح روشن کنید |
+| `LIVEKIT_URL: ''` | بدون سرور رسانه | با `DEBUG=false` هم Mesh **خودکار روشن است** (چون LiveKit تنظیم نشده)، پس دوربین/میکروفون کار می‌کند؛ برای کلاس شلوغ‌تر LiveKit بدهید |
 
 **ترتیب کار:** ۱) متغیرها → ۲) Redeploy → ۳) دیتابیس/Redis/Volume → ۴) سوپرکاربر → ۵) رسانه.
 
@@ -28,7 +28,17 @@
 
 ## ۱) متغیرهای محیطی (Environment) — کپی کنید
 
-### الف) حداقلِ لازم برای بالا آمدن سالم
+### ۰) اگر فقط می‌خواهید ببینید کار می‌کند: هیچ متغیری نگذارید
+
+اپ روی یک سرور خالی، بدون `.env` و بدون هیچ متغیر محیطی بالا می‌آید: `SECRET_KEY` ساخته
+و در `private_media/.secret_key` (مجوز `0600`) نگه داشته می‌شود، `ALLOWED_HOSTS` هر
+هاستی را می‌پذیرد (پس `DisallowedHost` نمی‌گیرید)، کوکی‌ها روی HTTP هم کار می‌کنند،
+`DATABASE_URL`/`REDIS_URL` هرکدام را پلتفرم لینک کند خودکار برداشته می‌شود و اگر هیچ
+سرور رسانه‌ای نباشد Mesh خودکار روشن است. در عوض سه هشدار در لاگ می‌آید — `deploy.W012`
+(هاست باز)، `deploy.W013` (بدون HTTPS) و `deploy.W003` (SQLite موقت). برای یک سرور
+تست همین کافی است؛ برای دامنهٔ واقعی بخش‌های زیر.
+
+### الف) حداقلِ لازم برای یک دیپلوی تمیز و ماندگار
 
 ```env
 DEBUG=false
@@ -51,11 +61,12 @@ python -c "import secrets; print(secrets.token_urlsafe(48))"
 
 | متغیر | چرا | اگر غلط باشد |
 |---|---|---|
-| `DEBUG=false` | بدونش traceback و تنظیمات عمومی می‌شود و کوکی‌ها `Secure` نیستند | صفحهٔ خطای کامل برای همه + کوکی ناامن |
+| `DEBUG=false` | بدونش traceback و تنظیمات عمومی می‌شود | صفحهٔ خطای کامل برای همه |
 | `ALLOWED_HOSTS` | بدون `https://` و بدون `*` | هر درخواست `400 DisallowedHost` |
 | `CSRF_TRUSTED_ORIGINS` | **با** `https://` (چون مرورگر Origin می‌فرستد) | هر فرم، از جمله ورود، `403` |
 | `PUBLIC_URL` | نشانی عمومی سایت؛ خودکار به `ALLOWED_HOSTS` و `CSRF_TRUSTED_ORIGINS` اضافه می‌شود | اگر نباشد، هر بار عوض شدن env دستی باید `ALLOWED_HOSTS` را هم به‌روز کنید |
-| `TRUST_X_FORWARDED_PROTO=true` | پروکسی وب‌لاینز TLS را تمام می‌کند و `X-Forwarded-Proto: https` می‌فرستد | CSRF رد می‌شود یا ریدایرکت HTTPS حلقه می‌زند |
+| `TRUST_X_FORWARDED_PROTO=true` | پروکسی وب‌لاینز TLS را تمام می‌کند و `X-Forwarded-Proto: https` می‌فرستد | CSRF رد می‌شود یا ریدایرکت HTTPS حلقه می‌زند — پیش‌فرض حالا `true` است، نوشتنش لازم نیست |
+| `HTTPS_IN_USE=true` | «این دامنه TLS دارد»: کوکی `Secure` + ریدایرکت HTTP→HTTPS + HSTS با همین یک مقدار | کوکی `Secure` و HSTS روشن نمی‌شوند (`deploy.W013`) |
 
 > اگر روزی زیردامنهٔ دیگری هم اضافه کردید: `ALLOWED_HOSTS=virtualclass.weblines.ir,.weblines.ir`
 > و `CSRF_TRUSTED_ORIGINS=https://virtualclass.weblines.ir,https://*.weblines.ir`.
@@ -221,8 +232,9 @@ daphne -b 0.0.0.0 -p 8000 --proxy-headers config.asgi:application
 
 ## ۵) دوربین و میکروفون: یکی از دو مسیر را انتخاب کنید
 
-با `DEBUG=false` حالت P2P خودش خاموش می‌شود (`MESH_ENABLED` پیش‌فرض `0`) تا کلاس روی
-سرورِ واقعی از مسیر کنترل‌شده برود. پس یکی از این دو لازم است:
+بدون تنظیم هیچ‌چیز، `MESH_ENABLED` **خودکار روشن** است (چون `MEDIA_SERVER_URL` خالی
+است) تا دوربین/میکروفون در اتاق کار کند؛ به‌محض اینکه LiveKit را تنظیم کنید، Mesh خودش
+خاموش می‌شود تا کلاس از مسیر کنترل‌شده برود. برای کلاس شلوغ یکی از این دو را انتخاب کنید:
 
 **الف) LiveKit (توصیه‌شده برای کلاس واقعی)** — یک پروژهٔ LiveKit (ابری یا self-host)
 بسازید و مقادیرش را بگذارید:

@@ -15,28 +15,62 @@
 |---|---|---|
 | Python 3.11+ | ✅ | بدنهٔ اپ |
 | PostgreSQL | توصیهٔ جدی | در کانتینر، SQLite با هر دیپلوی پاک می‌شود |
-| `collectstatic` | ✅ **حتماً** | با `DEBUG=false` جنگو استاتیک سرو نمی‌کند؛ WhiteNoise از `STATIC_ROOT` سرو می‌کند |
+| `collectstatic` | توصیهٔ جدی (نه اجباری) | سریع‌ترین حالت: WhiteNoise از `STATIC_ROOT` سرو می‌کند؛ اگر اجرا نشده باشد، خودش از پوشه‌های منبع سرو می‌کند |
 | Redis | برای چند پروسه ✅ | channel layer + cache + صف Celery؛ بدونش تک‌پروسه و کارها درون‌خطی |
 | Celery worker | برای تبدیل Office | بدونش تبدیل همان‌جا و درون درخواست انجام می‌شود |
 | Celery beat یا کرون | اختیاری | جلسهٔ رهاشده، نگهداری داده، پاک‌سازی مهمان |
 | فضای دائمی (volume) | ✅ در کانتینر | `media/` و `private_media/` وگرنه با هر دیپلوی پاک می‌شوند |
 | LiveKit | اختیاری | بدونش اتاق روی mesh P2P کار می‌کند |
 
-> **چرا استاتیک‌ها لود نمی‌شوند؟** با `DEBUG=false` دیگر `runserver`/جنگو فایل‌های `/static/` را سرو نمی‌کند و `daphne` هم به‌تنهایی این کار را نمی‌کند. این پروژه **WhiteNoise** دارد: کافی است یک بار `python manage.py collectstatic --noinput` اجرا شود تا فایل‌ها در `STATIC_ROOT` باشند و اپ خودش سروشان کند — بدون nginx. جزئیات در بخش ۳.
+> **چرا استاتیک‌ها لود نمی‌شوند؟** با `DEBUG=false` دیگر `runserver`/جنگو فایل‌های `/static/` را سرو نمی‌کند و `daphne` هم به‌تنهایی این کار را نمی‌کند. این پروژه **WhiteNoise** دارد: یک بار `python manage.py collectstatic --noinput` فایل‌ها را در `STATIC_ROOT` می‌گذارد و اپ خودش سروشان می‌کند — بدون nginx. اگر این دستور هم اجرا نشده باشد، اپ به‌جای صفحهٔ بی‌استایل، از پوشه‌های منبع سرو می‌کند (`WHITENOISE_USE_FINDERS`)؛ فقط کمی کندتر است. جزئیات در بخش ۳.
+
+> **هیچ متغیری اجباری نیست.** اپ روی یک سرور خالی، بدون `.env` و بدون هیچ متغیر محیطی بالا می‌آید — بخش ۰.۰ را ببینید.
 
 ---
 
-## ۰.۰) حداقل تنظیمات برای هر هاست (کپی‌پیست)
+## ۰.۰) صفر تنظیم: بدون هیچ متغیری (حالت تست)
 
-هر هاستی — ابر، VPS یا پنل — با همین شش متغیر بالا می‌آید؛ بقیه پیش‌فرضِ امن دارند:
+```
+python -m pip install -r requirements.txt
+python manage.py migrate
+daphne -b 0.0.0.0 -p 8000 --proxy-headers config.asgi:application
+```
+
+همین. نه `.env`، نه `export`، نه `SECRET_KEY`. اپ خودش این‌ها را می‌سازد:
+
+| کاری که قبلاً باید می‌کردید | حالا چه می‌شود |
+|---|---|
+| `SECRET_KEY` | یک کلید تصادفی ساخته و در `private_media/.secret_key` (مجوز `0600`، gitignored) ذخیره می‌شود؛ با ری‌استارت عوض نمی‌شود، پس ورودها نمی‌پرند. **در کانتینر** `PRIVATE_MEDIA_ROOT` را روی volume بگذارید تا کلید با هر دیپلوی عوض نشود (کلید داخل همان پوشه است). اگر پوشه فقط‌خواندنی باشد، کلید در حافظه ساخته می‌شود و فقط با ری‌استارت سشن‌ها تمام می‌شوند — اپ بالا می‌آید |
+| `ALLOWED_HOSTS` | تا وقتی دامنه را نگفته‌اید، هر Host پذیرفته می‌شود (هاستِ هر پنلی جواب می‌دهد). اگر پلتفرم دامنه را خودش اعلام کند (`PUBLIC_URL`/`APP_URL`/`RENDER_EXTERNAL_URL`/…) یا شما `ALLOWED_HOSTS` را بدهید، همان لحظه به فهرست مشخص تبدیل می‌شود |
+| `CSRF_TRUSTED_ORIGINS` | لازم نیست: هدر `X-Forwarded-Proto` به‌صورت پیش‌فرض معتبر است، پس جنگو می‌فهمد پشت HTTPS است و بررسی same-origin درست انجام می‌شود |
+| `DEBUG=false` | اگر هم بگذارید هیچ‌چیز نمی‌شکند: ریدایرکت HTTPS، کوکی `Secure` و HSTS تا وقتی TLS اعلام نشده **خاموش** می‌مانند، تا ورود روی `http://سرور:8000` کار کند |
+| `DATABASE_URL` | اگر پلتفرم `DATABASE_URL`/`POSTGRES_URL`/`DATABASE_PRIVATE_URL` یا `PGHOST`+`PGDATABASE` را تزریق کند، همان استفاده می‌شود؛ وگرنه SQLite محلی |
+| `REDIS_URL` | اگر `REDIS_URL`/`REDIS_TLS_URL`/`REDISCLOUD_URL` باشد استفاده می‌شود؛ وگرنه channel layer درون‌حافظه و کارها درون‌خطی (بدون worker) |
+| `MESH_ENABLED` | اگر LiveKit تنظیم نشده باشد، mesh خودکار روشن است؛ پس دوربین/میکروفون در اتاق کار می‌کند |
+| `collectstatic` | اگر اجرا نشده باشد، WhiteNoise از پوشه‌های منبع سرو می‌کند |
+
+سه چیزی که این حالت **نمی‌دهد** (و با `manage.py check` هم گزارش می‌شوند): هاست باز
+(`deploy.W012`)، کوکی بدون `Secure` (`deploy.W013`) و SQLite که در کانتینر با هر دیپلوی
+پاک می‌شود (`deploy.W003`). برای یک سرور تست که فقط می‌خواهید اپ را ببینید، همین کافی
+است؛ برای دامنهٔ واقعی فقط `PUBLIC_URL=https://دامنه` (یا `HTTPS_IN_USE=true`) و یک
+`DATABASE_URL` بگذارید و بقیه خودکار درست می‌شود.
+
+**مایگریشن:** ایمیج/`Procfile` این پروژه در استارت `migrate` را اجرا می‌کند. اگر خودتان
+`daphne` را دستی بالا می‌آورید، یک بار `python manage.py migrate` (و اگر خواستید
+`python manage.py createsuperuser`) لازم است — بدونش صفحهٔ «دیتابیس در حال آماده‌سازی»
+با کد `503` می‌آید، نه خطای مبهم.
+
+## ۰.۰.۱) تنظیمات پیشنهادی برای یک دامنهٔ واقعی (کپی‌پیست)
+
+وقتی از حالت تست بیرون آمدید، همین شش خط کافی است (بقیه پیش‌فرضِ امن دارند):
 
 ```env
 SECRET_KEY=<۶۴ کاراکتر تصادفی: python -c "import secrets;print(secrets.token_urlsafe(48))">
 DEBUG=false
-ALLOWED_HOSTS=class.example.com            # بدون https:// و بدون *
+ALLOWED_HOSTS=class.example.com            # بدون https:// و بدون *   (یا PUBLIC_URL)
 CSRF_TRUSTED_ORIGINS=https://class.example.com
 DATABASE_URL=postgres://u:p@host:5432/db?sslmode=require
-TRUST_X_FORWARDED_PROTO=true               # اگر TLS را پروکسی تمام می‌کند
+HTTPS_IN_USE=true                          # کوکی Secure + ریدایرکت HTTPS + HSTS
 ```
 
 قواعدی که همیشه اشتباه می‌شوند و حالا در `manage.py check` گزارش می‌شوند:
@@ -44,7 +78,7 @@ TRUST_X_FORWARDED_PROTO=true               # اگر TLS را پروکسی تما
 | کد | چه می‌گوید | رفع |
 |---|---|---|
 | `deploy.W004` | `ALLOWED_HOSTS` هیچ هاست عمومی ندارد → همه‌چیز `400` | همان شش خط بالا |
-| `deploy.W005` | `CSRF_TRUSTED_ORIGINS` خالی است → هر فرم (اول از همه ورود) `403` | `https://دامنه` را بگذارید |
+| `deploy.W005` | HTTPS هست ولی `CSRF_TRUSTED_ORIGINS` خالی (و هدر پروکسی هم نیست) → فرم‌ها `403` | `https://دامنه` در `CSRF_TRUSTED_ORIGINS` یا `PUBLIC_URL` |
 | `deploy.W006` | `MEDIA_ROOT`/`PRIVATE_MEDIA_ROOT` نیست یا نوشتنی نیست | volume در کانتینر، مالکیت در VPS |
 | `deploy.W007` | `SECURE_SSL_REDIRECT` روشن است ولی هدر پروکسی نه → حلقهٔ ریدایرکت | `TRUST_X_FORWARDED_PROTO=true` |
 | `deploy.W008` | mesh بدون TURN: تصویر/صدا بین شبکه‌های سخت‌گیر نمی‌رسد («دوربین روشن است ولی بقیه نمی‌بینند») | coturn در `WEBRTC_ICE_SERVERS` یا LiveKit |
@@ -52,11 +86,15 @@ TRUST_X_FORWARDED_PROTO=true               # اگر TLS را پروکسی تما
 | `deploy.W011` | `ALLOWED_HOSTS` هیچ نام عمومی ندارد (فقط localhost) → `DisallowedHost` | دامنه را در `ALLOWED_HOSTS` بگذارید (یا `PUBLIC_URL`) |
 | `deploy.W009` | نه LiveKit نه mesh → رسانه در همهٔ اتاق‌ها خاموش است | `MEDIA_SERVER_*` یا `MESH_ENABLED=1` |
 | `deploy.W002` | بدون `REDIS_URL` → تک‌پروسه | Redis؛ در نصب تک‌پروسه پذیرفتنی است |
+| `deploy.W012` | `ALLOWED_HOSTS` داده نشده → هر Host پذیرفته می‌شود | `ALLOWED_HOSTS=دامنه` یا `PUBLIC_URL` (خودکار) |
+| `deploy.W013` | HTTPS اعلام نشده → کوکی بدون `Secure`، بدون HSTS و بدون ریدایرکت | `HTTPS_IN_USE=true` روی دامنهٔ TLS‌دار |
 | `deploy.W003` | SQLite با `DEBUG=false` | PostgreSQL، یا `ALLOW_SQLITE_IN_PRODUCTION=true` روی هاست دائمی |
 
-**دامنهٔ پلتفرمی (زیردامنه‌های متغیر):** `*` در `ALLOWED_HOSTS` با `DEBUG=false` عمداً
-رد می‌شود، اما جنگو دو الگوی امن دارد: `ALLOWED_HOSTS=.weblines.app` (هر زیردامنه) و
-`CSRF_TRUSTED_ORIGINS=https://*.weblines.app`.
+**دامنهٔ پلتفرمی (زیردامنه‌های متغیر):** اگر `ALLOWED_HOSTS` را خالی بگذارید، اپ هر Host
+را می‌پذیرد و `deploy.W012` این را در لاگ می‌گوید؛ برای بستنش `ALLOWED_HOSTS=دامنه` را
+بدهید، یا از الگوی امن جنگو استفاده کنید: `ALLOWED_HOSTS=.weblines.app` (هر زیردامنه) با
+`CSRF_TRUSTED_ORIGINS=https://*.weblines.app`. یک `*` **نوشته‌شده** در `ALLOWED_HOSTS`
+با `DEBUG=false` همچنان عمداً رد می‌شود (چون در آن حالت دامنه را می‌دانید).
 
 **پروب سلامت:** در پنل هاست، Health check را روی `/healthz` بگذارید (فقط «پروسه بالا
 است») یا `/healthz?db=1` (دیتابیس هم جواب می‌دهد و در غیر این صورت `503`). این مسیر از

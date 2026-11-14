@@ -151,6 +151,18 @@ class ProductionReadinessTests(SimpleTestCase):
             self._checks(
                 DEBUG=False, ALLOWED_HOSTS=["class.example.com"],
                 CSRF_TRUSTED_ORIGINS=[], SECURE_SSL_REDIRECT=False,
+                HTTPS_IN_USE=True,
+            ),
+        )
+
+    def test_an_http_deployment_is_not_told_its_forms_will_fail(self):
+        """Same-origin over http matches on its own; no list needed."""
+        self.assertNotIn(
+            "deploy.W005",
+            self._checks(
+                DEBUG=False, ALLOWED_HOSTS=["class.example.com"],
+                CSRF_TRUSTED_ORIGINS=[], SECURE_SSL_REDIRECT=False,
+                HTTPS_IN_USE=False, SECURE_PROXY_SSL_HEADER=None,
             ),
         )
 
@@ -202,6 +214,47 @@ class ProductionReadinessTests(SimpleTestCase):
             self.assertNotIn(
                 "deploy.W006", _ids(checks.upload_directories_are_writable(None))
             )
+
+
+class ZeroConfigCheckTests(SimpleTestCase):
+    """The defaults are legal — but never silent about what they give up."""
+
+    def test_an_open_host_list_is_reported(self):
+        with self.settings(DEBUG=False, HOSTS_AUTO=True):
+            ids = _ids(checks.hosts_are_open(None))
+        self.assertEqual(ids, {"deploy.W012"})
+
+    def test_a_named_host_list_is_not_reported(self):
+        with self.settings(DEBUG=False, HOSTS_AUTO=False):
+            self.assertEqual(_ids(checks.hosts_are_open(None)), set())
+
+    def test_development_never_reports_an_open_host_list(self):
+        with self.settings(DEBUG=True, HOSTS_AUTO=True):
+            self.assertEqual(_ids(checks.hosts_are_open(None)), set())
+
+    def test_missing_https_is_reported(self):
+        with self.settings(
+            DEBUG=False,
+            HTTPS_IN_USE=False,
+            SECURE_SSL_REDIRECT=False,
+            SESSION_COOKIE_SECURE=False,
+        ):
+            ids = _ids(checks.https_is_not_assumed(None))
+        self.assertEqual(ids, {"deploy.W013"})
+
+    def test_a_declared_https_deployment_is_quiet(self):
+        with self.settings(DEBUG=False, HTTPS_IN_USE=True):
+            self.assertEqual(_ids(checks.https_is_not_assumed(None)), set())
+
+    def test_an_explicit_choice_is_not_second_guessed(self):
+        """Someone who turned the redirect on knows better than the check."""
+        with self.settings(
+            DEBUG=False,
+            HTTPS_IN_USE=False,
+            SECURE_SSL_REDIRECT=True,
+            SESSION_COOKIE_SECURE=False,
+        ):
+            self.assertEqual(_ids(checks.https_is_not_assumed(None)), set())
 
 
 class HealthProbeTests(TestCase):

@@ -41,7 +41,11 @@ class StaticServingTests(SimpleTestCase):
             target.parent.mkdir(parents=True)
             target.write_text("body{color:#5457e5}", encoding="utf-8")
 
-            with override_settings(STATIC_ROOT=tmp, WHITENOISE_AUTOREFRESH=False):
+            with override_settings(
+                STATIC_ROOT=tmp,
+                WHITENOISE_AUTOREFRESH=False,
+                WHITENOISE_USE_FINDERS=False,
+            ):
                 response = self._middleware()(
                     RequestFactory().get("/static/css/main.css")
                 )
@@ -52,11 +56,30 @@ class StaticServingTests(SimpleTestCase):
 
     def test_a_missing_file_falls_through_to_django(self):
         with tempfile.TemporaryDirectory() as tmp:
-            with override_settings(STATIC_ROOT=tmp, WHITENOISE_AUTOREFRESH=False):
+            with override_settings(
+                STATIC_ROOT=tmp,
+                WHITENOISE_AUTOREFRESH=False,
+                WHITENOISE_USE_FINDERS=False,
+            ):
                 response = self._middleware()(
                     RequestFactory().get("/static/css/not-there.css")
                 )
         self.assertEqual(response, "DID-NOT-HANDLE")
+
+    def test_a_server_that_never_collected_still_has_its_styles(self):
+        """`daphne` on a bare host, no `collectstatic`: found via the finders."""
+        with override_settings(
+            STATIC_ROOT=str(Path(tempfile.mkdtemp()) / "nothing-here"),
+            WHITENOISE_AUTOREFRESH=False,
+            WHITENOISE_USE_FINDERS=True,
+        ):
+            response = self._middleware()(
+                RequestFactory().get("/static/css/main.css")
+            )
+        self.assertEqual(getattr(response, "status_code", None), 200)
+        body = b"".join(response.streaming_content)
+        self.assertGreater(len(body), 1000)
+        self.assertIn("global styles".encode(), body)
 
     def test_settings_point_whitenoise_at_the_collected_files(self):
         self.assertEqual(
