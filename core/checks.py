@@ -353,11 +353,12 @@ def hosts_are_open(app_configs, **kwargs) -> list[CheckWarning]:
     if settings.DEBUG or not getattr(settings, "HOSTS_AUTO", False):
         return issues
     issues.append(CheckWarning(
-        "DEBUG=false and ALLOWED_HOSTS was never set: every Host header is "
-        "accepted, so a request for any domain answers as this site.",
-        hint="Set ALLOWED_HOSTS=your-domain.example (comma separated, no "
-             "scheme) — or PUBLIC_URL / APP_URL to the deployed address, which "
-             "is added automatically. Nothing else needs changing.",
+        "ALLOWED_HOSTS does not restrict hosts (`*`, or left unset), so a "
+        "request for any domain answers as this site.",
+        hint="Fine on a test server. For a real domain set "
+             "ALLOWED_HOSTS=your-domain.example (comma separated, no scheme) — "
+             "or PUBLIC_URL / APP_URL to the deployed address, which replaces "
+             "the wildcard automatically.",
         id="deploy.W012",
     ))
     return issues
