@@ -228,6 +228,8 @@ class WhiteboardImpl {
             return;
         }
         this.unavailable = false;
+        // The canvas exists: drop the «the board is coming» shimmer.
+        document.getElementById('wb-loader')?.classList.add('hidden');
         this._ensureBgLayer();
         this.resize();
         window.addEventListener('resize', () => this.resize());
@@ -269,6 +271,7 @@ class WhiteboardImpl {
 
     _showUnavailable(message) {
         this.unavailable = true;
+        document.getElementById('wb-loader')?.classList.add('hidden');
         const hint = document.getElementById('wb-error-hint');
         if (hint) {
             hint.textContent = message;

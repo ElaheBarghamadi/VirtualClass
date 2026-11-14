@@ -1167,3 +1167,70 @@ class LazyVendorTests(SimpleTestCase):
             if clash:
                 offenders.append(f"{path.name}: {sorted(clash)}")
         self.assertEqual(offenders, [], "a module declares a name it also imports")
+
+
+class RoomPolishTests(SimpleTestCase):
+    """The calm layer: waiting states, motion, and the bits nobody styled.
+
+    The board and the slides no longer download their libraries up front (see
+    ``LazyVendorTests``), which means the stage now has an honest "this is
+    coming" moment; and a handful of elements room.js produces had no rules at
+    all, so they rendered as browser defaults beside hand-tuned neighbours.
+    """
+
+    def setUp(self):
+        self.css = read(CSS / "room.css")
+        self.template = read(TEMPLATES / "room.html")
+        self.whiteboard = read(JS / "whiteboard.js")
+        self.presentation = read(JS / "presentation.js")
+
+    def test_both_lazy_stages_have_a_loader(self):
+        self.assertIn('id="wb-loader"', self.template)
+        self.assertIn('id="pres-loader"', self.template)
+        self.assertIn(".stage-loader {", self.css)
+        self.assertIn("@keyframes vc-sheen", self.css)
+
+    def test_the_board_loader_leaves_when_the_canvas_or_the_error_arrives(self):
+        init = self.whiteboard[self.whiteboard.index("    async init({"):]
+        init = init[: init.index("    /**\n     * Read-only viewers")]
+        self.assertIn("document.getElementById('wb-loader')?.classList.add('hidden');", init)
+        unavailable = rule(self.whiteboard, "    _showUnavailable(message)")
+        self.assertIn("document.getElementById('wb-loader')?.classList.add('hidden');", unavailable)
+
+    def test_the_slide_loader_waits_long_enough_to_not_flicker(self):
+        self.assertIn("setTimeout(() => loader?.classList.remove('hidden'), 150)", self.presentation)
+        self.assertIn("clearTimeout(showLoader);", self.presentation)
+        self.assertIn("loader?.classList.add('hidden');", self.presentation)
+
+    def test_views_tiles_and_the_bar_arrive_instead_of_appearing(self):
+        self.assertIn("@keyframes vc-view-in", self.css)
+        self.assertIn(".stage-view { animation: vc-view-in", self.css)
+        self.assertIn(".tile { animation: vc-tile-in", self.css)
+        self.assertIn(".room-controls { animation: vc-view-in", self.css)
+        # and every one of them is switched off for reduced motion
+        reduce = self.css[self.css.rindex("@media (prefers-reduced-motion: reduce) {"):]
+        for selector in (".stage-view", ".tile", ".room-controls"):
+            self.assertIn(selector, reduce)
+        # `backwards`, never `both`: a forwards fill would pin the transform and
+        # freeze the leaving-tile shrink.
+        for declaration in (".stage-view { animation: vc-view-in .2s var(--ease) backwards; }",
+                            ".tile { animation: vc-tile-in .18s var(--ease) backwards; }",
+                            ".room-controls { animation: vc-view-in .22s var(--ease) backwards; }"):
+            self.assertIn(declaration, self.css)
+
+    def test_a_raised_hand_reaches_the_tile(self):
+        self.assertIn(".tile-icons .t-hand { display: none; }", self.css)
+        self.assertIn(".tile-icons .t-hand.on {", self.css)
+        self.assertIn("hand_raised: Boolean(p.hand_raised),", read(JS / "room.js"))
+        self.assertIn("?.classList.toggle('on', Boolean(this.peerInfo.get(participant.identity)?.hand_raised))",
+                      read(JS / "media.js"))
+        self.assertIn("tile.querySelector('.t-hand')?.classList.toggle('on', Boolean(link.peer.hand_raised));",
+                      read(JS / "mesh.js"))
+
+    def test_the_small_state_pills_are_styled(self):
+        for selector in (".live-pill {", ".pdf-ready-pill {", ".wb-nodraw-hint", ".wb-error-hint",
+                         ".shortcut-list {", ".wb-toolbar.is-unavailable"):
+            self.assertIn(selector, self.css)
+        # a pulse made of a CSS circle, never a glyph
+        self.assertIn(".live-pill::before {", self.css)
+        self.assertNotIn("content: '●'", rule(self.css, ".live-pill::before"))

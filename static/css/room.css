@@ -3411,3 +3411,229 @@ body.class-is-over .room-side { pointer-events: none; }
 @media (prefers-reduced-motion: reduce) {
     .tile, .tile video, .participant { transition: none; }
 }
+
+/* ==========================================================================
+   Room polish pass — motion, waiting states, and the pieces nobody styled.
+
+   Three things were true of the room before this pass:
+
+   * the surface was *static*: switching views, a person's tile appearing and
+     the control bar arriving all happened in one frame, with no cue that
+     anything had changed;
+   * the libraries that draw the board and the slides are fetched on demand
+     now (see js/vendor.js), so there is an honest moment where the stage is
+     empty but busy — and it looked identical to a broken one;
+   * a handful of elements the JS produces (the read-only board notice, the
+     `PDF` badge in the file list, the shortcut cheat-sheet, an unavailable
+     board, a raised hand on a tile) had no rules at all and fell back to
+     browser defaults next to carefully styled neighbours.
+
+   Motion here is opacity/transform only (compositor work, never layout),
+   short enough to feel like a response rather than an animation, and it is
+   switched off wholesale at the bottom of the file for `prefers-reduced-motion`.
+   ========================================================================== */
+
+@keyframes vc-view-in {
+    from { opacity: 0; transform: translateY(3px); }
+    to   { opacity: 1; transform: none; }
+}
+@keyframes vc-tile-in {
+    from { opacity: 0; transform: scale(.99); }
+    to   { opacity: 1; transform: none; }
+}
+@keyframes vc-sheen {
+    from { background-position: 140% 0; }
+    to   { background-position: -40% 0; }
+}
+@keyframes vc-soft-pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: .45; }
+}
+
+/* A view arriving, a tile appearing, the bar settling in: three quarters of a
+   blink each.  Everything animates from a *slightly* offset start so motion
+   reads as direction, not as a bounce.
+   `backwards` — not `both` — on purpose: once the 200 ms are over the element
+   must hand its transform back to the cascade, or a leaving tile
+   (`.tile.is-left`, which scales down) and the mobile drawer (`.room-side`,
+   which slides) would be frozen at "no transform" by the animation's
+   forwards fill.  Only opacity/transform animate, so nothing reflows. */
+.stage-view { animation: vc-view-in .2s var(--ease) backwards; }
+.tile { animation: vc-tile-in .18s var(--ease) backwards; }
+.room-controls { animation: vc-view-in .22s var(--ease) backwards; }
+
+/* ---------- waiting states for the on-demand libraries ---------- */
+/* One shimmer, one sentence, two places: the board and the slide deck.  It
+   sits *inside* the stage so the toolbar above it stays usable while the
+   library arrives. */
+.stage-loader {
+    position: absolute;
+    inset: 0;
+    z-index: 4;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: .6rem;
+    border-radius: inherit;
+    color: var(--room-muted);
+    font-size: .84rem;
+    font-weight: 600;
+    text-align: center;
+    background:
+        linear-gradient(100deg,
+            color-mix(in srgb, var(--room-surface) 88%, transparent) 20%,
+            color-mix(in srgb, var(--accent) 7%, var(--room-surface)) 45%,
+            color-mix(in srgb, var(--room-surface) 88%, transparent) 70%);
+    background-size: 220% 100%;
+    animation: vc-sheen 1.3s linear infinite;
+    pointer-events: none;
+}
+.stage-loader::before {
+    content: "";
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    border: 2px solid color-mix(in srgb, var(--accent) 22%, transparent);
+    border-top-color: var(--accent);
+    animation: vc-spin .7s linear infinite;
+}
+@keyframes vc-spin { to { transform: rotate(360deg); } }
+.wb-canvas-wrap, .presentation-holder { position: relative; }
+
+/* ---------- whiteboard: read-only notice and error banner ---------- */
+/* Both are messages, so they are banners in the flow (a viewer reads them
+   before the canvas), never floating chips over the ink. */
+.wb-nodraw-hint,
+.wb-error-hint {
+    display: flex;
+    align-items: center;
+    gap: .45rem;
+    margin: 0;
+    padding: .5rem .75rem;
+    border-radius: var(--radius-sm);
+    font-size: .8rem;
+    font-weight: 600;
+    line-height: 1.6;
+    border: 1px solid transparent;
+}
+.wb-nodraw-hint {
+    background: color-mix(in srgb, var(--accent) 8%, var(--room-surface));
+    border-color: color-mix(in srgb, var(--accent) 20%, transparent);
+    color: color-mix(in srgb, var(--accent) 62%, var(--room-text));
+}
+.wb-error-hint {
+    background: color-mix(in srgb, var(--danger) 8%, var(--room-surface));
+    border-color: color-mix(in srgb, var(--danger) 22%, transparent);
+    color: color-mix(in srgb, var(--danger) 68%, var(--room-text));
+}
+/* fabric never arrived: the dock stays visible (it is the map of what the
+   board can do) but stops pretending to be clickable. */
+.wb-toolbar.is-unavailable { opacity: .45; pointer-events: none; }
+
+/* ---------- small state pills ---------- */
+/* «زنده» on a live quiz and `PDF` in the file list: state in the corner of a
+   row, not a shout.  The dot is a CSS circle, not a glyph. */
+.live-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: .28rem;
+    padding: .05rem .45rem;
+    border-radius: var(--radius-pill);
+    background: color-mix(in srgb, var(--danger) 12%, var(--room-surface));
+    color: color-mix(in srgb, var(--danger) 70%, var(--room-text));
+    font-size: .68rem;
+    font-weight: 700;
+    line-height: 1.7;
+}
+.live-pill::before {
+    content: "";
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: currentColor;
+    animation: vc-soft-pulse 1.8s ease-in-out infinite;
+}
+.pdf-ready-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 0 .3rem;
+    margin-inline-start: .35rem;
+    border-radius: 5px;
+    border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent);
+    background: color-mix(in srgb, var(--accent) 9%, transparent);
+    color: color-mix(in srgb, var(--accent) 70%, var(--room-text));
+    font-size: .6rem;
+    font-weight: 750;
+    letter-spacing: .02em;
+    line-height: 1.6;
+    vertical-align: middle;
+}
+
+/* ---------- dialogs: the keyboard cheat-sheet ---------- */
+.shortcut-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: .45rem;
+}
+.shortcut-list li {
+    display: flex;
+    align-items: baseline;
+    gap: .3rem;
+    font-size: .86rem;
+    color: var(--room-text);
+}
+.shortcut-list .shortcut-sep {
+    margin-top: .35rem;
+    font-size: .76rem;
+    font-weight: 700;
+    color: var(--room-muted);
+}
+.shortcut-list kbd {
+    display: inline-block;
+    min-width: 1.6em;
+    margin-inline-end: .1rem;
+    padding: .05rem .34rem;
+    border-radius: 6px;
+    border: 1px solid var(--room-border);
+    border-bottom-width: 2px;
+    background: var(--surface-2);
+    font-family: inherit;
+    font-size: .76rem;
+    font-weight: 700;
+    color: var(--room-text-secondary, var(--room-text));
+    text-align: center;
+    white-space: nowrap;
+}
+
+/* ---------- tiles: a raised hand is worth seeing ---------- */
+/* The tile markup has always carried a hand icon; nothing ever showed or hid
+   it, so every tile wore one permanently.  It appears only when the roster
+   says that person's hand is up (room.js passes `hand_raised` down). */
+.tile-icons .t-hand { display: none; }
+.tile-icons .t-hand.on {
+    display: inline-flex;
+    color: var(--warning);
+}
+
+/* ---------- file list: only a presenter may click to present ---------- */
+/* room.js marks each row it wired for presenting (`data-present`); everybody
+   else's rows carry `data-preview` and keep the plain arrow. */
+.file-info[data-present] { cursor: pointer; }
+.file-list.can-present .file-item:hover {
+    border-color: color-mix(in srgb, var(--accent) 30%, var(--room-border));
+    background: color-mix(in srgb, var(--accent) 5%, var(--room-surface));
+}
+
+/* ---------- the boot fallback: a sentence and a button ---------- */
+.boot-fallback { display: flex; align-items: center; gap: .75rem; }
+.boot-fallback-text { flex: 1 1 auto; min-width: 0; }
+
+@media (prefers-reduced-motion: reduce) {
+    .stage-view, .tile, .room-controls { animation: none; }
+    .stage-loader { animation: none; background: color-mix(in srgb, var(--surface-2) 92%, transparent); }
+    .stage-loader::before { animation: none; }
+    .live-pill::before { animation: none; }
+}

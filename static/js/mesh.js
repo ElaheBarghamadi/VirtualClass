@@ -1528,7 +1528,8 @@ class MeshMedia {
         video.autoplay = true;
         const overlay = document.createElement('div');
         overlay.className = 'tile-overlay';
-        overlay.innerHTML = '<span class="tile-name"></span><span class="tile-icons"><span class="tile-net" data-quality="unknown" hidden></span><i class="t-mic" title="میکروفون"><svg class="ic"><use href="#i-mic"/></svg></i></span>'
+        overlay.innerHTML = '<span class="tile-name"></span><span class="tile-icons"><span class="tile-net" data-quality="unknown" hidden></span><i class="t-mic" title="میکروفون"><svg class="ic"><use href="#i-mic"/></svg></i>'
+            + '<i class="t-hand" title="دست بالا"><svg class="ic"><use href="#i-hand"/></svg></i></span>'
             + '<button type="button" class="tile-fs" title="نمایش تمام‌صفحه" aria-label="نمایش تمام‌صفحه"><svg class="ic"><use href="#i-maximize"/></svg></button>';
         overlay.querySelector('.tile-fs')?.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -1625,6 +1626,7 @@ class MeshMedia {
             && audioTrack && !audioTrack.muted && audioTrack.readyState === 'live'
         );
         tile.querySelector('.t-mic').classList.toggle('off', !micLive);
+        tile.querySelector('.t-hand')?.classList.toggle('on', Boolean(link.peer.hand_raised));
         // Same rule as the local tile: no camera and no microphone means the
         // person is not contributing picture or sound, so the stage skips them
         // (a screen share keeps the tile, since it *is* the picture).
@@ -1724,7 +1726,6 @@ class MeshMedia {
         const measured = new Map();
         for (const [identity, link] of this.links) {
             const stream = link.remoteStream;
-            const tile = this.tiles.get(identity);
             const audioTrack = stream && stream.getAudioTracks()[0];
             if (!audioTrack || audioTrack.muted || audioTrack.readyState !== 'live') {
                 continue;

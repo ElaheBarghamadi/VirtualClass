@@ -14,7 +14,6 @@
 
     const min = Number(fieldset.dataset.min) || 2;
     const max = Number(fieldset.dataset.max) || 10;
-    const extras = Array.from(fieldset.querySelectorAll('.option-row--extra'));
     let shown = min;
 
     function rows() {

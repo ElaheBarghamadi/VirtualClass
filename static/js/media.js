@@ -217,7 +217,12 @@ class LivekitMedia {
     syncPeers(peers) {
         this.peerInfo = new Map((peers || []).filter((p) => p?.identity).map((p) => [p.identity, p]));
         if (!this.room) return;
-        this.room.remoteParticipants.forEach((participant) => this._syncRemotePermissions(participant));
+        this.room.remoteParticipants.forEach((participant) => {
+            this._syncRemotePermissions(participant);
+            // Hands go up mid-lesson, so the badge follows the roster, not the track.
+            const tile = this.tiles.get(participant.identity);
+            tile?.querySelector('.t-hand')?.classList.toggle('on', Boolean(this.peerInfo.get(participant.identity)?.hand_raised));
+        });
     }
 
     _remoteTrackAllowed(participant, track) {
@@ -398,6 +403,9 @@ class LivekitMedia {
             && this._remoteTrackAllowed(participant, camPub.track)
         );
         tile.querySelector('.t-mic').classList.toggle('off', !micOn);
+        tile.querySelector('.t-hand')?.classList.toggle(
+            'on', Boolean(this.peerInfo.get(participant.identity)?.hand_raised),
+        );
         tile.querySelector('video').style.display = camOn ? '' : 'none';
         tile.querySelector('.tile-placeholder').classList.toggle('hidden', camOn);
         // A participant with neither microphone nor camera on contributes

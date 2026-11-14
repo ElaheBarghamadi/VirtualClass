@@ -439,6 +439,9 @@ class PresenceClient {
             muted: Boolean(p.muted),
             camera_disabled: Boolean(p.camera_disabled),
             screen_sharing: p.screen_sharing,
+            // A raised hand belongs on the person's tile, not only in the
+            // roster: the teacher is looking at the video wall.
+            hand_raised: Boolean(p.hand_raised),
         })));
     }
 
@@ -3300,6 +3303,7 @@ Media.init({
             identity: p.identity, member_id: p.member_id, name: p.name,
             permissions: p.permissions || {}, muted: Boolean(p.muted),
             camera_disabled: Boolean(p.camera_disabled), screen_sharing: p.screen_sharing,
+            hand_raised: Boolean(p.hand_raised),
         })));
 }).catch((err) => {
     console.error('[room] init failed: media', err);

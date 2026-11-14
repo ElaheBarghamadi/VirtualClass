@@ -309,6 +309,10 @@
                             <canvas id="pres-canvas" aria-label="صفحهٔ ارائه"></canvas>
                             <div class="pres-annot" id="pres-annot"><canvas id="pres-annot-canvas"></canvas></div>
                         </div>
+                        {# pdf.js is fetched on the first slide too — see above. #}
+                        <div class="stage-loader hidden" id="pres-loader" role="status" aria-live="polite">
+                            <span>در حال آماده‌سازی اسلاید…</span>
+                        </div>
                         <div class="pres-fallback hidden" id="pres-fallback"></div>
                     </div>
                 </div>
@@ -395,6 +399,11 @@
                              eraser can really punch through to the page. -->
                         <div class="wb-bg" id="wb-bg-layer" aria-hidden="true"></div>
                         <canvas id="whiteboard-canvas" aria-label="تخته سفید"></canvas>
+                        {% comment %}fabric.js is fetched on demand now: this is
+                        the honest «the board is coming» state, not a blank page.{% endcomment %}
+                        <div class="stage-loader" id="wb-loader" role="status" aria-live="polite">
+                            <span>در حال آماده‌سازی تخته…</span>
+                        </div>
                         <div class="wb-zoom" role="group" aria-label="بزرگ‌نمایی تخته">
                             <button type="button" id="wb-zoom-out" title="کوچک‌نمایی (−)" aria-label="کوچک‌نمایی">−</button>
                             <button type="button" id="wb-zoom-reset" class="wb-zoom-level" title="بزرگ‌نمایی ۱۰۰٪ — برای بازنشانی کلیک کنید (0)" aria-label="بازنشانی بزرگ‌نمایی">۱۰۰٪</button>

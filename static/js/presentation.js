@@ -321,6 +321,11 @@ class PresentationImpl {
         fallback.classList.add('hidden');
         stage.classList.remove('hidden');
 
+        // A first slide pulls 377 KB of pdf.js; a shimmer after 150 ms keeps the
+        // stage from looking empty while it arrives, and never flashes on a
+        // render that finishes inside a couple of frames.
+        const loader = document.getElementById('pres-loader');
+        const showLoader = setTimeout(() => loader?.classList.remove('hidden'), 150);
         try {
             if (kind === 'pdf') await this._renderPdfPage(gen);
             else await this._renderImage(gen);
@@ -332,6 +337,9 @@ class PresentationImpl {
             stage.classList.add('hidden');
             fallback.innerHTML = `<p>نمایش فایل ناموفق بود.</p><a class="btn" href="/class/${this.roomCode}/files/${this.fileId}/download/" download>دانلود فایل</a>`;
             return;
+        } finally {
+            clearTimeout(showLoader);
+            loader?.classList.add('hidden');
         }
         if (gen !== this._renderGen) return;
         // The annotation layer is fabric too; an image presentation reaches
