@@ -120,10 +120,21 @@ class AllowedHostsTests(TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(_values(proc)[0], "localhost,10.0.0.5")
 
-    def test_production_refuses_the_wildcard(self):
+    def test_production_accepts_the_wildcard_too(self):
+        """`ALLOWED_HOSTS=*` is a decision, not an error: a test server is
+        reached by an IP or a generated hostname, and refusing to boot over it
+        only sends the operator hunting for a domain name."""
         proc = _boot(DEBUG="false", SECRET_KEY=_REAL_KEY, ALLOWED_HOSTS="*")
-        self.assertNotEqual(proc.returncode, 0, "a wildcard must not boot in production")
-        self.assertIn("ALLOWED_HOSTS=*", proc.stderr)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(_values(proc)[0], "*")
+
+    def test_an_explicit_list_is_used_verbatim(self):
+        proc = _boot(
+            DEBUG="false", SECRET_KEY=_REAL_KEY,
+            ALLOWED_HOSTS="class.example.com,10.0.0.5",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(_values(proc)[0], "class.example.com,10.0.0.5")
 
     def test_production_without_a_host_list_still_boots(self):
         """No ALLOWED_HOSTS is a legal deployment, not a failed one."""
@@ -251,6 +262,13 @@ class ZeroConfigTests(TestCase):
         state = _state(DEBUG="false", SECRET_KEY_FILE=str(self.key_file))
         self.assertTrue(state["zero_config"])
         self.assertTrue(state["hosts_auto"])
+
+    def test_an_explicit_wildcard_is_still_reported_as_open(self):
+        state = _state(
+            DEBUG="false", SECRET_KEY_FILE=str(self.key_file), ALLOWED_HOSTS="*"
+        )
+        self.assertTrue(state["hosts_auto"])
+
         # No TLS anywhere in sight: nothing may force HTTPS or mark cookies
         # Secure, or the login form silently does nothing on http://host:8000.
         self.assertFalse(state["https"])

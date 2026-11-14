@@ -1,122 +1,78 @@
 {% extends "base.html" %}
 {% block title %}ثبت‌نام{% endblock %}
+{% block body_class %}auth-body{% endblock %}
 {% block content %}
-<div class="auth-shell">
-    <aside class="auth-aside auth-aside--alt" aria-hidden="true">
-        <div class="auth-orb auth-orb-a"></div>
-        <div class="auth-orb auth-orb-b"></div>
-        <div class="auth-aside-inner">
-            <span class="auth-badge">شروع رایگان</span>
-            <h2>در یک دقیقه کلاس بساز</h2>
-            <p>حساب کاربری بساز، کلاس را با تنظیمات دلخواه ایجاد کن و لینک را برای دانش‌آموزان بفرست.</p>
-            <ul class="auth-points">
-                <li>
-                    <span class="auth-point-icon"><svg viewBox="0 0 24 24"><use href="#r-bolt"/></svg></span>
-                    ساخت کلاس و ورود مهمان در چند ثانیه
-                </li>
-                <li>
-                    <span class="auth-point-icon"><svg viewBox="0 0 24 24"><use href="#r-users"/></svg></span>
-                    نقش‌ها و دسترسی‌های دقیق برای هر نفر
-                </li>
-                <li>
-                    <span class="auth-point-icon"><svg viewBox="0 0 24 24"><use href="#r-screen"/></svg></span>
-                    ویدیو، اشتراک صفحه و تخته سفید هم‌زمان
-                </li>
-            </ul>
-            <div class="auth-quote">
-                <span class="auth-quote-mark">”</span>
-                فقط یک مرورگر لازم است — نه نصب، نه افزونه.
+<section class="auth-page">
+    <div class="auth-box">
+        <header class="auth-head">
+            <h1 class="auth-title">ساخت حساب</h1>
+            <p class="auth-sub">در یک دقیقه کلاس اولتان را بسازید.</p>
+        </header>
+
+        <form method="post" novalidate class="auth-form">
+            {% csrf_token %}
+            {% if form.non_field_errors %}
+                <p class="auth-error" role="alert">{{ form.non_field_errors.0 }}</p>
+            {% endif %}
+
+            <div class="field">
+                <label for="{{ form.username.id_for_label }}">نام کاربری</label>
+                {{ form.username }}
+                {% if form.username.errors %}<p class="field-error">{{ form.username.errors.0 }}</p>{% endif %}
             </div>
-        </div>
-    </aside>
 
-    <section class="auth-panel">
-        <div class="auth-card">
-            <header class="auth-head">
-                <h1 class="auth-title">ساخت حساب کاربری</h1>
-                <p class="auth-sub">چند فیلد کوتاه تا اولین کلاس فاصله دارید.</p>
-            </header>
+            <div class="field">
+                <label for="{{ form.email.id_for_label }}">ایمیل</label>
+                {{ form.email }}
+                {% if form.email.errors %}<p class="field-error">{{ form.email.errors.0 }}</p>{% endif %}
+            </div>
 
-            <form method="post" novalidate class="auth-form">
-                {% csrf_token %}
-                {% if form.non_field_errors %}
-                    <div class="alert alert-error" role="alert">{{ form.non_field_errors.0 }}</div>
-                {% endif %}
-
-                <div class="field-grid">
-                    <div class="field">
-                        <label for="{{ form.username.id_for_label }}">نام کاربری</label>
-                        <div class="input-wrap">
-                            <svg class="input-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-user"/></svg>
-                            {{ form.username }}
-                        </div>
-                        {% if form.username.errors %}<p class="field-error">{{ form.username.errors.0 }}</p>{% endif %}
-                    </div>
-                    <div class="field">
-                        <label for="{{ form.email.id_for_label }}">ایمیل</label>
-                        <div class="input-wrap">
-                            <svg class="input-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-mail"/></svg>
-                            {{ form.email }}
-                        </div>
-                        {% if form.email.errors %}<p class="field-error">{{ form.email.errors.0 }}</p>{% endif %}
-                    </div>
-                    <div class="field">
-                        <label for="{{ form.first_name.id_for_label }}">نام</label>
-                        {{ form.first_name }}
-                        {% if form.first_name.errors %}<p class="field-error">{{ form.first_name.errors.0 }}</p>{% endif %}
-                    </div>
-                    <div class="field">
-                        <label for="{{ form.last_name.id_for_label }}">نام خانوادگی</label>
-                        {{ form.last_name }}
-                        {% if form.last_name.errors %}<p class="field-error">{{ form.last_name.errors.0 }}</p>{% endif %}
-                    </div>
-                </div>
-
+            <div class="auth-row">
                 <div class="field">
-                    <div class="label-row">
-                        <label for="{{ form.password1.id_for_label }}">رمز عبور</label>
-                        <span class="label-hint">حداقل ۸ نویسه</span>
-                    </div>
-                    <div class="input-wrap">
-                        <svg class="input-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-lock"/></svg>
-                        {{ form.password1 }}
-                        <button type="button" class="input-action" data-toggle-password aria-label="نمایش رمز عبور" aria-pressed="false">
-                            <svg class="icon-eye" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.4 12S6 5.6 12 5.6 21.6 12 21.6 12 18 18.4 12 18.4 2.4 12 2.4 12z"/><circle cx="12" cy="12" r="3.1"/></svg>
-                            <svg class="icon-eye-off" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.4 12S6 5.6 12 5.6c1.5 0 2.9.4 4.1 1M21.6 12S18 18.4 12 18.4c-1.5 0-2.9-.4-4.1-1"/><path d="M4 4l16 16"/></svg>
-                        </button>
-                    </div>
-                    <div class="pw-meter" data-pw-meter aria-hidden="true"><span></span><span></span><span></span><span></span></div>
-                    {% if form.password1.errors %}<p class="field-error">{{ form.password1.errors.0 }}</p>{% endif %}
+                    <label for="{{ form.first_name.id_for_label }}">نام</label>
+                    {{ form.first_name }}
+                    {% if form.first_name.errors %}<p class="field-error">{{ form.first_name.errors.0 }}</p>{% endif %}
                 </div>
-
                 <div class="field">
-                    <label for="{{ form.password2.id_for_label }}">تکرار رمز عبور</label>
-                    <div class="input-wrap">
-                        <svg class="input-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-lock"/></svg>
-                        {{ form.password2 }}
-                    </div>
-                    {% if form.password2.errors %}<p class="field-error">{{ form.password2.errors.0 }}</p>{% endif %}
+                    <label for="{{ form.last_name.id_for_label }}">نام خانوادگی</label>
+                    {{ form.last_name }}
+                    {% if form.last_name.errors %}<p class="field-error">{{ form.last_name.errors.0 }}</p>{% endif %}
                 </div>
+            </div>
 
-                <button type="submit" class="btn btn-primary btn-lg btn-block">ساخت حساب</button>
-            </form>
+            <div class="field">
+                <div class="label-row">
+                    <label for="{{ form.password1.id_for_label }}">رمز عبور</label>
+                    <span class="label-hint">حداقل ۸ نویسه</span>
+                </div>
+                <div class="auth-pass">
+                    {{ form.password1 }}
+                    <button type="button" class="input-action" data-toggle-password aria-label="نمایش رمز عبور" aria-pressed="false">
+                        <svg class="icon-eye" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.4 12S6 5.6 12 5.6 21.6 12 21.6 12 18 18.4 12 18.4 2.4 12 2.4 12z"/><circle cx="12" cy="12" r="3.1"/></svg>
+                        <svg class="icon-eye-off" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.4 12S6 5.6 12 5.6c1.5 0 2.9.4 4.1 1M21.6 12S18 18.4 12 18.4c-1.5 0-2.9-.4-4.1-1"/><path d="M4 4l16 16"/></svg>
+                    </button>
+                </div>
+                <div class="auth-meter" data-pw-meter aria-hidden="true"><span></span></div>
+                {% if form.password1.errors %}<p class="field-error">{{ form.password1.errors.0 }}</p>{% endif %}
+            </div>
 
-            <div class="auth-divider"><span>حساب دارید؟</span></div>
-            <a class="btn btn-ghost btn-block" href="{% url 'accounts:login' %}">ورود به حساب</a>
-        </div>
-    </section>
-</div>
+            <div class="field">
+                <label for="{{ form.password2.id_for_label }}">تکرار رمز عبور</label>
+                {{ form.password2 }}
+                {% if form.password2.errors %}<p class="field-error">{{ form.password2.errors.0 }}</p>{% endif %}
+            </div>
 
-<svg width="0" height="0" style="position:absolute" aria-hidden="true">
-    <defs>
-        <symbol id="r-bolt" viewBox="0 0 24 24"><path d="M13 2.5 4.5 13.5H11l-1 8 8.5-11H12Z"/></symbol>
-        <symbol id="r-users" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7.5" r="3.6"/><path d="M22 21v-2a4 4 0 0 0-3-3.9"/><path d="M16.5 4.2a3.6 3.6 0 0 1 0 6.6"/></symbol>
-        <symbol id="r-screen" viewBox="0 0 24 24"><rect x="2.6" y="4" width="18.8" height="12.4" rx="2.2"/><path d="M8.4 20.4h7.2M12 16.4v4"/></symbol>
-        <symbol id="r-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.6"/><path d="M4.8 20.4a7.2 7.2 0 0 1 14.4 0"/></symbol>
-        <symbol id="r-mail" viewBox="0 0 24 24"><rect x="2.8" y="5" width="18.4" height="14" rx="2.6"/><path d="m3.6 7 8.4 6 8.4-6"/></symbol>
-        <symbol id="r-lock" viewBox="0 0 24 24"><rect x="4" y="10.5" width="16" height="10.5" rx="2.4"/><path d="M8 10.5V7.8a4 4 0 0 1 8 0v2.7"/></symbol>
-    </defs>
-</svg>
+            <button type="submit" class="btn btn-primary btn-lg btn-block">ساخت حساب</button>
+        </form>
+
+        <p class="auth-switch">حساب دارید؟ <a href="{% url 'accounts:login' %}">ورود</a></p>
+    </div>
+
+    <p class="auth-note">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="10.5" width="16" height="10.5" rx="2.4"/><path d="M8 10.5V7.8a4 4 0 0 1 8 0v2.7"/></svg>
+        رمز شما رمزنگاری‌شده ذخیره می‌شود؛ هیچ‌وقت به کسی نمایش داده نمی‌شود.
+    </p>
+</section>
 {% endblock %}
 
 {% block extra_js %}
@@ -124,7 +80,7 @@
 (function () {
     document.querySelectorAll('[data-toggle-password]').forEach(function (btn) {
         btn.addEventListener('click', function () {
-            var input = btn.closest('.input-wrap').querySelector('input');
+            var input = btn.closest('.auth-pass').querySelector('input');
             if (!input) return;
             var reveal = input.type === 'password';
             input.type = reveal ? 'text' : 'password';
@@ -133,21 +89,22 @@
         });
     });
 
-    // Lightweight strength meter — feedback only, Django still validates.
+    // One thin line of feedback. Django's validators still decide; this only
+    // tells the author whether they are getting closer.
     var pw = document.getElementById('id_password1');
     var meter = document.querySelector('[data-pw-meter]');
     if (pw && meter) {
-        var bars = meter.querySelectorAll('span');
+        var bar = meter.querySelector('span');
         pw.addEventListener('input', function () {
             var v = pw.value || '';
             var score = 0;
             if (v.length >= 8) score++;
+            if (v.length >= 12) score++;
             if (/[A-Z]/.test(v) && /[a-z]/.test(v)) score++;
-            if (/[0-9]/.test(v)) score++;
-            if (/[^A-Za-z0-9]/.test(v)) score++;
+            if (/[0-9]/.test(v) && /[^A-Za-z0-9]/.test(v)) score++;
             if (!v) score = 0;
-            meter.dataset.score = String(score);
-            bars.forEach(function (bar, i) { bar.classList.toggle('on', i < score); });
+            meter.dataset.strength = String(score);
+            bar.style.setProperty('--pw', (score * 25) + '%');
         });
     }
 })();

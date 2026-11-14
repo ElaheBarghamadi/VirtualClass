@@ -543,16 +543,6 @@ body.is-home .scroll-progress {
 /* ==========================================================================
    Auth
    ========================================================================== */
-.auth-card {
-    max-width: 460px; margin: 3rem auto;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    box-shadow: var(--shadow);
-    padding: 2.2rem;
-}
-.auth-title { text-align: center; margin-bottom: 1.35rem; }
-.auth-alt { text-align: center; margin-top: 1.4rem; font-size: .9rem; color: var(--muted); }
 
 /* ==========================================================================
    Lobby
@@ -816,7 +806,6 @@ body.is-home .scroll-progress {
     .switch-row { min-height: 44px; padding: .7rem 0; }
     .switch-row input { width: 20px; height: 20px; }
 
-    .auth-card { padding: 1.4rem 1.1rem; margin: 1.5rem auto; }
     .status-page { margin: 1.75rem auto; padding-inline: .5rem; }
     .lobby-wrapper { padding: 1.25rem 0; }
     .hero { padding: 2.5rem 0 1.75rem; }
@@ -1426,112 +1415,120 @@ html.js-anim body.is-home .faq-item[open] p {
 }
 
 /* ==========================================================================
-   Auth — split shell (brand panel + form card) for login & registration
+   Auth — one calm column (login, registration, password reset)
+
+   The previous layout was a marketing panel next to a form: gradient, orbs,
+   three feature bullets and a quote.  On a page whose only job is "type two
+   things and press enter", that competes with the form.  What is left is one
+   title, one quiet line of help, the fields and the one primary action —
+   everything else is a hairline border and whitespace.  The site header already
+   carries the brand, so the card does not repeat it.
    ========================================================================== */
-.auth-shell {
-    display: grid; grid-template-columns: 1.02fr 1fr;
-    gap: 1.2rem; align-items: stretch;
-    margin: 2.25rem 0 2.75rem;
+.auth-page {
+    min-height: min(68vh, 640px);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 1.05rem;
+    padding: clamp(1.6rem, 5vw, 3.2rem) 0 clamp(2rem, 6vw, 3.4rem);
 }
-.auth-aside {
-    position: relative; overflow: hidden;
-    display: flex; flex-direction: column; justify-content: center;
-    padding: 2.6rem 2.1rem; border-radius: var(--radius-lg);
-    color: #fff; box-shadow: var(--shadow-lg);
-    background: linear-gradient(152deg, #4f46e5 0%, #7c3aed 46%, #0ea5e9 118%);
+.auth-box {
+    width: min(25rem, 100%);
+    padding: clamp(1.5rem, 4.5vw, 2.1rem);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-xs);
 }
-.auth-aside--alt { background: linear-gradient(152deg, #4338ca 0%, #6d28d9 42%, #db2777 128%); }
-.auth-orb { position: absolute; border-radius: 50%; filter: blur(46px); pointer-events: none; }
-.auth-orb-a { width: 260px; height: 260px; background: #22d3ee; opacity: .5; top: -80px; inset-inline-start: -70px; }
-.auth-orb-b { width: 300px; height: 300px; background: #f472b6; opacity: .38; bottom: -130px; inset-inline-end: -90px; }
-.auth-aside-inner { position: relative; z-index: 1; display: grid; gap: .85rem; max-width: 30rem; }
-.auth-badge {
-    justify-self: start; font-size: .72rem; font-weight: 700; color: #fff;
-    background: rgba(255, 255, 255, .18); border: 1px solid rgba(255, 255, 255, .3);
-    padding: .24rem .7rem; border-radius: var(--radius-pill);
-    -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
-}
-.auth-aside h2 { margin: 0; font-size: clamp(1.28rem, 2.3vw, 1.7rem); font-weight: 800; line-height: 1.45; color: #fff; }
-.auth-aside p { margin: 0; font-size: .9rem; line-height: 1.95; color: rgba(255, 255, 255, .85); }
-.auth-points { list-style: none; margin: .3rem 0 0; padding: 0; display: grid; gap: .6rem; }
-.auth-points li { display: flex; align-items: center; gap: .6rem; font-size: .86rem; font-weight: 550; color: rgba(255, 255, 255, .95); }
-.auth-point-icon {
-    width: 28px; height: 28px; flex: none; border-radius: 9px;
-    display: inline-flex; align-items: center; justify-content: center;
-    background: rgba(255, 255, 255, .16);
-}
-.auth-point-icon svg { width: 15px; height: 15px; fill: none; stroke: #fff; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
-.auth-quote {
-    margin-top: .5rem; font-size: .82rem; line-height: 1.85;
-    color: rgba(255, 255, 255, .88);
-    background: rgba(255, 255, 255, .12); border: 1px solid rgba(255, 255, 255, .2);
-    border-radius: var(--radius); padding: .8rem 1rem;
-}
-.auth-quote-mark { font-size: 1.5rem; line-height: 0; vertical-align: -.3em; margin-inline-end: .25rem; opacity: .7; }
 
-.auth-panel { display: flex; min-width: 0; }
-.auth-shell .auth-card {
-    width: 100%; max-width: none; margin: 0;
-    display: flex; flex-direction: column; justify-content: center;
-    padding: 2rem 1.9rem; border-radius: var(--radius-lg);
-}
-.auth-head { margin-bottom: 1.15rem; }
-.auth-shell .auth-title { text-align: start; margin: 0 0 .3rem; font-size: 1.32rem; }
-.auth-sub { margin: 0; color: var(--muted); font-size: .87rem; }
+.auth-head { display: grid; gap: .25rem; margin-bottom: 1.3rem; }
+.auth-title { margin: 0; font-size: 1.36rem; font-weight: 750; letter-spacing: -.01em; }
+.auth-sub { margin: 0; color: var(--muted); font-size: .85rem; line-height: 1.8; }
 
-.label-row { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem; }
-.label-link, .label-hint { font-size: .77rem; font-weight: 600; color: var(--muted); }
-.label-link { color: var(--primary); text-decoration: none; }
-.label-link:hover { text-decoration: underline; }
+/* Fields sit on the page, not in boxes: no visible border until focus. */
+.auth-form .field { margin-bottom: .85rem; }
+.auth-form .field label {
+    display: block;
+    font-size: .78rem; font-weight: 600; color: var(--muted);
+    margin: 0 0 .3rem;
+}
+/* "Forgot?" sits on the label line without pushing the input down. */
+.auth-form .label-row { align-items: center; margin-bottom: .3rem; }
+.auth-form .label-row label { margin: 0; }
+.auth-form .field input {
+    min-height: 46px;
+    padding: .62rem .85rem;
+    background: var(--surface-2);
+    border-color: transparent;
+    border-radius: var(--radius-sm);
+}
+.auth-form .field input:hover:not(:focus) { background: var(--surface-3); }
+.auth-form .field input:focus {
+    background: var(--surface);
+    border-color: var(--primary);
+    box-shadow: var(--focus-ring);
+}
+.auth-form .btn-block {
+    margin-top: .55rem;
+    min-height: 46px;
+    border-radius: var(--radius-sm);
+}
+/* One flat brand fill. The glow behind the global primary button reads as
+   decoration at this size, and the sign-in action should be the calmest thing
+   on the page while still being the only obvious thing to press. */
+.auth-form .btn-primary { background: var(--primary); box-shadow: none; }
+.auth-form .btn-primary:hover:not(:disabled) { background: var(--primary-hover); filter: none; }
+.auth-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0 .7rem; }
 
-.input-wrap { position: relative; display: flex; align-items: center; }
-.input-wrap .input-icon {
-    position: absolute; inset-inline-start: .78rem; width: 17px; height: 17px;
-    fill: none; stroke: var(--muted); stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round;
-    pointer-events: none; transition: stroke var(--speed) var(--ease);
-}
-.field .input-wrap input { padding-inline-start: 2.5rem; }
-.input-wrap:has(.input-action) input { padding-inline-end: 2.9rem; }
-.input-wrap:focus-within .input-icon { stroke: var(--primary); }
-.input-action {
-    position: absolute; inset-inline-end: .4rem;
-    width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center;
-    border: 0; border-radius: 8px; background: transparent; color: var(--muted); cursor: pointer;
-    transition: background var(--speed) var(--ease), color var(--speed) var(--ease);
-}
-.input-action:hover { background: var(--surface-2); color: var(--text); }
-.input-action svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.input-action .icon-eye-off { display: none; }
-.input-action.is-on .icon-eye { display: none; }
-.input-action.is-on .icon-eye-off { display: block; }
+/* Password reveal: the only thing inside the field, so it stays quiet. */
+.auth-pass { position: relative; display: flex; align-items: center; }
+.auth-pass input { padding-inline-end: 2.85rem; width: 100%; }
+.auth-pass .input-action { inset-inline-end: .35rem; }
 
-.pw-meter { display: flex; gap: .3rem; margin-top: .5rem; }
-.pw-meter span { flex: 1; height: 4px; border-radius: 2px; background: var(--border); transition: background var(--speed) var(--ease); }
-.pw-meter[data-score="1"] span.on { background: var(--danger); }
-.pw-meter[data-score="2"] span.on { background: #f59e0b; }
-.pw-meter[data-score="3"] span.on { background: var(--success); }
-.pw-meter[data-score="4"] span.on { background: #0ea5e9; }
+/* One thin line of strength feedback, no words. */
+.auth-meter {
+    height: 3px; margin-top: .5rem;
+    border-radius: var(--radius-pill);
+    background: var(--surface-3);
+    overflow: hidden;
+}
+.auth-meter span {
+    display: block; height: 100%; width: var(--pw, 0%);
+    border-radius: inherit;
+    background: var(--primary);
+    transition: width .22s var(--ease), background .22s var(--ease);
+}
+.auth-meter[data-strength="1"] span { background: var(--danger); }
+.auth-meter[data-strength="2"] span { background: var(--warning); }
+.auth-meter[data-strength="3"] span { background: var(--primary); }
+.auth-meter[data-strength="4"] span { background: var(--success); }
 
-.auth-divider {
-    display: flex; align-items: center; gap: .7rem;
-    margin: 1.1rem 0; color: var(--muted); font-size: .77rem;
+.auth-error {
+    margin: 0 0 1rem; padding: .55rem .75rem;
+    border-radius: var(--radius-sm);
+    background: var(--danger-soft); color: var(--danger);
+    font-size: .82rem; line-height: 1.75;
 }
-.auth-divider::before, .auth-divider::after { content: ""; flex: 1; height: 1px; background: var(--border); }
-.auth-foot {
-    display: flex; align-items: center; justify-content: center; gap: .4rem;
-    margin: 1rem 0 0; font-size: .74rem; color: var(--muted); text-align: center;
+.auth-switch {
+    margin: 1.15rem 0 0; padding-top: 1.05rem;
+    border-top: 1px solid var(--border);
+    text-align: center; font-size: .84rem; color: var(--muted);
 }
-.auth-foot svg { width: 14px; height: 14px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.auth-switch a { color: var(--primary); font-weight: 650; text-decoration: none; }
+.auth-switch a:hover { text-decoration: underline; }
+.auth-note {
+    display: flex; align-items: center; justify-content: center; gap: .35rem;
+    margin: 0; max-width: 24rem;
+    font-size: .73rem; color: var(--muted); text-align: center; line-height: 1.7;
+}
+.auth-note svg {
+    width: 13px; height: 13px; flex: none;
+    fill: none; stroke: currentColor; stroke-width: 2;
+    stroke-linecap: round; stroke-linejoin: round;
+}
 
-@media (max-width: 900px) {
-    .auth-shell { grid-template-columns: 1fr; margin: 1.4rem 0 2rem; }
-    .auth-aside { padding: 1.5rem 1.35rem; }
-    .auth-aside h2 { font-size: 1.15rem; }
-    .auth-points, .auth-quote { display: none; }
-    .auth-shell .auth-card { padding: 1.5rem 1.25rem; }
-}
-@media (max-width: 480px) {
-    .auth-shell .auth-card { padding: 1.3rem 1.05rem; }
+@media (max-width: 520px) {
+    .auth-page { min-height: 0; justify-content: flex-start; padding-top: 1.5rem; gap: .9rem; }
+    .auth-box { padding: 1.35rem 1.15rem; border-radius: var(--radius-md); }
+    .auth-row { grid-template-columns: 1fr; gap: 0; }
 }
 
 /* ---------------------------------------------------------------- */
@@ -2773,24 +2770,11 @@ html.nav-lock, body.nav-lock { overflow: hidden; overscroll-behavior: none; }
 
 /* ==========================================================================
    Auth pages — phone pass
-   The split shell (brand panel + form card) is great on a laptop and was
-   competing with the form on a phone: the panel's padding, the panel's copy
-   and 13px inputs pushed the submit button below the fold and let iOS zoom.
+
+   One column, one action: the submit button must stay above the keyboard, and
+   inputs are 16px so iOS Safari does not zoom the layout on every tap.
    ========================================================================== */
-@media (min-width: 901px) {
-    .auth-panel { justify-content: center; }
-    .auth-shell .auth-card { max-width: 460px; margin-inline: auto; }
-}
-
 @media (max-width: 900px) {
-    .auth-shell { margin: .9rem 0 1.75rem; gap: .7rem; }
-    .auth-aside { padding: 1.15rem 1.2rem; border-radius: var(--radius-md); }
-    .auth-aside h2 { font-size: 1.05rem; line-height: 1.55; }
-    .auth-aside p { font-size: .84rem; line-height: 1.85; }
-    .auth-badge { font-size: .68rem; }
-    .auth-shell .auth-card { padding: 1.4rem 1.15rem; border-radius: 20px; }
-    .auth-shell .auth-title { font-size: 1.22rem; }
-
     /* 16px is the smallest size iOS Safari will focus without zooming the
        whole layout — an input at 0.95rem made the page jump on every tap. */
     .field input, .field select, .field textarea { font-size: 1rem; }
@@ -2798,9 +2782,6 @@ html.nav-lock, body.nav-lock { overflow: hidden; overscroll-behavior: none; }
 }
 
 @media (max-width: 560px) {
-    .auth-aside { padding: 1rem 1.05rem; }
-    .auth-aside p { display: none; }
-    .auth-shell .auth-card { padding: 1.25rem 1rem; }
     .auth-form .btn-lg { min-height: 50px; }
 }
 

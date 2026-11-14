@@ -142,36 +142,26 @@ else:
     # would make sessions and CSRF tokens forgeable by anyone reading the repo.
     SECRET_KEY, SECRET_KEY_SOURCE = _load_or_create_secret_key()
 
-# Accept the address the browser actually types, without being told which one
-# it is.  A hosting platform usually knows its own domain (PUBLISHED_*), so when
-# it does the list stays a concrete one; when nothing is known the app falls
-# back to accepting any Host header (``HOSTS_AUTO``) instead of refusing to boot
-# or answering ``400 Bad Request`` to every visitor.  ``deploy.W012`` reports
-# that fallback so it cannot be mistaken for a finished configuration.
+# Accept the address the browser actually types, without being told which one it
+# is.  ``*`` is a supported answer in every mode — including production, where a
+# test server is reached by an IP or a platform-generated hostname that nobody
+# wants to type twice.  An explicit list narrows it; a platform-published
+# address (PUBLISHED_*) narrows it automatically.  ``deploy.W012`` reports the
+# open case at boot so it is visible in the log, not a silent surprise.
 _configured_hosts = env_list("ALLOWED_HOSTS")
-
-if not DEBUG and "*" in _configured_hosts:
-    # An explicitly typed wildcard in production is still a refusal: Host-header
-    # validation is what keeps password-reset links and cache keys bound to *our*
-    # domain, and nobody means it literally when they can name the domain.
-    raise ImproperlyConfigured(
-        "ALLOWED_HOSTS=* is only allowed while DEBUG=true. With DEBUG=false "
-        "list the real host names (e.g. ALLOWED_HOSTS=class.example.com) — or "
-        "leave ALLOWED_HOSTS unset and the app accepts whatever host it is "
-        "reached on."
-    )
 
 if _configured_hosts:
     ALLOWED_HOSTS = _configured_hosts
-    HOSTS_AUTO = False
 elif PUBLISHED_HOST:
     # The platform told us its domain: name it, and keep the loopback names so a
     # health probe or an SSH tunnel still answers.
     ALLOWED_HOSTS = [PUBLISHED_HOST, "localhost", "127.0.0.1", "[::1]"]
-    HOSTS_AUTO = False
 else:
     ALLOWED_HOSTS = ["*"]
-    HOSTS_AUTO = True
+
+# True whenever Host-header validation is effectively off (``*``), whether that
+# came from the default or from an explicit ALLOWED_HOSTS=*.
+HOSTS_AUTO = "*" in ALLOWED_HOSTS
 
 if PUBLISHED_HOST and "*" not in ALLOWED_HOSTS and PUBLISHED_HOST not in ALLOWED_HOSTS:
     ALLOWED_HOSTS = [*ALLOWED_HOSTS, PUBLISHED_HOST]

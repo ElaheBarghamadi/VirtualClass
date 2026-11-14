@@ -41,7 +41,7 @@ daphne -b 0.0.0.0 -p 8000 --proxy-headers config.asgi:application
 | کاری که قبلاً باید می‌کردید | حالا چه می‌شود |
 |---|---|
 | `SECRET_KEY` | یک کلید تصادفی ساخته و در `private_media/.secret_key` (مجوز `0600`، gitignored) ذخیره می‌شود؛ با ری‌استارت عوض نمی‌شود، پس ورودها نمی‌پرند. **در کانتینر** `PRIVATE_MEDIA_ROOT` را روی volume بگذارید تا کلید با هر دیپلوی عوض نشود (کلید داخل همان پوشه است). اگر پوشه فقط‌خواندنی باشد، کلید در حافظه ساخته می‌شود و فقط با ری‌استارت سشن‌ها تمام می‌شوند — اپ بالا می‌آید |
-| `ALLOWED_HOSTS` | تا وقتی دامنه را نگفته‌اید، هر Host پذیرفته می‌شود (هاستِ هر پنلی جواب می‌دهد). اگر پلتفرم دامنه را خودش اعلام کند (`PUBLIC_URL`/`APP_URL`/`RENDER_EXTERNAL_URL`/…) یا شما `ALLOWED_HOSTS` را بدهید، همان لحظه به فهرست مشخص تبدیل می‌شود |
+| `ALLOWED_HOSTS` | `*` است: هر Host پذیرفته می‌شود، پس هاستِ هر پنلی، هر IP و هر زیردامنه‌ای جواب می‌دهد. اگر پلتفرم دامنه را خودش اعلام کند (`PUBLIC_URL`/`APP_URL`/`RENDER_EXTERNAL_URL`/…) یا خودتان فهرست بدهید، همان لحظه به همان فهرست تبدیل می‌شود |
 | `CSRF_TRUSTED_ORIGINS` | لازم نیست: هدر `X-Forwarded-Proto` به‌صورت پیش‌فرض معتبر است، پس جنگو می‌فهمد پشت HTTPS است و بررسی same-origin درست انجام می‌شود |
 | `DEBUG=false` | اگر هم بگذارید هیچ‌چیز نمی‌شکند: ریدایرکت HTTPS، کوکی `Secure` و HSTS تا وقتی TLS اعلام نشده **خاموش** می‌مانند، تا ورود روی `http://سرور:8000` کار کند |
 | `DATABASE_URL` | اگر پلتفرم `DATABASE_URL`/`POSTGRES_URL`/`DATABASE_PRIVATE_URL` یا `PGHOST`+`PGDATABASE` را تزریق کند، همان استفاده می‌شود؛ وگرنه SQLite محلی |
@@ -90,11 +90,10 @@ HTTPS_IN_USE=true                          # کوکی Secure + ریدایرکت 
 | `deploy.W013` | HTTPS اعلام نشده → کوکی بدون `Secure`، بدون HSTS و بدون ریدایرکت | `HTTPS_IN_USE=true` روی دامنهٔ TLS‌دار |
 | `deploy.W003` | SQLite با `DEBUG=false` | PostgreSQL، یا `ALLOW_SQLITE_IN_PRODUCTION=true` روی هاست دائمی |
 
-**دامنهٔ پلتفرمی (زیردامنه‌های متغیر):** اگر `ALLOWED_HOSTS` را خالی بگذارید، اپ هر Host
-را می‌پذیرد و `deploy.W012` این را در لاگ می‌گوید؛ برای بستنش `ALLOWED_HOSTS=دامنه` را
-بدهید، یا از الگوی امن جنگو استفاده کنید: `ALLOWED_HOSTS=.weblines.app` (هر زیردامنه) با
-`CSRF_TRUSTED_ORIGINS=https://*.weblines.app`. یک `*` **نوشته‌شده** در `ALLOWED_HOSTS`
-با `DEBUG=false` همچنان عمداً رد می‌شود (چون در آن حالت دامنه را می‌دانید).
+**دامنهٔ پلتفرمی (زیردامنه‌های متغیر):** `ALLOWED_HOSTS=*` در هر حالتی مجاز است و
+`deploy.W012` فقط در لاگ می‌گوید که اعتبارسنجی Host باز است. اگر می‌خواهید هم باز نباشد و
+هم زیردامنه‌ها کار کنند: `ALLOWED_HOSTS=.weblines.app` (هر زیردامنه) با
+`CSRF_TRUSTED_ORIGINS=https://*.weblines.app`.
 
 **پروب سلامت:** در پنل هاست، Health check را روی `/healthz` بگذارید (فقط «پروسه بالا
 است») یا `/healthz?db=1` (دیتابیس هم جواب می‌دهد و در غیر این صورت `503`). این مسیر از

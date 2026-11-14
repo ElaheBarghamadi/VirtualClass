@@ -1101,10 +1101,11 @@ HTTPS_IN_USE=true                    # اگر دامنه TLS دارد (پشت پ
 `deploy.W004` (هاست عمومی در `ALLOWED_HOSTS` نیست → همه `400`)، `deploy.W005`
 (HTTPS هست ولی `CSRF_TRUSTED_ORIGINS` خالی و هدر پروکسی هم نیست → فرم‌ها `403`)، `deploy.W006` (پوشهٔ آپلود نیست/نوشتنی نیست)،
 `deploy.W007` (ریدایرکت HTTPS بدون هدر پروکسی → حلقه). دو کد تازه هم مخصوص همین حالت
-«بدون تنظیم» است: `deploy.W012` (هاست باز) و `deploy.W013` (HTTPS اعلام نشده). برای
-زیردامنه‌های پلتفرمی، نوشتن `*` در `ALLOWED_HOSTS` با `DEBUG=false` عمداً رد می‌شود اما
-`ALLOWED_HOSTS=.weblines.app` و `CSRF_TRUSTED_ORIGINS=https://*.weblines.app` کار می‌کنند
-(و اگر `ALLOWED_HOSTS` را خالی بگذارید، اپ همه را می‌پذیرد و `deploy.W012` را گزارش می‌کند).
+«بدون تنظیم» است: `deploy.W012` (هاست باز) و `deploy.W013` (HTTPS اعلام نشده).
+`ALLOWED_HOSTS=*` در **هر حالتی** مجاز است — سرور تست با IP یا نام تولیدشدهٔ پلتفرم باز
+می‌شود و نام دامنه نباید شرط بالا آمدن باشد. برای بستنش یا فهرست بدهید
+(`ALLOWED_HOSTS=class.example.com` / `PUBLIC_URL`) یا برای زیردامنه‌ها
+`ALLOWED_HOSTS=.weblines.app` بگذارید.
 
 **پروب سلامت** برای health check هاست: `GET /healthz` (پروسه بالاست) و `GET /healthz?db=1`
 (دیتابیس هم جواب می‌دهد، وگرنه `503`). بدون احراز هویت، بدون session، بدون کش، و از

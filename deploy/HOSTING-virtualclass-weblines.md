@@ -70,7 +70,8 @@ python -c "import secrets; print(secrets.token_urlsafe(48))"
 
 > اگر روزی زیردامنهٔ دیگری هم اضافه کردید: `ALLOWED_HOSTS=virtualclass.weblines.ir,.weblines.ir`
 > و `CSRF_TRUSTED_ORIGINS=https://virtualclass.weblines.ir,https://*.weblines.ir`.
-> `*` تنها (بدون نقطه) با `DEBUG=false` عمداً رد می‌شود.
+> `ALLOWED_HOSTS=*` هم در هر حالتی مجاز است (حتی با `DEBUG=false`)؛ فقط
+> `deploy.W012` در لاگ یادآوری می‌کند که اعتبارسنجی Host باز است.
 
 ### ب) پس از ساختن سرویس‌ها (بخش ۳) این‌ها را هم اضافه کنید
 
