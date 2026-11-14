@@ -338,6 +338,7 @@ WEBRTC_ICE_SERVERS=[{"urls":["turn:openrelay.metered.ca:80","turn:openrelay.mete
 | چت/تخته بین دو تب یا دو نفر همگام نیست | `REDIS_URL` خالی → channel layer درون‌پروسه | سرویس Redis + `REDIS_URL` |
 | `/healthz` از داخل کانتینر ۲۰۰ است ولی پنل می‌گوید unhealthy | پروب با IP صدا می‌زند | کد فعلی `/healthz` را از بررسی Host مستثنی می‌کند؛ مسیر Health check را روی `/healthz` بگذارید |
 | دوربین/میکروفون بی‌صدا است | `MEDIA_SERVER_URL` خالی و `MESH_ENABLED=0` | بخش ۵ |
+| `deploy.W012` / `deploy.W013` در لاگ | `ALLOWED_HOSTS` و HTTPS اعلام نشده — یعنی دارید در حالت «بدون تنظیم» اجرا می‌کنید | اگر فقط برای تست است، همین درست است؛ برای دامنهٔ واقعی `PUBLIC_URL=https://virtualclass.weblines.ir` و `HTTPS_IN_USE=true` |
 | `502` | پورت/Start command | Port `8000`، Start command خالی |
 | خط `deploy_check:` در لاگ نیست | entrypoint اجرا نشده | Start command = `/usr/local/bin/entrypoint` (یا Build روی Dockerfile) |
 
@@ -345,7 +346,7 @@ WEBRTC_ICE_SERVERS=[{"urls":["turn:openrelay.metered.ca:80","turn:openrelay.mete
 
 ## ۷) چک‌لیست تحویل
 
-- [ ] `DEBUG=false` و `SECRET_KEY` واقعی (۶۴ کاراکتر)
+- [ ] `DEBUG=false` (و اگر خواستید `SECRET_KEY`؛ بدونش هم اپ کلید خودش را می‌سازد و نگه می‌دارد)
 - [ ] `ALLOWED_HOSTS=virtualclass.weblines.ir` و `CSRF_TRUSTED_ORIGINS=https://virtualclass.weblines.ir`
 - [ ] `TRUST_X_FORWARDED_PROTO=true`
 - [ ] PostgreSQL لینک‌شده و `deploy_check` → `database: postgresql`
