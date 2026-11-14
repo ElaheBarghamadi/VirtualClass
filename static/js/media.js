@@ -68,6 +68,11 @@ class LivekitMedia {
         this.permissions = opts.permissions;
         this.onStateChange = opts.onStateChange || (() => {});
         this.onQualityChange = opts.onQualityChange || (() => {});
+        // LiveKit keeps its own stats behind the SFU; the mesh measures every
+        // peer locally.  The interface is the same so the panel is engine-agnostic.
+        this.onNetStats = opts.onNetStats || (() => {});
+        this.netStats = new Map();
+        this.ownStats = null;
         const saved = localStorage.getItem(`room_layout_${opts.roomCode}`);
         if (saved && ['grid', 'speaker', 'focus', 'presentation'].includes(saved)) this.layout = saved;
         this.enabled = true;
@@ -759,6 +764,10 @@ class MediaFacade {
 
     get quality() { return this.impl ? this.impl.quality : 'unknown'; }
     get layout() { return this.impl ? this.impl.layout : 'grid'; }
+    /** Per-peer measured network rows (mesh) or an empty map (SFU). */
+    get netStats() { return (this.impl && this.impl.netStats) || new Map(); }
+    /** Our own aggregated row (worst of all links). */
+    get ownStats() { return (this.impl && this.impl.ownStats) || null; }
 
     async init(opts) {
         if (opts.mediaEnabled && opts.mediaUrl && LivekitClient) {

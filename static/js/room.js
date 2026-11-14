@@ -22,6 +22,9 @@ import { choiceDialog, confirmDialog, infoDialog } from './modal.js';
 import { Recorder } from './recorder.js';
 import { Captions } from './captions.js';
 import { initDeviceTest } from './device-test.js';
+import {
+    QUALITY_LABEL as NET_QUALITY, formatBytes, formatRate, fa, faNum,
+} from './netstats.js';
 
 // Persian digits for anything JS renders that the server also renders
 // (participant counts), so the two never disagree.
@@ -119,6 +122,7 @@ class PresenceClient {
         this.rtt = null;
         // Last media announcement we made, replayed after every reconnect.
         this._lastMedia = null;
+        this.net = new Map();          // identity → measured network row
         this._connectAt = 0;
         // When did this socket last say anything?  A socket can report OPEN
         // long after the network under it died (Wi-Fi switch, sleep), so
@@ -332,6 +336,43 @@ class PresenceClient {
         this.scheduleRender();
     }
 
+    /**
+     * Someone left: keep their row for a moment, dimmed.
+     *
+     * Deleting the row instantly made a departure look like a rendering glitch —
+     * the list jumped and the name was simply gone.  A short, faded stay reads
+     * as «این نفر رفت» and, together with the dimmed name in the transcript,
+     * answers «چه کسی کلاس را ترک کرد؟» without scanning the chat.
+     */
+    /**
+     * Measured network rows for the roster badges.
+     *
+     * Only a change of *state* re-renders; the numbers themselves tick every two
+     * seconds and repainting the whole list on every tick would flicker.
+     */
+    setNet(rows) {
+        const next = new Map();
+        let changed = false;
+        for (const row of rows || []) {
+            if (!row || !row.identity) continue;
+            next.set(row.identity, row);
+            const before = this.net.get(row.identity);
+            if (!before || before.quality !== row.quality) changed = true;
+        }
+        if (!changed && next.size === this.net.size) { this.net = next; return; }
+        this.net = next;
+        this.scheduleRender();
+    }
+
+    fadeOut(identity) {
+        const p = this.participants.get(identity);
+        if (!p) return;
+        this.participants.set(identity, { ...p, left: true });
+        this.scheduleRender();
+        clearTimeout(p._leftTimer);
+        setTimeout(() => { if (this.participants.get(identity)?.left) this.remove(identity); }, 2400);
+    }
+
     /** Coalesce burst updates (join + media_state + …) into one paint. */
     scheduleRender() {
         if (this._renderQueued) return;
@@ -347,7 +388,7 @@ class PresenceClient {
         if (skeleton) skeleton.classList.add('hidden');
 
         const all = Array.from(this.participants.values());
-        const inRoom = all.filter((p) => !p.in_waiting_room);
+        const inRoom = all.filter((p) => !p.in_waiting_room && !p.left);
         const waiting = all.filter((p) => p.in_waiting_room);
 
         // Sort: hands raised first, then role rank, then join time.
@@ -413,12 +454,13 @@ class PresenceClient {
 
     _row(p) {
         const li = document.createElement('li');
-        li.className = 'participant';
+        li.className = p.left ? 'participant is-left' : 'participant';
         li.dataset.identity = String(p.identity);
 
         // One icon per fact.  Both «میکروفون خاموش» and «بی‌صدا شده» used to
         // render the same crossed mic in red, so a muted student showed the
         // icon twice and the row looked broken.  Muted-by-host wins.
+        const net = this.net.get(p.identity) || null;
         const muted = Boolean(p.muted);
         const micOff = !muted && p.mic_on === false;
         const camOff = p.camera_on === false;
@@ -429,6 +471,8 @@ class PresenceClient {
                 <span class="participant-role"></span>
             </span>
             <span class="participant-states" aria-hidden="true">
+                <i class="s-net" data-quality="${net ? net.quality : 'unknown'}" ${net && net.quality !== 'good' ? '' : 'hidden'}
+                   title="کیفیت شبکه: ${net ? NET_QUALITY[net.quality] || '—' : '—'}"><svg class="ic"><use href="#i-signal"/></svg></i>
                 <i class="s-hand ${p.hand_raised ? 'on' : ''}" title="دست بالا"><svg class="ic"><use href="#i-hand"/></svg></i>
                 <i class="s-mic ${micOff ? 'off' : ''}" title="میکروفون">${STATE_ICONS.micOff}</i>
                 <i class="s-muted ${muted ? 'on' : ''}" title="بی‌صدا توسط مدیر">${STATE_ICONS.micOff}</i>
@@ -950,13 +994,16 @@ function handleEvent(data) {
             }
             break;
         case 'user_left':
-            presence.remove(data.participant.identity);
+            presence.fadeOut(data.participant.identity);
             Media.notifyPeerState?.({ identity: data.participant.identity, screen_sharing: false });
             if (permsTargetIdentity === data.participant.identity) refreshPermsDialog(data.participant.identity);
             // Only announce a departure of someone whose arrival was announced:
             // a reconnect burst must not fill the chat with ghost notices.
             if (announcedPresence.delete(data.participant.identity)) {
-                ChatClient.addSystemMessage(`${data.participant.name} کلاس را ترک کرد.`);
+                ChatClient.addSystemMessage(
+                    `${data.participant.name} کلاس را ترک کرد.`,
+                    { name: data.participant.name },
+                );
             }
             break;
         case 'raise_hand':
@@ -2435,6 +2482,146 @@ function initShortcuts() {
 // ---------------------------------------------------------------------------
 // Connection quality pill (real metrics: LiveKit stats + WS RTT)
 // ---------------------------------------------------------------------------
+/**
+ * «وضعیت شبکه» — the one place with real numbers.
+ *
+ * Everything in this panel is measured by *this* browser from the packets it
+ * actually receives, so nobody can improve their own badge by claiming a better
+ * connection. A student whose upload is failing shows up as lost packets, high
+ * jitter and a frozen picture on the teacher's screen.
+ */
+const NetPanel = {
+    el: null,
+    rowsEl: null,
+    footEl: null,
+    toggleEl: null,
+    pillText: null,
+    open: false,
+    snapshot: null,
+    onSnapshot: null,
+
+    init() {
+        this.el = document.getElementById('net-panel');
+        if (!this.el) return;
+        this.rowsEl = document.getElementById('net-rows');
+        this.footEl = document.getElementById('net-foot');
+        this.toggleEl = document.getElementById('net-toggle');
+        this.pillText = document.getElementById('net-pill-text');
+        this.toggleEl?.addEventListener('click', () => this.toggle());
+        document.getElementById('net-close')?.addEventListener('click', () => this.toggle(false));
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && this.open) this.toggle(false);
+        });
+        document.addEventListener('pointerdown', (e) => {
+            if (!this.open) return;
+            if (this.el.contains(e.target) || this.toggleEl?.contains(e.target)) return;
+            this.toggle(false);
+        });
+    },
+
+    toggle(force) {
+        const next = force === undefined ? !this.open : Boolean(force);
+        this.open = next;
+        if (!this.el) return;
+        this.el.hidden = !next;
+        this.toggleEl?.setAttribute('aria-expanded', String(next));
+        if (next) this._paint();
+    },
+
+    render(snapshot) {
+        this.snapshot = snapshot || { self: null, peers: [] };
+        const peers = this.snapshot.peers || [];
+        if (this.pillText) {
+            // The pill only speaks when something is actually wrong: a permanent
+            // «خوب» trains people to ignore it.
+            const weak = peers.filter((p) => p.quality === 'poor').length;
+            const fair = peers.filter((p) => p.quality === 'fair').length;
+            if (weak) {
+                this.pillText.textContent = `${fa(weak)} اتصال ضعیف`;
+                this.toggleEl.dataset.quality = 'poor';
+            } else if (fair) {
+                this.pillText.textContent = 'شبکه: متوسط';
+                this.toggleEl.dataset.quality = 'fair';
+            } else {
+                this.pillText.textContent = 'شبکه';
+                this.toggleEl.dataset.quality = peers.length ? 'good' : 'unknown';
+            }
+        }
+        if (this.onSnapshot) this.onSnapshot(this.snapshot);
+        if (this.open) this._paint();
+    },
+
+    _paint() {
+        if (!this.rowsEl) return;
+        const self = this.snapshot?.self;
+        const peers = (this.snapshot?.peers || []).slice()
+            .sort((a, b) => qualityRank(a.quality) - qualityRank(b.quality));
+
+        this.rowsEl.innerHTML = '';
+        if (!peers.length) {
+            const tr = document.createElement('tr');
+            const td = document.createElement('td');
+            td.colSpan = 5;
+            td.className = 'net-empty';
+            td.textContent = 'هنوز کسی در اتاق نیست. به‌محض ورود نفر بعدی، اعداد همین‌جا می‌آید.';
+            tr.appendChild(td);
+            this.rowsEl.appendChild(tr);
+        }
+        for (const row of peers) this.rowsEl.appendChild(this._row(row));
+        if (self) {
+            this.rowsEl.appendChild(this._row({ ...self, name: 'شما (مجموع)', isSelf: true }));
+        }
+        if (this.footEl) {
+            const parts = [];
+            if (self) {
+                parts.push(`ارسال ${formatRate(self.outKbps)}`);
+                parts.push(`دریافت ${formatRate(self.inKbps)}`);
+                parts.push(`مجموع داده ${formatBytes(self.bytesIn + self.bytesOut)}`);
+                if (self.relayPeers) parts.push(`${fa(self.relayPeers)} مسیر از طریق رله`);
+            } else {
+                parts.push('در حالت سرور رسانه (LiveKit) این اعداد از سمت سرور خوانده می‌شوند.');
+            }
+            this.footEl.textContent = parts.join(' · ');
+        }
+    },
+
+    _row(row) {
+        const tr = document.createElement('tr');
+        tr.className = 'net-row';
+        tr.dataset.quality = row.quality || 'unknown';
+        const name = document.createElement('th');
+        name.scope = 'row';
+        name.className = 'net-name';
+        name.textContent = row.name || '—';
+        if (row.isSelf) name.dataset.self = '1';
+        const rate = document.createElement('td');
+        rate.textContent = formatRate(row.inKbps);
+        const rtt = document.createElement('td');
+        rtt.textContent = row.rttMs == null ? '—' : `${fa(Math.round(row.rttMs))}ms`;
+        const loss = document.createElement('td');
+        loss.textContent = row.lossPct == null ? '—' : `${faNum(row.lossPct)}%`;
+        const state = document.createElement('td');
+        state.className = 'net-state';
+        const badge = document.createElement('span');
+        badge.className = 'net-badge';
+        badge.dataset.quality = row.quality || 'unknown';
+        badge.textContent = NET_QUALITY[row.quality] || '—';
+        state.appendChild(badge);
+        if (row.path === 'relay') {
+            const relay = document.createElement('span');
+            relay.className = 'net-relay';
+            relay.textContent = 'رله';
+            relay.title = 'از سرور واسط رد می‌شود (TURN)';
+            state.appendChild(relay);
+        }
+        tr.append(name, rate, rtt, loss, state);
+        return tr;
+    },
+};
+
+const QUALITY_ORDER = { poor: 0, fair: 1, good: 2, unknown: 3 };
+function qualityRank(q) { return QUALITY_ORDER[q] ?? 3; }
+
 function onQualityChange(quality) {
     const el = document.getElementById('conn-quality');
     if (!el) return;
@@ -3070,6 +3257,12 @@ safe('presentation-return', () => {
     });
 });
 
+// The network panel starts before media so its first snapshot has a home.
+safe('net-panel', () => {
+    NetPanel.init();
+    NetPanel.onSnapshot = (snapshot) => presence.setNet(snapshot.peers || []);
+});
+
 // Media last, and never awaited by the boot path: it opens devices and may be
 // slow (or refused).  The room must never wait on it to become interactive.
 Media.init({
@@ -3084,6 +3277,7 @@ Media.init({
     signal: (payload) => presence.send(payload),
     onStateChange: (state) => presence.send({ action: 'media_state', ...state }),
     onQualityChange,
+    onNetStats: (snapshot) => NetPanel.render(snapshot),
 }).then(() => {
     // re-sync the mesh once media is up (the first snapshot may predate it)
     Media.syncPeers(Array.from(presence.participants.values())

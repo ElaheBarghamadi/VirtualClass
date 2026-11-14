@@ -604,6 +604,188 @@ class NetworkVerdictTests(SimpleTestCase):
         self.assertIn("no TURN relay configured (WEBRTC_ICE_SERVERS)", self.mesh)
 
 
+class MeshPublishingTests(SimpleTestCase):
+    """Mic/camera toggles must not depend on a renegotiation winning a race.
+
+    The old code added tracks with ``pc.addTrack`` when a device came on, which
+    forces a new offer.  If the other side was mid-negotiation, the offer was
+    ignored (the impolite peer) or rejected (the polite peer had no rollback),
+    and the track simply never arrived — «دوربین گاهی کار می‌کند، میکروفون کلاً
+    کار نمی‌کند».  Two concrete changes make that class of bug impossible:
+
+    * the audio and video m-lines are reserved on the peer connection before any
+      device is on, so publishing is only ``replaceTrack`` on an existing sender;
+    * the polite peer rolls its own offer back before accepting theirs.
+    """
+
+    def setUp(self):
+        self.src = read(JS / "mesh.js")
+
+    def test_m_lines_are_reserved_before_any_device_is_on(self):
+        make = rule(self.src, "    _makePc(isScreen)")
+        self.assertIn("pc.addTransceiver('audio', { direction: 'sendrecv' })", make)
+        self.assertIn("pc.addTransceiver('video', { direction: 'sendrecv' })", make)
+        self.assertIn("this._senders.audio", make)
+        self.assertIn("this._senders.video", make)
+
+    def test_publishing_is_replacetrack_on_that_sender(self):
+        publish = rule(self.src, "    publish(stream)")
+        self.assertIn("sender.replaceTrack(track)", publish)
+        self.assertIn("this.mesh._tuneLink(this);", publish)
+        # null track = device off, without tearing the m-line down
+        self.assertIn("const track = wanted.get(kind) || null;", publish)
+        # the old name still works for outside callers
+        self.assertIn("addLocalTracks(stream) {\n        this.publish(stream);", self.src)
+
+    def test_the_polite_peer_rolls_back_instead_of_dropping_the_offer(self):
+        handler = rule(self.src, "    async handleSignal(data)")
+        self.assertIn("pc.setLocalDescription({ type: 'rollback' })", handler)
+        self.assertIn("Promise.all([", handler)
+        # the impolite peer still ignores a colliding offer (perfect negotiation)
+        self.assertIn("this.ignoreOffer = !this.polite && offerCollision;", handler)
+
+    def test_remote_tracks_are_never_muted_from_the_roster(self):
+        """«صدا می‌آید، بعد نمی‌آید» was a roster flag muting our own receiver."""
+        self.assertNotIn("remoteStream?.getAudioTracks().forEach((track) => { track.enabled", self.src)
+        self.assertNotIn("remoteStream?.getVideoTracks().forEach((track) => { track.enabled", self.src)
+        apply = rule(self.src, "    _applyPeerPermissions(link)")
+        self.assertIn("the roster only drives the icons below", apply)
+
+    def test_asking_for_focus_does_not_skip_a_track_we_can_hear(self):
+        speaker = rule(self.src, "    _evaluateSpeaker()")
+        self.assertNotIn("!audioTrack.enabled", speaker)
+
+    def test_remote_sound_has_an_unmuted_element_that_keeps_retrying(self):
+        self.assertIn("audio.muted = false;", self.src)
+        self.assertIn("audio.playsInline = true;", self.src)
+        unlock = rule(self.src, "    _armAudioUnlock(el)")
+        # every gesture, not only the first one, and on tab return
+        self.assertIn("document.addEventListener('pointerdown', retry, true);", unlock)
+        self.assertIn("document.addEventListener('touchstart', retry, true);", unlock)
+        self.assertIn("document.addEventListener('visibilitychange', onVisible);", self.src)
+
+
+class StageSteadinessTests(SimpleTestCase):
+    """The stage must not «jump»: no focus thrash, no display flips."""
+
+    def setUp(self):
+        self.mesh = read(JS / "mesh.js")
+        self.css = read(CSS / "room.css")
+
+    def test_focus_needs_a_second_tick_and_a_margin(self):
+        pick = rule(self.mesh, "    _pickFocus(levels, current)")
+        self.assertIn("const MARGIN = 1.35;", pick)
+        self.assertIn("if (bestLevel < currentLevel * MARGIN)", pick)
+        self.assertIn("this._focusLead = (this._focusLead || 0) + 1;", pick)
+        self.assertIn("if (this._focusLead < 2) return current;", pick)
+
+    def test_camera_visibility_is_a_fade_not_a_display_flip(self):
+        self.assertNotIn("video.style.display = camLive ?", self.mesh)
+        self.assertIn("tile.classList.toggle('cam-off', !camLive);", self.mesh)
+        self.assertIn("opacity: 0", rule(self.css, ".tile.cam-off video"))
+        self.assertIn("transition: opacity .28s", rule(self.css, ".tile video", "transition"))
+
+    def test_a_departing_tile_fades_instead_of_vanishing(self):
+        remove = rule(self.mesh, "    _removePeer(identity)")
+        self.assertIn("tile.classList.add('is-left');", remove)
+        self.assertIn("setTimeout(() => tile.remove(), 320);", remove)
+        self.assertIn("opacity: 0", rule(self.css, ".tile.is-left"))
+
+
+class NetworkPanelTests(SimpleTestCase):
+    """Real numbers, measured locally, and nothing a student can fake."""
+
+    def setUp(self):
+        self.net = read(JS / "netstats.js")
+        self.mesh = read(JS / "mesh.js")
+        self.room = read(JS / "room.js")
+        self.tpl = read(TEMPLATES / "room.html")
+        self.css = read(CSS / "room.css")
+
+    def test_the_module_computes_rates_loss_and_latency(self):
+        self.assertIn("export class LinkSampler", self.net)
+        self.assertIn("export function gradeLink", self.net)
+        self.assertIn("export function combineOwnership", self.net)
+        update = rule(self.net, "    update(report, now = Date.now())")
+        self.assertIn("bytesReceived", update)
+        self.assertIn("packetsLost", update)
+        self.assertIn("currentRoundTripTime", update)
+        self.assertIn("candidateType", update)
+        # kbit/s = bytes·8 / ms — one place, no duplicated arithmetic
+        self.assertIn("(deltaBytes * 8) / deltaMs", self.net)
+
+    def test_quality_is_graded_from_measurements(self):
+        grade = block_after(self.net, self.net.index(") {", self.net.index("export function gradeLink(")))
+        self.assertIn("if (lossPct >= 8) score += 2;", grade)
+        self.assertIn("if (rttMs >= 500) score += 2;", grade)
+        self.assertIn("return 'poor';", grade)
+        # and the badge does not flip on a single bad sample
+        settle = rule(self.net, "    settle(metrics)")
+        self.assertIn("nextQuality(this.quality, metrics.quality)", settle)
+
+    def test_it_measures_the_link_and_publishes_a_snapshot(self):
+        sample = rule(self.mesh, "    async _sampleNet()")
+        self.assertIn("await link.pc.getStats()", sample)
+        self.assertIn("link.sampler.update(report, Date.now())", sample)
+        self.assertIn("this.onNetStats({ self: this.ownStats, peers: rows });", sample)
+        self.assertIn("this._netTimer = setInterval(", self.mesh)
+
+    def test_the_numbers_are_not_self_reported(self):
+        """Honesty is the feature: the panel never reads a claim from the peer."""
+        for banned in ("self_reported", "reported_quality", "peer_claim"):
+            self.assertNotIn(banned, self.net)
+            self.assertNotIn(banned, self.mesh)
+        self.assertIn("اعداد از همان بسته‌هایی خوانده می‌شوند", self.tpl)
+
+    def test_the_panel_and_its_hooks_exist(self):
+        for needle in ('id="net-panel"', 'id="net-toggle"', 'id="net-rows"', 'id="net-foot"',
+                       'href="#i-signal"', "افت بسته"):
+            self.assertIn(needle, self.tpl)
+        self.assertIn("onNetStats: (snapshot) => NetPanel.render(snapshot)", self.room)
+        panel = rule(self.room, "    _paint()")
+        self.assertIn("this.rowsEl.appendChild(this._row(row));", panel)
+        self.assertIn("formatRate(row.inKbps)", rule(self.room, "    _row(row)"))
+
+    def test_a_weak_participant_is_marked_in_the_roster_and_the_tile(self):
+        self.assertIn('class="s-net"', self.room)
+        self.assertIn("data-quality=\"${net ? net.quality : 'unknown'}\"", self.room)
+        self.assertIn("tile.querySelector('.tile-net')", self.mesh)
+        self.assertIn(".tile-net[data-quality=\"poor\"]", self.css)
+        self.assertIn(".participant-states .s-net[data-quality=\"poor\"]", self.css)
+
+    def test_the_pill_stays_quiet_when_everything_is_fine(self):
+        render = rule(self.room, "    render(snapshot)")
+        self.assertIn("const weak = peers.filter((p) => p.quality === 'poor').length;", render)
+        self.assertIn("this.pillText.textContent = 'شبکه';", render)
+
+
+class LeftParticipantTests(SimpleTestCase):
+    """Leaving dims the name in the transcript and fades the row."""
+
+    def setUp(self):
+        self.chat = read(JS / "chat.js")
+        self.room = read(JS / "room.js")
+        self.css = read(CSS / "room.css")
+
+    def test_the_departure_line_dims_the_name_itself(self):
+        fn = block_after(self.chat, self.chat.index(") {", self.chat.index("    addSystemMessage(")))
+        self.assertIn("span.className = 'chat-name-left';", fn)
+        self.assertIn("div.dataset.left = '1';", fn)
+        self.assertIn("opacity: .55", rule(self.css, ".chat-name-left"))
+        self.assertIn("text-decoration: line-through", rule(self.css, ".chat-name-left"))
+
+    def test_the_leave_event_passes_the_name(self):
+        self.assertIn("{ name: data.participant.name },", self.room)
+        self.assertIn("presence.fadeOut(data.participant.identity);", self.room)
+
+    def test_the_row_lingers_dimmed_before_it_goes(self):
+        fade = rule(self.room, "    fadeOut(identity)")
+        self.assertIn("{ ...p, left: true }", fade)
+        self.assertIn("this.scheduleRender();", fade)
+        self.assertIn("opacity: .4", rule(self.css, ".participant.is-left"))
+        self.assertIn("li.className = p.left ? 'participant is-left' : 'participant';", self.room)
+
+
 class WhoIsSpeakingTests(SimpleTestCase):
     """In a full grid the room must answer "who is that?" without guessing.
 
@@ -706,7 +888,7 @@ class MediaTuningTests(SimpleTestCase):
         self.assertIn("this._tunedTier === tier.width && this._tunedPeers === this.links.size", retune)
         self.assertIn("if (!force", retune)
         # a new track tunes its own link at once; joins/leaves retune the room
-        self.assertIn("this.mesh._tuneLink(this);", rule(self.src, "    addLocalTracks(stream)"))
+        self.assertIn("this.mesh._tuneLink(this);", rule(self.src, "    publish(stream)"))
         for anchor in ("syncPeers(", "_removePeer("):
             body = block_after(self.src, self.src.index(f"    {anchor}"))
             self.assertIn("_retuneAll(", body, anchor)

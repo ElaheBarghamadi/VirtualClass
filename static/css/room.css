@@ -3267,3 +3267,147 @@ body.class-is-over .room-side { pointer-events: none; }
 }
 .settings-policy-note strong { color: var(--room-text); }
 
+
+/* ==========================================================================
+   Network: measured honesty, not claims
+   --------------------------------------------------------------------------
+   Three surfaces share one vocabulary (خوب / متوسط / ضعیف):
+     • the header pill — quiet until something is wrong;
+     • the panel — the actual numbers per participant;
+     • the roster and tile badges — who is the person the numbers belong to.
+   Everything pastel, no shadow to speak of, in line with the rest of the room.
+   ========================================================================== */
+
+.net-pill {
+    display: inline-flex; align-items: center; gap: .35rem;
+    font: inherit; font-size: .76rem; line-height: 1.2;
+    padding: .34rem .7rem;
+    border: 1px solid var(--room-border);
+    border-radius: var(--radius-pill);
+    background: var(--surface-2);
+    color: var(--room-muted);
+    cursor: pointer;
+    transition: background var(--speed) var(--ease), color var(--speed) var(--ease),
+                border-color var(--speed) var(--ease);
+}
+.net-pill .ic { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.net-pill:hover { background: var(--surface-3); color: var(--room-text); }
+.net-pill[aria-expanded="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-contrast); }
+/* Only a real problem colours the pill: a permanent badge is wallpaper. */
+.net-pill[data-quality="poor"] {
+    border-color: color-mix(in srgb, var(--warning) 45%, transparent);
+    background: color-mix(in srgb, var(--warning) 14%, var(--surface-2));
+    color: color-mix(in srgb, var(--warning) 75%, var(--room-text));
+}
+.net-pill[data-quality="fair"] { color: var(--room-text); }
+
+.net-panel {
+    position: fixed;
+    inset-block-start: 4.6rem;
+    inset-inline-end: 1rem;
+    z-index: 70;
+    width: min(30rem, calc(100vw - 2rem));
+    max-height: min(26rem, calc(100vh - 8rem));
+    overflow: auto;
+    padding: .85rem .95rem 1rem;
+    border: 1px solid var(--room-border);
+    border-radius: 16px;
+    background: var(--room-surface);
+    box-shadow: 0 20px 40px -30px rgba(16, 24, 40, .5);
+    color: var(--room-text);
+}
+.net-panel[hidden] { display: none; }
+.net-head { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+.net-head h2 { margin: 0; font-size: .95rem; font-weight: 750; }
+.net-close {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 26px; height: 26px; border-radius: 50%;
+    border: 1px solid transparent; background: transparent; color: var(--room-muted);
+    cursor: pointer;
+}
+.net-close:hover { background: var(--surface-2); color: var(--room-text); }
+.net-close .ic { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.net-note { margin: .35rem 0 .6rem; font-size: .72rem; line-height: 1.75; color: var(--room-muted); }
+
+.net-table { width: 100%; border-collapse: collapse; font-size: .78rem; }
+.net-table th, .net-table td { padding: .32rem .3rem; text-align: start; white-space: nowrap; }
+.net-table thead th {
+    font-size: .68rem; font-weight: 650; color: var(--room-muted);
+    border-bottom: 1px solid var(--room-border);
+}
+.net-table th.net-name { font-weight: 650; max-width: 11rem; overflow: hidden; text-overflow: ellipsis; }
+.net-table th.net-name[data-self="1"] { color: var(--accent); }
+.net-row + .net-row th, .net-row + .net-row td { border-top: 1px solid color-mix(in srgb, var(--room-border) 55%, transparent); }
+.net-empty { padding: .9rem .4rem; color: var(--room-muted); font-size: .76rem; text-align: center; white-space: normal; }
+
+.net-badge {
+    display: inline-flex; align-items: center;
+    padding: .1rem .5rem; border-radius: var(--radius-pill);
+    font-size: .7rem; font-weight: 700;
+    background: var(--surface-2); color: var(--room-muted);
+}
+.net-badge[data-quality="good"] { background: color-mix(in srgb, var(--success) 16%, var(--surface-2)); color: color-mix(in srgb, var(--success) 70%, var(--room-text)); }
+.net-badge[data-quality="fair"] { background: color-mix(in srgb, var(--accent) 14%, var(--surface-2)); color: color-mix(in srgb, var(--accent) 65%, var(--room-text)); }
+.net-badge[data-quality="poor"] { background: color-mix(in srgb, var(--warning) 18%, var(--surface-2)); color: color-mix(in srgb, var(--warning) 78%, var(--room-text)); }
+.net-relay {
+    margin-inline-start: .3rem; padding: .06rem .4rem;
+    border-radius: var(--radius-pill);
+    border: 1px solid color-mix(in srgb, var(--room-border) 90%, transparent);
+    font-size: .64rem; color: var(--room-muted);
+}
+.net-foot { margin: .6rem 0 0; font-size: .7rem; line-height: 1.7; color: var(--room-muted); }
+
+/* Tile badge: one word in the corner, never a number soup on the video. */
+.tile-net {
+    display: inline-flex; align-items: center;
+    padding: .06rem .38rem; border-radius: var(--radius-pill);
+    font-size: .62rem; font-weight: 700; line-height: 1.5;
+    background: color-mix(in srgb, var(--room-surface) 82%, transparent);
+    color: var(--room-muted);
+    border: 1px solid color-mix(in srgb, var(--room-border) 80%, transparent);
+}
+.tile-net[hidden] { display: none; }
+.tile-net[data-quality="good"] { color: color-mix(in srgb, var(--success) 78%, var(--room-text)); border-color: color-mix(in srgb, var(--success) 34%, transparent); }
+.tile-net[data-quality="fair"] { color: color-mix(in srgb, var(--accent) 72%, var(--room-text)); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
+.tile-net[data-quality="poor"] { color: color-mix(in srgb, var(--warning) 85%, var(--room-text)); border-color: color-mix(in srgb, var(--warning) 45%, transparent); background: color-mix(in srgb, var(--warning) 16%, var(--room-surface)); }
+
+/* Roster: the signal icon appears only for people whose link is not clean. */
+.participant-states .s-net { opacity: 1; }
+.participant-states .s-net[hidden] { display: none; }
+.participant-states .s-net[data-quality="fair"] { color: color-mix(in srgb, var(--accent) 70%, var(--room-muted)); }
+.participant-states .s-net[data-quality="poor"] { color: color-mix(in srgb, var(--warning) 85%, var(--room-muted)); }
+
+/* Somebody who left: the row stays a moment, faded — a disappearance between
+   two frames reads as a glitch, a fade reads as «رفت». */
+.participant { transition: background var(--speed) var(--ease), opacity .5s var(--ease); }
+.participant.is-left { opacity: .4; filter: saturate(.45); pointer-events: none; }
+.participant.is-left .participant-avatar { box-shadow: none; }
+.participant.is-left .host-controls { visibility: hidden; }
+
+/* The name in «… کلاس را ترک کرد» is dimmed and struck through: the transcript
+   says the person is gone without adding another line of noise. */
+.chat-name-left {
+    opacity: .55;
+    text-decoration: line-through;
+    text-decoration-thickness: 1px;
+    text-decoration-color: color-mix(in srgb, var(--room-muted) 70%, transparent);
+}
+
+/* Video visibility is a fade, not a `display` flip: turning a camera off used
+   to blank the tile between two frames, which is the «پرش» people noticed. */
+.tile video { transition: opacity .28s var(--ease); }
+.tile.cam-off video { opacity: 0; }
+.tile { transition: border-color var(--speed) var(--ease), box-shadow var(--speed) var(--ease),
+        opacity .3s var(--ease), transform .3s var(--ease); }
+.tile.is-left { opacity: 0; transform: scale(.975); }
+
+@media (max-width: 620px) {
+    .net-pill #net-pill-text { display: none; }
+    .net-pill { padding: .34rem .5rem; }
+    .net-panel { inset-inline: .5rem; inset-block-start: auto; inset-block-end: .5rem; width: auto; max-height: 70vh; }
+    .net-table { font-size: .74rem; }
+    .net-table th.net-name { max-width: 7rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .tile, .tile video, .participant { transition: none; }
+}

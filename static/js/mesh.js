@@ -20,6 +20,7 @@
  * - Fine for small classrooms; large rooms should configure LiveKit.
  */
 import { toast } from './toast.js';
+import { LinkSampler, combineOwnership, formatRate } from './netstats.js';
 import {
     analyserLevel, createAnalyser, createLevelTracker, createSpeakingGate, disposeAnalyser,
     paintMic, paintTile, resetMic, startLevelLoop,
@@ -62,6 +63,10 @@ class PeerLink {
         this._watchdog = null;
         this._recovery = null;
         this.pc = this._makePc(false);
+        // One sampler per link: two cumulative getStats() snapshots become the
+        // kbit/s, loss, jitter and RTT the network panel shows.
+        this.sampler = new LinkSampler();
+        this.net = null;                 // latest measured row for this peer
     }
 
     updatePeer(peer) {
@@ -71,6 +76,21 @@ class PeerLink {
 
     _makePc(isScreen) {
         const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+        // Reserve the microphone and camera m-lines *now*, before any device is
+        // on.  Turning the mic or camera on/off then becomes a plain
+        // ``replaceTrack`` on an existing sender: no renegotiation, no offer
+        // glare, no window in which one side never learns about the other's
+        // track.  That window is exactly why «sometimes the camera works, and
+        // the microphone never does».
+        if (!isScreen) {
+            this._senders = {};
+            try {
+                this._senders.audio = pc.addTransceiver('audio', { direction: 'sendrecv' }).sender;
+                this._senders.video = pc.addTransceiver('video', { direction: 'sendrecv' }).sender;
+            } catch (err) {
+                this._senders = {};       // very old browser: fall back to addTrack
+            }
+        }
         pc.onicecandidate = (e) => {
             if (e.candidate) {
                 this.mesh._signal(this.peer.member_id, { ice: e.candidate, screen: isScreen });
@@ -230,7 +250,19 @@ class PeerLink {
                 description.type === 'offer' && (this.makingOffer || pc.signalingState !== 'stable');
             this.ignoreOffer = !this.polite && offerCollision;
             if (this.ignoreOffer) return;
-            await pc.setRemoteDescription(description);
+            if (offerCollision) {
+                // Perfect negotiation: the polite side rolls its own offer back
+                // and accepts theirs.  Without this the accept throws on
+                // `have-local-offer`, the promise is swallowed by the signal
+                // handler, and the track that was just added is never sent —
+                // one of the two peers simply never hears the other.
+                await Promise.all([
+                    pc.setLocalDescription({ type: 'rollback' }),
+                    pc.setRemoteDescription(description),
+                ]);
+            } else {
+                await pc.setRemoteDescription(description);
+            }
             if (!isScreen) this.armWatchdog();
             if (description.type === 'offer') {
                 await pc.setLocalDescription(await pc.createAnswer());
@@ -252,14 +284,43 @@ class PeerLink {
         return this.screenPc;
     }
 
-    addLocalTracks(stream) {
-        if (!stream) return;
-        const existing = new Set(this.pc.getSenders().map((s) => s.track && s.track.kind));
-        for (const track of stream.getTracks()) {
-            if (!existing.has(track.kind)) this.pc.addTrack(track, stream);
+    /**
+     * Push the current local tracks to this peer.
+     *
+     * With the reserved transceivers this is only ``replaceTrack``: the same
+     * sender is used for the whole lesson, so a device toggle costs no
+     * negotiation at all.  ``null`` means «this device is off» — the m-line
+     * stays, silent, which is what makes re-enabling instant.
+     */
+    publish(stream) {
+        if (!this.pc || this.pc.signalingState === 'closed') return;
+        const wanted = new Map();
+        if (stream) for (const track of stream.getTracks()) wanted.set(track.kind, track);
+
+        for (const kind of ['audio', 'video']) {
+            const sender = this._senders && this._senders[kind];
+            const track = wanted.get(kind) || null;
+            if (sender) {
+                if (sender.track !== track) sender.replaceTrack(track).catch(() => {});
+                continue;
+            }
+            // No reserved transceiver (old browser): fall back to addTrack.
+            const existing = this.pc.getSenders().find((s) => s.track && s.track.kind === kind);
+            if (track && !existing) {
+                try { this.pc.addTrack(track, stream); } catch (err) { /* noop */ }
+            }
         }
-        // Bitrate/framerate caps are per sender: set them as soon as we have one.
+        for (const [kind, track] of wanted) {
+            if (kind === 'audio' || kind === 'video') continue;
+            const existing = this.pc.getSenders().find((s) => s.track && s.track.kind === kind);
+            if (!existing) { try { this.pc.addTrack(track, stream); } catch (err) { /* noop */ } }
+        }
         this.mesh._tuneLink(this);
+    }
+
+    /** Backwards-compatible name used by older call sites. */
+    addLocalTracks(stream) {
+        this.publish(stream);
     }
 
     close() {
@@ -298,6 +359,10 @@ class MeshMedia {
         this._screenOwner = null;   // identity of the peer whose screen we view
         this._statsTimer = null;
         this._speakerTimer = null;
+        this._netTimer = null;
+        this.netStats = new Map();       // identity → latest measured row
+        this.ownStats = null;            // worst-of aggregate for our own row
+        this.onNetStats = () => {};      // room.js hook → the network panel
         this._localAnalyser = null;
         this._localLevelRaf = null;
         this.currentView = 'media';
@@ -308,13 +373,14 @@ class MeshMedia {
         this._deviceChangeBound = null;
     }
 
-    async init({ roomCode, self, permissions, signal, onStateChange, onQualityChange, iceServers }) {
+    async init({ roomCode, self, permissions, signal, onStateChange, onQualityChange, onNetStats, iceServers }) {
         this.roomCode = roomCode;
         this.self = self;
         this.permissions = permissions || {};
         this.signal = signal;
         this.onStateChange = onStateChange || (() => {});
         this.onQualityChange = onQualityChange || (() => {});
+        this.onNetStats = onNetStats || (() => {});
         if (Array.isArray(iceServers) && iceServers.length) {
             ICE_SERVERS = iceServers;  // deployment-provided STUN/TURN list
         }
@@ -335,6 +401,12 @@ class MeshMedia {
         this._speakerTimer = setInterval(() => {
             try { this._evaluateSpeaker(); } catch (e) { console.warn('[mesh] level tick failed', e); }
         }, 700);
+        // Measured network numbers: every 2 s, per peer. Cheap (getStats is
+        // local) and often enough that the panel feels live.
+        this._sampleNet();
+        this._netTimer = setInterval(() => {
+            try { this._sampleNet(); } catch (e) { console.warn('[mesh] net tick failed', e); }
+        }, 2000);
         this._watchDevices();
     }
 
@@ -351,13 +423,10 @@ class MeshMedia {
                 this._ensureTile(p);
                 if (this.localStream) link.addLocalTracks(this.localStream);
                 if (this.screenStream) this._attachScreenTo(link);
-                // the higher member id initiates; the polite side just answers
-                if (this.self.memberId > p.member_id) {
-                    if (!this.localStream) {
-                        // an (unused) data channel triggers onnegotiationneeded
-                        try { link.pc.createDataChannel('mesh-init'); } catch (e) { /* noop */ }
-                    }
-                }
+                // The reserved audio/video transceivers make the first offer
+                // happen on their own (onnegotiationneeded), so the link comes
+                // up before anyone turns a device on — no data-channel trick,
+                // no «waiting for someone to press mic».
                 this._replayPending(p.identity);
             } else {
                 this.links.get(p.identity).updatePeer(p);
@@ -375,7 +444,13 @@ class MeshMedia {
         if (link) link.close();
         this.links.delete(identity);
         const tile = this.tiles.get(identity);
-        if (tile) tile.remove();
+        if (tile) {
+            // Fade instead of a hard cut: a tile that disappears between two
+            // frames reads as a glitch («صفحه پرش کرد»), a 300 ms fade reads as
+            // «این نفر رفت» — and the roster row dims at the same time.
+            tile.classList.add('is-left');
+            setTimeout(() => tile.remove(), 320);
+        }
         this.tiles.delete(identity);
         const audio = this._audioEls.get(identity);
         if (audio) { audio.srcObject = null; audio.remove(); }
@@ -548,16 +623,7 @@ class MeshMedia {
      * same kind), brand-new kinds are added (triggers negotiation).
      */
     _republishLocal() {
-        for (const link of this.links.values()) {
-            for (const sender of link.pc.getSenders()) {
-                const kind = sender.track && sender.track.kind;
-                if (!kind || sender.track.readyState !== 'ended') continue;
-                const fresh = this.localStream
-                    && this.localStream.getTracks().find((t) => t.kind === kind && t.readyState === 'live');
-                sender.replaceTrack(fresh || null).catch(() => {});
-            }
-            link.addLocalTracks(this.localStream);
-        }
+        for (const link of this.links.values()) link.publish(this.localStream);
     }
 
     /** Classroom-grade audio processing — the same defaults Meet/Zoom rely on. */
@@ -820,19 +886,58 @@ class MeshMedia {
 
     _playSafe(el) {
         if (!el) return;
-        const p = el.play();
-        if (p && typeof p.catch === 'function') {
-            p.catch(() => {
-                // Autoplay policy: retry on the first real user gesture.
-                const retry = () => {
-                    el.play().catch(() => {});
-                    document.removeEventListener('pointerdown', retry);
-                    document.removeEventListener('keydown', retry);
-                };
-                document.addEventListener('pointerdown', retry, { once: true });
-                document.addEventListener('keydown', retry, { once: true });
+        const attempt = () => {
+            const p = el.play();
+            if (!p || typeof p.catch !== 'function') return true;
+            p.catch(() => this._armAudioUnlock(el));
+            return true;
+        };
+        if (attempt()) return;
+    }
+
+    /**
+     * Browsers refuse to start unmuted audio before the page has been touched.
+     * The old code listened only for the *first* pointerdown, so a refusal that
+     * arrived later (a second peer joining after the click) had no second
+     * chance — the classroom looked connected and stayed silent.  This keeps
+     * re-trying on every gesture and whenever the tab comes back, which is what
+     * «میکروفون کار نمی‌کند» usually is.
+     */
+    _armAudioUnlock(el) {
+        if (this._audioUnlock) return;
+        const retry = () => {
+            let pending = false;
+            this._audioEls.forEach((audio) => {
+                if (audio.paused) {
+                    pending = true;
+                    audio.play().catch(() => {});
+                }
             });
+            if (!pending) this._disarmAudioUnlock();
+        };
+        const onVisible = () => {
+            if (document.visibilityState === 'visible') retry();
+        };
+        this._audioUnlock = { retry, onVisible };
+        document.addEventListener('pointerdown', retry, true);
+        document.addEventListener('keydown', retry, true);
+        document.addEventListener('touchstart', retry, true);
+        document.addEventListener('visibilitychange', onVisible);
+        if (!this._audioUnlockHinted) {
+            this._audioUnlockHinted = true;
+            toast('برای شنیدن صدای کلاس یک بار روی صفحه ضربه بزنید.', 'info', 4000);
         }
+        retry();
+    }
+
+    _disarmAudioUnlock() {
+        const bound = this._audioUnlock;
+        if (!bound) return;
+        document.removeEventListener('pointerdown', bound.retry, true);
+        document.removeEventListener('keydown', bound.retry, true);
+        document.removeEventListener('touchstart', bound.retry, true);
+        document.removeEventListener('visibilitychange', bound.onVisible);
+        this._audioUnlock = null;
     }
 
     /** Re-render tile/UI/pip after any local device change. */
@@ -1089,10 +1194,11 @@ class MeshMedia {
     _applyPeerPermissions(link) {
         if (!link?.peer) return;
         const permissions = link.peer.permissions || {};
-        const audioAllowed = permissions.can_use_microphone !== false && link.peer.muted !== true;
-        const cameraAllowed = permissions.can_use_camera !== false && link.peer.camera_disabled !== true;
-        link.remoteStream?.getAudioTracks().forEach((track) => { track.enabled = audioAllowed; });
-        link.remoteStream?.getVideoTracks().forEach((track) => { track.enabled = cameraAllowed; });
+        // To *our* client every incoming track is simply whatever that peer is
+        // sending.  This used to set `track.enabled` from a roster flag, which
+        // meant a late/duplicated presence update cut the sound for a moment —
+        // «صدا می‌آید، بعد نمی‌آید».  Silence is announced by the sender (the
+        // track mutes itself); the roster only drives the icons below.
 
         const screenTrack = link.remoteScreenStream?.getVideoTracks()[0];
         const screenAllowed = permissions.can_share_screen !== false
@@ -1116,6 +1222,13 @@ class MeshMedia {
         if (!audio) {
             audio = document.createElement('audio');
             audio.autoplay = true;
+            audio.playsInline = true;
+            audio.setAttribute('playsinline', '');
+            // Never muted: this element *is* the only place remote sound is
+            // played (the tile <video> is muted on purpose).
+            audio.muted = false;
+            audio.volume = 1;
+            audio.dataset.identity = peer.identity;
             document.body.appendChild(audio);
             this._audioEls.set(peer.identity, audio);
         }
@@ -1215,7 +1328,7 @@ class MeshMedia {
         video.autoplay = true;
         const overlay = document.createElement('div');
         overlay.className = 'tile-overlay';
-        overlay.innerHTML = '<span class="tile-name"></span><span class="tile-icons"><i class="t-mic" title="میکروفون"><svg class="ic"><use href="#i-mic"/></svg></i></span>'
+        overlay.innerHTML = '<span class="tile-name"></span><span class="tile-icons"><span class="tile-net" data-quality="unknown" hidden></span><i class="t-mic" title="میکروفون"><svg class="ic"><use href="#i-mic"/></svg></i></span>'
             + '<button type="button" class="tile-fs" title="نمایش تمام‌صفحه" aria-label="نمایش تمام‌صفحه"><svg class="ic"><use href="#i-maximize"/></svg></button>';
         overlay.querySelector('.tile-fs')?.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -1257,7 +1370,9 @@ class MeshMedia {
         video.srcObject = this.localStream;
         const camTrack = this.localStream && this.localStream.getVideoTracks()[0];
         const camLive = Boolean(camTrack && camTrack.readyState === 'live');
-        video.style.display = camLive ? '' : 'none';
+        // Class, not `display`: the CSS fades the picture out so turning a
+        // camera off no longer makes the whole stage flicker.
+        tile.classList.toggle('cam-off', !camLive);
         tile.querySelector('.tile-placeholder').classList.toggle('hidden', camLive);
         tile.classList.toggle('is-idle', !camLive && !this.micOn);
         tile.querySelector('.tile-name').textContent = `${this.self.name} (شما)`;
@@ -1272,7 +1387,7 @@ class MeshMedia {
         if (!tile) return;
         const video = tile.querySelector('video');
         video.srcObject = null;
-        video.style.display = 'none';
+        tile.classList.add('cam-off');
         tile.querySelector('.tile-placeholder').classList.remove('hidden');
         tile.classList.add('is-idle');
         this._layout();
@@ -1296,7 +1411,7 @@ class MeshMedia {
         );
         const video = tile.querySelector('video');
         if (camLive && video.srcObject !== stream) video.srcObject = stream;
-        video.style.display = camLive ? '' : 'none';
+        tile.classList.toggle('cam-off', !camLive);
         tile.querySelector('.tile-placeholder').classList.toggle('hidden', camLive);
         if (camLive) video.play().catch(() => {});
         const audioTrack = stream && stream.getAudioTracks()[0];
@@ -1372,17 +1487,42 @@ class MeshMedia {
     }
 
     // ------------------------------------------------- speaker + quality
+    /**
+     * Who should own the big tile?
+     *
+     * Swapping focus on every 700 ms tick made the stage «jump» all the time:
+     * two people breathing alternately were enough.  A challenger now has to
+     * lead for two consecutive ticks *and* be clearly louder than the current
+     * speaker, and a silent speaker is only replaced after the same grace.
+     */
+    _pickFocus(levels, current) {
+        const GATE = 0.02;
+        const MARGIN = 1.35;
+        let best = null;
+        let bestLevel = GATE;
+        for (const [identity, level] of levels) {
+            if (level > bestLevel) { bestLevel = level; best = identity; }
+        }
+        if (!best) return null;
+        if (!current || current === best) { this._focusLead = 0; return best; }
+        const currentLevel = levels.get(current) || 0;
+        if (bestLevel < currentLevel * MARGIN) { this._focusLead = 0; return current; }
+        this._focusLead = (this._focusLead || 0) + 1;
+        if (this._focusLead < 2) return current;
+        this._focusLead = 0;
+        return best;
+    }
+
     _evaluateSpeaker() {
         // Read real signal levels from each remote stream. Every participant
         // above the noise gate gets a visible speaking badge; the loudest is
         // still used as the focus/PiP speaker.
-        let best = null;
-        let bestLevel = 0.02; // noise gate for choosing the focus speaker
+        const measured = new Map();
         for (const [identity, link] of this.links) {
             const stream = link.remoteStream;
             const tile = this.tiles.get(identity);
             const audioTrack = stream && stream.getAudioTracks()[0];
-            if (!audioTrack || !audioTrack.enabled || audioTrack.muted || audioTrack.readyState !== 'live') {
+            if (!audioTrack || audioTrack.muted || audioTrack.readyState !== 'live') {
                 continue;
             }
             let analyser = this.levels.get(identity);
@@ -1393,9 +1533,9 @@ class MeshMedia {
             }
             // Painting (levels, ring, badge) belongs to the 20 fps level loop;
             // this slower scan only picks who to focus / mirror in the PiP.
-            const level = analyserLevel(analyser);
-            if (level > bestLevel) { bestLevel = level; best = identity; }
+            measured.set(identity, analyserLevel(analyser));
         }
+        const best = this._pickFocus(measured, this.activeSpeaker);
         if (best !== this.activeSpeaker) {
             this.activeSpeaker = best;
             this._layout();
@@ -1487,6 +1627,71 @@ class MeshMedia {
         }
     }
 
+    // ------------------------------------------------------- network stats
+    /**
+     * One pass over every peer connection: what each link is really carrying.
+     *
+     * The numbers describe *what we receive* from each person, so they cannot be
+     * gamed by anything the other side claims — a weak upload shows up as loss,
+     * jitter and a frozen picture on our side of the wire.
+     */
+    async _sampleNet() {
+        if (!this.links.size) {
+            if (this.netStats.size) {
+                this.netStats.clear();
+                this.onNetStats({ self: null, peers: [] });
+            }
+            return;
+        }
+        const rows = [];
+        for (const [identity, link] of this.links) {
+            try {
+                const report = await link.pc.getStats();
+                const metrics = link.sampler.update(report, Date.now());
+                const quality = link.sampler.settle(metrics);
+                const row = {
+                    identity,
+                    name: link.peer.name || identity,
+                    memberId: link.peer.member_id,
+                    quality,
+                    ...metrics,
+                };
+                link.net = row;
+                this.netStats.set(identity, row);
+                rows.push(row);
+            } catch (err) {
+                /* getStats is not available everywhere; the badge stays empty */
+            }
+        }
+        this.ownStats = combineOwnership(rows);
+        this._paintNetBadges();
+        this.onNetStats({ self: this.ownStats, peers: rows });
+    }
+
+    _paintNetBadges() {
+        const labels = { poor: 'ضعیف', fair: 'متوسط', good: 'خوب', unknown: '—' };
+        for (const [identity, tile] of this.tiles) {
+            const badge = tile.querySelector('.tile-net');
+            if (!badge) continue;
+            const row = this.netStats.get(identity);
+            if (!row || row.quality === 'unknown' || identity === this.self.identity) {
+                badge.hidden = true;
+                badge.dataset.quality = 'unknown';
+                continue;
+            }
+            badge.hidden = false;
+            badge.dataset.quality = row.quality;
+            badge.textContent = labels[row.quality] || '';
+            const bits = [];
+            if (row.inKbps) bits.push(`دریافت ${formatRate(row.inKbps)}`);
+            if (row.outKbps) bits.push(`ارسال ${formatRate(row.outKbps)}`);
+            if (row.rttMs != null) bits.push(`تأخیر ${Math.round(row.rttMs)}ms`);
+            if (row.lossPct != null) bits.push(`افت بسته ${row.lossPct.toFixed(1)}%`);
+            if (row.path) bits.push(row.path === 'relay' ? 'مسیر: رله' : 'مسیر: مستقیم');
+            badge.title = bits.join(' · ');
+        }
+    }
+
     _syncLocalUI() {
         const micBtn = document.getElementById('btn-mic');
         const camBtn = document.getElementById('btn-camera');
@@ -1524,7 +1729,9 @@ class MeshMedia {
     dispose() {
         if (this._statsTimer) clearInterval(this._statsTimer);
         if (this._speakerTimer) clearInterval(this._speakerTimer);
-        this._statsTimer = this._speakerTimer = null;
+        if (this._netTimer) clearInterval(this._netTimer);
+        this._statsTimer = this._speakerTimer = this._netTimer = null;
+        this._disarmAudioUnlock();
         if (this._deviceChangeBound && navigator.mediaDevices?.removeEventListener) {
             navigator.mediaDevices.removeEventListener('devicechange', this._deviceChangeBound);
             this._deviceChangeBound = null;

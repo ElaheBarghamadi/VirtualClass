@@ -604,7 +604,14 @@ class ChatClientImpl {
         document.getElementById('btn-chat')?.classList.remove('has-unread');
     }
 
-    addSystemMessage(text) {
+    /**
+     * A joining/leaving notice.
+     *
+     * When ``name`` is given it is rendered in its own span so the stylesheet can
+     * fade it: a person who has left should read as *gone* in the transcript,
+     * not as another line of chat from someone still in the room.
+     */
+    addSystemMessage(text, { name = '' } = {}) {
         if (!this.messagesEl || !text) return;
         const dayKey = this._dayKey(new Date());
         if (dayKey !== this._lastDay) {
@@ -614,7 +621,19 @@ class ChatClientImpl {
         }
         const div = document.createElement('div');
         div.className = 'chat-msg system';
-        div.textContent = text;
+        if (name && typeof name === 'string' && text.includes(name)) {
+            const [before, ...rest] = text.split(name);
+            const after = rest.join(name);
+            if (before) div.appendChild(document.createTextNode(before));
+            const span = document.createElement('span');
+            span.className = 'chat-name-left';
+            span.textContent = name;
+            div.appendChild(span);
+            if (after) div.appendChild(document.createTextNode(after));
+            div.dataset.left = '1';
+        } else {
+            div.textContent = text;
+        }
         this.messagesEl.appendChild(div);
         // A join/leave line ends the current group.
         this._lastEntry = null;

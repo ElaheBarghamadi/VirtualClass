@@ -73,6 +73,26 @@ class GuestJoinTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, self.classroom.room_code)
 
+    def test_room_page_ships_the_network_panel(self):
+        """The panel is server-rendered markup, not something JS invents.
+
+        A guest still sees it (their own numbers), but rows only ever come from
+        measurements, so nothing here depends on who is looking.
+        """
+        self.client.post(self._lobby(), {"display_name": "Ali"})
+        response = self.client.get(reverse("room:room", kwargs={"room_code": self.classroom.room_code}))
+        for needle in (
+            'id="net-toggle"',
+            'id="net-panel"',
+            'id="net-rows"',
+            'id="net-foot"',
+            'href="#i-signal"',
+            "افت بسته",
+        ):
+            self.assertContains(response, needle)
+        # the numbers module is imported by room.js; the page only needs the entry point
+        self.assertContains(response, "js/room.js")
+
     def test_name_is_trimmed_and_collapses_whitespace(self):
         self.assertEqual(validate_display_name("  Ali   Reza  "), "Ali Reza")
 

@@ -143,6 +143,14 @@
                 <span class="conn-dot"></span><span class="conn-text">در حال اتصال…</span>
                 <span class="conn-quality hidden" id="conn-quality" aria-label="کیفیت اتصال"></span>
             </span>
+            {% comment %}Network: measured, not claimed. The numbers come from
+            this browser's own getStats(), so what a participant says about their
+            connection is irrelevant.{% endcomment %}
+            <button type="button" class="net-pill" id="net-toggle" aria-expanded="false"
+                    aria-controls="net-panel" title="سرعت و کیفیت شبکه">
+                <svg class="ic" aria-hidden="true"><use href="#i-signal"/></svg>
+                <span id="net-pill-text">شبکه</span>
+            </button>
             <span class="room-clock" id="room-clock" aria-label="ساعت">--:--</span>
             <form method="post" action="{% url 'room:leave' classroom.room_code %}" hidden>
                 {% csrf_token %}
@@ -150,6 +158,32 @@
             </form>
         </div>
     </header>
+
+    {% comment %} A small, calm card — not a dashboard. One line per person:
+    what we receive from them, how lossy it is, and whether they are on a
+    relay. «ضعیف» here means their upload is measurably failing.{% endcomment %}
+    <div class="net-panel" id="net-panel" hidden role="dialog" aria-modal="false" aria-labelledby="net-title">
+        <header class="net-head">
+            <h2 id="net-title">وضعیت شبکه</h2>
+            <button type="button" class="net-close" id="net-close" aria-label="بستن">
+                <svg class="ic" aria-hidden="true"><use href="#i-close"/></svg>
+            </button>
+        </header>
+        <p class="net-note">اعداد از همان بسته‌هایی خوانده می‌شوند که واقعاً رد و بدل می‌شوند؛ به آنچه هر کس دربارهٔ اینترنتش می‌گوید وابسته نیست.</p>
+        <table class="net-table">
+            <thead>
+                <tr>
+                    <th scope="col">شرکت‌کننده</th>
+                    <th scope="col">دریافت</th>
+                    <th scope="col">تأخیر</th>
+                    <th scope="col">افت بسته</th>
+                    <th scope="col">وضعیت</th>
+                </tr>
+            </thead>
+            <tbody id="net-rows"></tbody>
+        </table>
+        <p class="net-foot" id="net-foot">در حال اندازه‌گیری…</p>
+    </div>
 
     <!-- Shown only while the browser reports no network (see Network in room.js). -->
     <div class="net-banner" id="net-banner" role="status" aria-live="polite" hidden>
