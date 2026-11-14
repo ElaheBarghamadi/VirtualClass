@@ -1,6 +1,8 @@
 {% extends "base.html" %}
+{% load static %}
 {% block title %}کلاس آنلاین — خانه{% endblock %}
 {% block body_class %}is-home{% endblock %}
+{% block extra_css %}<link rel="stylesheet" href="{% static 'css/landing.css' %}?v={{ ASSET_V }}">{% endblock %}
 {% block content %}
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
     <defs>
@@ -25,6 +27,11 @@
 </svg>
 
 <section class="hero">
+    <p class="hero-kicker">
+        <span class="mono">VIRTUALCLASS</span>
+        <span class="hero-kicker-line" aria-hidden="true"></span>
+        <span>کلاس مجازی، بدون نصب</span>
+    </p>
     <span class="hero-badge"><span class="dot" aria-hidden="true"></span> بدون نصب، در مرورگر — آماده در چند ثانیه</span>
     <h1>
         کلاس آنلاینتان را
@@ -59,11 +66,11 @@
     <dl class="hero-stats">
         <div class="hero-stat">
             <dt>لینک ثابت برای هر کلاس</dt>
-            <dd>۱</dd>
+            <dd data-count="1">۱</dd>
         </div>
         <div class="hero-stat">
             <dt>نصب برای مهمان</dt>
-            <dd>۰</dd>
+            <dd data-count="0">۰</dd>
         </div>
         <div class="hero-stat">
             <dt>گزینه در هر سوال</dt>
@@ -71,7 +78,7 @@
         </div>
         <div class="hero-stat">
             <dt>ابزار هم‌زمان در یک اتاق</dt>
-            <dd>۶</dd>
+            <dd data-count="6">۶</dd>
         </div>
     </dl>
 
@@ -118,6 +125,14 @@
         <li>اشتراک فایل</li>
     </ul>
 
+    {% comment %}The reference site ends its hero with a nudge down the page.
+    Ours jumps to the flow section, so it is also a way to skip the fold.{% endcomment %}
+    <a class="scroll-cue" href="#flow">
+        <span class="mono">SCROLL</span>
+        <span class="scroll-cue-line" aria-hidden="true"></span>
+        <span>پنج ایستگاه پایین‌تر</span>
+    </a>
+
 </section>
 
 {% comment %}A quiet ribbon of keywords: the same shape as the venue we took the
@@ -148,8 +163,9 @@ screen readers, so the loop has no visible seam.{% endcomment %}
     </div>
 </div>
 
-<section class="landing-sec" aria-labelledby="how-title">
+<section class="landing-sec" aria-labelledby="how-title" data-reveal>
     <div class="sec-head">
+        <span class="sec-label mono" aria-hidden="true">STEPS</span>
         <span class="sec-eyebrow">در سه گام</span>
         <h2 id="how-title">از ساختن کلاس تا شروع درس</h2>
         <p class="sec-lead">بدون تنظیمات پیچیده و بدون نصب نرم‌افزار؛ کل مسیر کمتر از یک دقیقه است.</p>
@@ -192,8 +208,111 @@ screen readers, so the loop has no visible seam.{% endcomment %}
     </ol>
 </section>
 
-<section class="landing-sec" aria-labelledby="features-title">
+{% comment %}The five stations, in the same shape as the reference site's flow
+section: a mono label, a numbered index that follows the scroll, a paragraph and
+a small picture of what each station produces. Every claim here is something the
+server actually does — no invented numbers.{% endcomment %}
+<section class="landing-sec flow-sec" aria-labelledby="flow-title" id="flow" data-reveal>
+    <div class="sec-head sec-head-split">
+        <div>
+            <span class="sec-label mono" aria-hidden="true">FLOW</span>
+            <h2 id="flow-title">پنج ایستگاه، از ثبت‌نام تا گزارش کلاس</h2>
+            <p class="sec-lead">همان مسیری که یک میزبان واقعاً می‌رود؛ هر ایستگاه یک کار مشخص دارد و ایستگاه بعدی را باز می‌کند.</p>
+        </div>
+        <p class="flow-index mono" aria-hidden="true"><span id="flow-index">۰۱</span> / ۰۵ فعال</p>
+    </div>
+
+    <ol class="flow-list">
+        <li class="flow-step is-active" data-step="1">
+            <div class="fs-head">
+                <span class="fs-num mono" aria-hidden="true">۰۱</span>
+                <h3>ساخت حساب</h3>
+            </div>
+            <p>ایمیل و یک رمز؛ بدون کارت بانکی و بدون مرحلهٔ تأیید اجباری. همان لحظه وارد داشبورد می‌شوید.</p>
+            <ul class="fs-points">
+                <li>ثبت‌نام رایگان</li>
+                <li>ورود مستقیم</li>
+                <li>پروفایل شخصی</li>
+            </ul>
+            <div class="fs-mock" aria-hidden="true">
+                <span class="fsm-line w60"></span>
+                <span class="fsm-underline"></span>
+                <span class="fsm-underline"></span>
+                <span class="fsm-btn"></span>
+            </div>
+        </li>
+        <li class="flow-step" data-step="2">
+            <div class="fs-head">
+                <span class="fs-num mono" aria-hidden="true">۰۲</span>
+                <h3>ساخت کلاس</h3>
+            </div>
+            <p>نام، رمز دلخواه و اتاق انتظار؛ لینک اختصاصی کلاس همان لحظه ساخته می‌شود و تا آخر ترم ثابت می‌ماند.</p>
+            <ul class="fs-points">
+                <li>لینک یکتا</li>
+                <li>رمز و اتاق انتظار</li>
+                <li>قفل کلاس</li>
+            </ul>
+            <div class="fs-mock" aria-hidden="true">
+                <span class="fsm-line w45"></span>
+                <span class="fsm-chips"><i>رمز دلخواه</i><i>اتاق انتظار</i></span>
+                <span class="fsm-btn"></span>
+            </div>
+        </li>
+        <li class="flow-step" data-step="3">
+            <div class="fs-head">
+                <span class="fs-num mono" aria-hidden="true">۰۳</span>
+                <h3>دعوت دانش‌آموز</h3>
+            </div>
+            <p>لینک را در گروه بفرستید؛ مهمان بدون ساختن حساب و بدون نصب برنامه وارد اتاق انتظار می‌شود.</p>
+            <ul class="fs-points">
+                <li>ورود مهمان</li>
+                <li>تأیید از اتاق انتظار</li>
+                <li>دسترسی جدا برای هر نفر</li>
+            </ul>
+            <div class="fs-mock" aria-hidden="true">
+                <span class="fsm-link"><b>class/ab12cd</b><i></i></span>
+                <span class="fsm-avatars"><b>س</b><b>ر</b><b>ع</b><em>بدون ثبت‌نام</em></span>
+            </div>
+        </li>
+        <li class="flow-step" data-step="4">
+            <div class="fs-head">
+                <span class="fs-num mono" aria-hidden="true">۰۴</span>
+                <h3>درس زنده</h3>
+            </div>
+            <p>دوربین و میکروفون، تختهٔ سفید، ارائهٔ PDF، اشتراک صفحه و سوال کلاسی — همه در یک صفحه و هم‌زمان.</p>
+            <ul class="fs-points">
+                <li>تختهٔ هم‌زمان</li>
+                <li>ارائهٔ PDF</li>
+                <li>سوال چهارگزینه‌ای</li>
+            </ul>
+            <div class="fs-mock" aria-hidden="true">
+                <span class="fsm-tiles"><i></i><i class="is-board"></i></span>
+                <span class="fsm-bar"><i></i><i></i><i class="is-on"></i></span>
+            </div>
+        </li>
+        <li class="flow-step" data-step="5">
+            <div class="fs-head">
+                <span class="fs-num mono" aria-hidden="true">۰۵</span>
+                <h3>گزارش جلسه</h3>
+            </div>
+            <p>ورود و خروج هر نفر خودکار ثبت می‌شود؛ گزارش هر جلسه را با خروجی CSV در اکسل باز می‌کنید.</p>
+            <ul class="fs-points">
+                <li>حضور و غیاب</li>
+                <li>خروجی CSV</li>
+                <li>آرشیو فایل‌ها</li>
+            </ul>
+            <div class="fs-mock" aria-hidden="true">
+                <span class="fsm-row"><i></i><b></b><em></em></span>
+                <span class="fsm-row"><i></i><b></b><em></em></span>
+                <span class="fsm-row"><i></i><b></b><em></em></span>
+            </div>
+        </li>
+    </ol>
+</section>
+
+<section class="landing-sec" aria-labelledby="features-title" data-reveal>
     <div class="sec-head">
+        <span class="sec-label mono" aria-hidden="true">FEATURES</span>
         <span class="sec-eyebrow">امکانات</span>
         <h2 id="features-title">هر چیزی که یک کلاس زنده لازم دارد</h2>
         <p class="sec-lead">یک اتاق، بدون افزونه و بدون جابه‌جایی بین چند ابزار.</p>
@@ -242,8 +361,112 @@ screen readers, so the loop has no visible seam.{% endcomment %}
     </div>
 </section>
 
-<section class="landing-sec" aria-labelledby="inside-title">
+{% comment %}Who the room is for, in the reference site's numbered-card shape.
+No prices and no promises about numbers: each card names a real situation the
+product already handles.{% endcomment %}
+<section class="landing-sec" aria-labelledby="paths-title" data-reveal>
     <div class="sec-head">
+        <span class="sec-label mono" aria-hidden="true">PATHS</span>
+        <h2 id="paths-title">یک اتاق، برای شش جور کلاس</h2>
+        <p class="sec-lead">هر کارت همان چیزی است که آن کلاس واقعاً لازم دارد — بدون اینکه برای بقیه چیزها پول یا وقت بگذارید.</p>
+    </div>
+    <ol class="paths">
+        <li class="path-card">
+            <span class="path-num mono" aria-hidden="true">۰۱</span>
+            <span class="path-ic" aria-hidden="true"><svg><use href="#f-users"/></svg></span>
+            <h3>مدرسه و دبیرستان</h3>
+            <p>کلاس روزانه با حضور و غیاب خودکار و خروجی اکسل برای دفتر مدرسه.</p>
+            <ul class="path-tags"><li>حضور و غیاب</li><li>اتاق انتظار</li></ul>
+        </li>
+        <li class="path-card">
+            <span class="path-num mono" aria-hidden="true">۰۲</span>
+            <span class="path-ic" aria-hidden="true"><svg><use href="#f-board"/></svg></span>
+            <h3>دانشگاه و حل تمرین</h3>
+            <p>تختهٔ چندصفحه‌ای برای اثبات و حل، کنار اسلاید و گفتگوی هم‌زمان.</p>
+            <ul class="path-tags"><li>تختهٔ سفید</li><li>ارائهٔ PDF</li></ul>
+        </li>
+        <li class="path-card">
+            <span class="path-num mono" aria-hidden="true">۰۳</span>
+            <span class="path-ic" aria-hidden="true"><svg><use href="#f-chat"/></svg></span>
+            <h3>آموزشگاه زبان</h3>
+            <p>گفتگوی گروهی، میکروفون کنترل‌شده و واکنش سریع برای کلاس‌های پرجمعیت.</p>
+            <ul class="path-tags"><li>صدا و تصویر</li><li>واکنش</li></ul>
+        </li>
+        <li class="path-card">
+            <span class="path-num mono" aria-hidden="true">۰۴</span>
+            <span class="path-ic" aria-hidden="true"><svg><use href="#f-lock"/></svg></span>
+            <h3>کلاس خصوصی</h3>
+            <p>لینک با رمز و اتاق انتظار، تا فقط همان یک نفر وارد شود.</p>
+            <ul class="path-tags"><li>رمز کلاس</li><li>قفل</li></ul>
+        </li>
+        <li class="path-card">
+            <span class="path-num mono" aria-hidden="true">۰۵</span>
+            <span class="path-ic" aria-hidden="true"><svg><use href="#f-screen"/></svg></span>
+            <h3>کارگاه فنی و برنامه‌نویسی</h3>
+            <p>اشتراک صفحه با کیفیت خوانا، اجرای زنده و پاسخ به سوال‌ها در همان جلسه.</p>
+            <ul class="path-tags"><li>اشتراک صفحه</li><li>سوال کلاسی</li></ul>
+        </li>
+        <li class="path-card">
+            <span class="path-num mono" aria-hidden="true">۰۶</span>
+            <span class="path-ic" aria-hidden="true"><svg><use href="#f-file"/></svg></span>
+            <h3>جلسه و مشاوره</h3>
+            <p>فایل جلسه، تکلیف و پیگیری بعد از تمام‌شدن تماس، همه در همان اتاق.</p>
+            <ul class="path-tags"><li>فایل و تکلیف</li><li>گزارش</li></ul>
+        </li>
+    </ol>
+</section>
+
+{% comment %}A dark band, exactly as the reference alternates light and dark
+sections. Seven tools, each with the limit the server enforces — the band is the
+page's visual anchor, so it may not carry a single invented number.{% endcomment %}
+<section class="landing-sec tools-sec band-dark" aria-labelledby="tools-title" data-reveal>
+    <div class="sec-head">
+        <span class="sec-label mono" aria-hidden="true">TOOLS</span>
+        <h2 id="tools-title">هفت ابزار، <em>یک اتاق</em></h2>
+        <p class="sec-lead">هر ابزار همان‌جایی است که سرِ درس لازم می‌شود؛ بین تب‌ها و پنجره‌ها جابه‌جا نمی‌شوید.</p>
+    </div>
+    <ul class="tools">
+        <li class="tool">
+            <span class="tool-ic" aria-hidden="true"><svg><use href="#f-board"/></svg></span>
+            <div class="tool-body"><strong>تختهٔ سفید</strong><span>رسم، شکل، متن و رنگ — هم‌زمان برای همه.</span></div>
+            <span class="tool-fact mono">۱۲۰۰×۷۰۰</span>
+        </li>
+        <li class="tool">
+            <span class="tool-ic" aria-hidden="true"><svg><use href="#f-screen"/></svg></span>
+            <div class="tool-body"><strong>اشتراک صفحه</strong><span>نمایش اسلاید یا کد، کنار تصویر استاد.</span></div>
+            <span class="tool-fact mono">هم‌زمان</span>
+        </li>
+        <li class="tool">
+            <span class="tool-ic" aria-hidden="true"><svg><use href="#f-video"/></svg></span>
+            <div class="tool-body"><strong>صوت و تصویر زنده</strong><span>روشن و خاموش کردن هر دستگاه با یک دکمه.</span></div>
+            <span class="tool-fact mono">۷۲۰p</span>
+        </li>
+        <li class="tool">
+            <span class="tool-ic" aria-hidden="true"><svg><use href="#f-chat"/></svg></span>
+            <div class="tool-body"><strong>گفتگو</strong><span>پیام عمومی کلاس و پیام خصوصی برای میزبان.</span></div>
+            <span class="tool-fact mono">۲ حالت</span>
+        </li>
+        <li class="tool">
+            <span class="tool-ic" aria-hidden="true"><svg><use href="#f-quiz"/></svg></span>
+            <div class="tool-body"><strong>سوال چهارگزینه‌ای</strong><span>طرح سوال در همان جلسه و دیدن درصد پاسخ‌ها.</span></div>
+            <span class="tool-fact mono">۲–۱۰ گزینه</span>
+        </li>
+        <li class="tool">
+            <span class="tool-ic" aria-hidden="true"><svg><use href="#f-file"/></svg></span>
+            <div class="tool-body"><strong>فایل و تکلیف</strong><span>ارسال فایل درس و تعریف تکلیف با مهلت.</span></div>
+            <span class="tool-fact mono">۲۵ مگابایت</span>
+        </li>
+        <li class="tool">
+            <span class="tool-ic" aria-hidden="true"><svg><use href="#f-report"/></svg></span>
+            <div class="tool-body"><strong>گزارش حضور</strong><span>ورود و خروج خودکار، با خروجی CSV.</span></div>
+            <span class="tool-fact mono">CSV</span>
+        </li>
+    </ul>
+</section>
+
+<section class="landing-sec" aria-labelledby="inside-title" data-reveal>
+    <div class="sec-head">
+        <span class="sec-label mono" aria-hidden="true">ROOM</span>
         <span class="sec-eyebrow">نگاهی به داخل اتاق</span>
         <h2 id="inside-title">همه‌چیز در یک صفحه، بدون تبِ اضافه</h2>
         <p class="sec-lead">اتاق درس طوری چیده شده که هنگام تدریس دنبال چیزی نگردید: تصویر، تخته، گفتگو و سوال، هر کدام سرِ جای خودشان.</p>
@@ -315,8 +538,9 @@ screen readers, so the loop has no visible seam.{% endcomment %}
     </div>
 </section>
 
-<section class="landing-sec" aria-labelledby="cmp-title">
+<section class="landing-sec" aria-labelledby="cmp-title" data-reveal>
     <div class="sec-head">
+        <span class="sec-label mono" aria-hidden="true">COMPARE</span>
         <span class="sec-eyebrow">مقایسه</span>
         <h2 id="cmp-title">چرا کلاس آنلاین، جای بقیه را می‌گیرد</h2>
         <p class="sec-lead">امکاناتی که در ابزارهای بزرگ، پشتِ پلن پولی یا نصب نرم‌افزار قفل شده‌اند — اینجا از روز اول باز است.</p>
@@ -423,8 +647,9 @@ screen readers, so the loop has no visible seam.{% endcomment %}
     <p class="cmp-note">مقایسه بر پایهٔ امکانات پلن‌های رایگان و عمومی این سرویس‌ها در زمان نگارش است و ممکن است با تغییرات آن‌ها متفاوت شود.</p>
 </section>
 
-<section class="landing-sec" aria-labelledby="roles-title">
+<section class="landing-sec" aria-labelledby="roles-title" data-reveal>
     <div class="sec-head">
+        <span class="sec-label mono" aria-hidden="true">ROLES</span>
         <span class="sec-eyebrow">برای هر دو طرف</span>
         <h2 id="roles-title">میزبان کنترل کامل دارد، دانش‌آموز ساده‌ترین مسیر</h2>
     </div>
@@ -456,8 +681,9 @@ screen readers, so the loop has no visible seam.{% endcomment %}
     </div>
 </section>
 
-<section class="landing-sec" aria-labelledby="faq-title">
+<section class="landing-sec" aria-labelledby="faq-title" data-reveal>
     <div class="sec-head">
+        <span class="sec-label mono" aria-hidden="true">FAQ</span>
         <span class="sec-eyebrow">پرسش‌های پرتکرار</span>
         <h2 id="faq-title">قبل از شروع بدانید</h2>
     </div>
@@ -485,7 +711,7 @@ screen readers, so the loop has no visible seam.{% endcomment %}
     </div>
 </section>
 
-<section class="cta-band">
+<section class="cta-band" data-reveal>
     <div class="cta-glow" aria-hidden="true"></div>
     <div class="cta-inner">
         <h2>اولین کلاس آنلاینتان را همین حالا بسازید</h2>

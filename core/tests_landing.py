@@ -21,6 +21,10 @@ from django.test import TestCase
 REPO_ROOT = Path(__file__).resolve().parent.parent
 HOME = REPO_ROOT / "templates" / "home.html"
 MAIN_CSS = REPO_ROOT / "static" / "css" / "main.css"
+#: The landing and the account screens got their own sheet: the app's pages
+#: never load it, and the marketing pages never load room.css. The tests read
+#: both sheets as one document, because a rule may legitimately live in either.
+LANDING_CSS = REPO_ROOT / "static" / "css" / "landing.css"
 
 #: Ranges that cover the emoji blocks used in marketing copy elsewhere.
 EMOJI = re.compile(
@@ -35,7 +39,7 @@ def read(path: Path) -> str:
 class LandingHeroTests(TestCase):
     def setUp(self):
         self.home = read(HOME)
-        self.css = read(MAIN_CSS)
+        self.css = read(MAIN_CSS) + read(LANDING_CSS)
         self.body = self.client.get("/").content.decode()
 
     def test_the_page_still_renders_with_its_old_anchors(self):
@@ -61,12 +65,13 @@ class LandingHeroTests(TestCase):
         stats = stats[: stats.index("</dl>")]
         self.assertEqual(stats.count('class="hero-stat"'), 4)
         self.assertEqual(stats.count("<dt>"), 4)
-        self.assertEqual(stats.count("<dd>"), 4)
+        # `data-count` is the count-up hook; the value is still the text
+        self.assertEqual(stats.count("<dd"), 4)
         for fact in ("لینک ثابت برای هر کلاس", "نصب برای مهمان", "گزینه در هر سوال"):
             self.assertIn(fact, stats)
         # the values are the limits the server actually enforces
         for value in ("۱", "۰", "۲–۱۰"):
-            self.assertIn(f"<dd>{value}</dd>", stats)
+            self.assertRegex(stats, rf">\s*{value}\s*</dd>")
         # no invented popularity metrics of the kind the reference site uses
         for banned in ("کاربر فعال", "دوره‌ی فعال", "مسیر یادگیری", "دانش‌آموز فعال"):
             self.assertNotIn(banned, self.body, banned)
@@ -75,7 +80,7 @@ class LandingHeroTests(TestCase):
 class KeywordRibbonTests(TestCase):
     def setUp(self):
         self.home = read(HOME)
-        self.css = read(MAIN_CSS)
+        self.css = read(MAIN_CSS) + read(LANDING_CSS)
 
     def test_it_is_two_identical_rows_so_the_loop_has_no_seam(self):
         rows = re.findall(r"<ul class=\"ribbon-row\"[^>]*>(.*?)</ul>", self.home, re.S)
@@ -107,7 +112,7 @@ class KeywordRibbonTests(TestCase):
 class MoveCardsTests(TestCase):
     def setUp(self):
         self.home = read(HOME)
-        self.css = read(MAIN_CSS)
+        self.css = read(MAIN_CSS) + read(LANDING_CSS)
 
     def test_three_numbered_moves_each_with_a_picture(self):
         section = self.home[self.home.index('class="moves"'):]
@@ -133,7 +138,7 @@ class MoveCardsTests(TestCase):
 class InsideTheRoomTests(TestCase):
     def setUp(self):
         self.home = read(HOME)
-        self.css = read(MAIN_CSS)
+        self.css = read(MAIN_CSS) + read(LANDING_CSS)
 
     def test_the_showcase_uses_the_same_network_vocabulary_as_the_room(self):
         section = self.home[self.home.index('class="showcase"'):]
@@ -158,7 +163,7 @@ class InsideTheRoomTests(TestCase):
 class LandingStyleRulesTests(TestCase):
     def setUp(self):
         self.home = read(HOME)
-        self.css = read(MAIN_CSS)
+        self.css = read(MAIN_CSS) + read(LANDING_CSS)
 
     def test_no_emoji_in_the_landing_markup(self):
         self.assertEqual(EMOJI.findall(self.home), [])
@@ -198,7 +203,7 @@ class ComparisonTableTests(TestCase):
 
     def setUp(self):
         self.home = read(HOME)
-        self.css = read(MAIN_CSS)
+        self.css = read(MAIN_CSS) + read(LANDING_CSS)
         table = self.home[self.home.index('class="cmp-table"'):]
         self.table = table[: table.index("</table>")]
         self.head = self.table[self.table.index("<thead>"): self.table.index("</thead>")]
@@ -251,7 +256,7 @@ class ComparisonTableTests(TestCase):
 class FaqAccordionTests(TestCase):
     def setUp(self):
         self.home = read(HOME)
-        self.css = read(MAIN_CSS)
+        self.css = read(MAIN_CSS) + read(LANDING_CSS)
 
     def test_answers_are_exclusive_through_the_name_attribute(self):
         items = re.findall(r'<details class="faq-item"([^>]*)>', self.home)
@@ -272,7 +277,7 @@ class FaqAccordionTests(TestCase):
 class ScrollProgressTests(TestCase):
     def setUp(self):
         self.base = read(REPO_ROOT / "templates" / "base.html")
-        self.css = read(MAIN_CSS)
+        self.css = read(MAIN_CSS) + read(LANDING_CSS)
         self.js = read(REPO_ROOT / "static" / "js" / "motion.js")
 
     def test_the_hairline_lives_on_the_header_and_is_hidden_from_screen_readers(self):
@@ -308,3 +313,123 @@ class ScrollProgressTests(TestCase):
         block = self.css[self.css.index("body.is-home .scroll-progress"):]
         block = block[: block.index("@media (hover: none)") if "@media (hover: none)" in block else len(block)]
         self.assertIn("@media (prefers-reduced-motion: no-preference)", block)
+
+
+class EditorialSectionsTests(TestCase):
+    """The reference site's three signature blocks, in our own words.
+
+    The owner asked for the same *shape* as the venue they pointed at: a
+    five-station flow with a live index, numbered audience cards, and one dark
+    band of tools. What may not be borrowed is its habit of printing numbers
+    nobody measures — every figure on these sections is a server limit.
+    """
+
+    def setUp(self):
+        self.home = read(HOME)
+        self.css = read(MAIN_CSS) + read(LANDING_CSS)
+        self.body = self.client.get("/").content.decode()
+
+    def test_five_stations_with_a_live_index(self):
+        flow = self.home[self.home.index('class="landing-sec flow-sec"'):]
+        flow = flow[: flow.index("</ol>")]
+        self.assertEqual(flow.count('class="flow-step'), 5)
+        for step in ("1", "2", "3", "4", "5"):
+            self.assertIn(f'data-step="{step}"', flow)
+        self.assertIn('id="flow-index"', flow)
+        self.assertEqual(flow.count('class="fs-mock" aria-hidden="true"'), 5)
+        # exactly one station starts marked; the script moves the mark
+        self.assertEqual(flow.count("flow-step is-active"), 1)
+
+    def test_the_index_follows_the_station_not_the_mouse(self):
+        js = read(REPO_ROOT / "static" / "js" / "motion.js")
+        self.assertIn("function flowStations()", js)
+        self.assertIn("steps.forEach((el) => el.classList.toggle('is-active', el === step));", js)
+        # one observer, no timer and no scroll listener of its own
+        self.assertEqual(js.count("new IntersectionObserver"), 3)
+
+    def test_six_numbered_audience_cards(self):
+        paths = self.home[self.home.index('class="paths"'):]
+        paths = paths[: paths.index("</ol>")]
+        self.assertEqual(paths.count('class="path-card"'), 6)
+        for numeral in ("۰۱", "۰۲", "۰۳", "۰۴", "۰۵", "۰۶"):
+            self.assertIn(f'<span class="path-num mono" aria-hidden="true">{numeral}</span>', paths)
+
+    def test_the_dark_band_carries_seven_tools_and_no_invented_number(self):
+        tools = self.home[self.home.index('class="landing-sec tools-sec band-dark"'):]
+        tools = tools[: tools.index("</ul>")]
+        self.assertEqual(tools.count('class="tool"'), 7)
+        self.assertIn(".band-dark {", self.css)
+        # the only figures are limits the server enforces
+        for fact in ("۱۲۰۰×۷۰۰", "۷۲۰p", "۲–۱۰ گزینه", "۲۵ مگابایت", "CSV"):
+            self.assertIn(fact, tools)
+
+    def test_the_editorial_labels_are_monospace_and_paired(self):
+        self.assertIn(".mono {", self.css)
+        labels = re.findall(r'<span class="sec-label mono" aria-hidden="true">([A-Z]+)</span>', self.home)
+        self.assertEqual(labels, ["STEPS", "FLOW", "FEATURES", "PATHS", "TOOLS",
+                                  "ROOM", "COMPARE", "ROLES", "FAQ"])
+
+    def test_the_scroll_readout_is_decoration_only(self):
+        base = read(REPO_ROOT / "templates" / "base.html")
+        self.assertIn('<span class="scroll-readout" aria-hidden="true">', base)
+        self.assertIn("body.is-home .scroll-readout { display: inline-flex; }", self.css)
+        self.assertIn("padStart(3, '0')", read(REPO_ROOT / "static" / "js" / "motion.js"))
+
+    def test_the_display_scale_is_smaller_on_a_phone(self):
+        self.assertIn("body.is-home .hero h1 {", self.css)
+        self.assertIn("clamp(2.1rem, 6.4vw, 4.1rem)", self.css)
+
+
+class AccountScreenTests(TestCase):
+    """Signing in is part of the site, not a page that leaves it.
+
+    One column, a hairline above the title, a display headline and underline
+    fields — the same editorial language as the landing page, with nothing that
+    competes with the two inputs.
+    """
+
+    PAGES = (
+        "/accounts/login/",
+        "/accounts/register/",
+        "/accounts/password-reset/",
+        "/accounts/password-reset/done/",
+    )
+
+    def setUp(self):
+        self.css = read(MAIN_CSS) + read(LANDING_CSS)
+        self.login = read(REPO_ROOT / "accounts" / "templates" / "accounts" / "login.html")
+
+    def test_every_account_screen_renders_in_the_new_shell(self):
+        for url in self.PAGES:
+            body = self.client.get(url).content.decode()
+            self.assertIn('class="auth-wrap"', body, url)
+            self.assertIn('class="auth-kicker"', body, url)
+            self.assertIn("landing.css", body, url)
+            self.assertNotIn("auth-box", body, url)
+
+    def test_the_form_is_an_underline_not_a_box(self):
+        start = self.css.index(".auth-form .field input {")
+        field = self.css[start: self.css.index("}", start)]
+        self.assertIn("border: 0;", field)
+        self.assertIn("border-bottom: 1px solid var(--border-strong);", field)
+        self.assertIn("background: transparent;", field)
+        self.assertIn(".auth-form .field:focus-within::after {", self.css)
+        # the browser's default ring is replaced by the rule under the field
+        focus = self.css[self.css.index(".auth-form .field input:focus {"):]
+        focus = focus[: focus.index("}")]
+        self.assertIn("outline: none;", focus)
+
+    def test_the_password_reveal_still_works(self):
+        self.assertIn('class="auth-pass"', self.login)
+        self.assertIn("data-toggle-password", self.login)
+        self.assertIn(".auth-pass .input-action.is-on .icon-eye-off { display: block; }", self.css)
+
+    def test_the_password_meter_has_four_segments(self):
+        register = read(REPO_ROOT / "accounts" / "templates" / "accounts" / "register.html")
+        self.assertIn('<div class="auth-meter" data-pw-meter aria-hidden="true">', register)
+        self.assertEqual(register.count("<span></span>"), 4)
+        self.assertIn('.auth-meter[data-strength="4"] span { background: var(--success); }', self.css)
+
+    def test_no_emoji_and_no_hard_coded_white(self):
+        for url in self.PAGES:
+            self.assertEqual(EMOJI.findall(self.client.get(url).content.decode()), [], url)

@@ -1,13 +1,14 @@
 {% extends "base.html" %}
+{% load static %}
 {% block title %}ورود{% endblock %}
 {% block body_class %}auth-body{% endblock %}
+{% block extra_css %}<link rel="stylesheet" href="{% static 'css/landing.css' %}?v={{ ASSET_V }}">{% endblock %}
 {% block content %}
 <section class="auth-page">
-    <div class="auth-box">
-        <header class="auth-head">
-            <h1 class="auth-title">ورود</h1>
-            <p class="auth-sub">برای دیدن کلاس‌هایتان وارد شوید.</p>
-        </header>
+    <div class="auth-wrap">
+        <p class="auth-kicker"><span class="mono">LOGIN</span> ورود به حساب</p>
+        <h1 class="auth-title">به کلاس برگرد.<br><em>بقیه‌اش یک کلیک است.</em></h1>
+        <p class="auth-sub">با نام کاربری و رمز خودت وارد شو؛ کلاس‌ها، فایل‌ها و گزارش‌هایت همان‌جا منتظرند.</p>
 
         <form method="post" novalidate class="auth-form">
             {% csrf_token %}
@@ -39,13 +40,14 @@
             <button type="submit" class="btn btn-primary btn-lg btn-block">ورود</button>
         </form>
 
-        <p class="auth-switch">حساب ندارید؟ <a href="{% url 'accounts:register' %}">ساخت حساب</a></p>
+        <div class="auth-foot">
+            <p class="auth-switch">حساب ندارید؟ <a href="{% url 'accounts:register' %}">ساخت حساب</a></p>
+            <p class="auth-note">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="10.5" width="16" height="10.5" rx="2.4"/><path d="M8 10.5V7.8a4 4 0 0 1 8 0v2.7"/></svg>
+                اطلاعات ورود رمزنگاری‌شده ذخیره می‌شود.
+            </p>
+        </div>
     </div>
-
-    <p class="auth-note">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="10.5" width="16" height="10.5" rx="2.4"/><path d="M8 10.5V7.8a4 4 0 0 1 8 0v2.7"/></svg>
-        اطلاعات ورود شما رمزنگاری‌شده ذخیره می‌شود.
-    </p>
 </section>
 {% endblock %}
 

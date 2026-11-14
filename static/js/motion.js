@@ -34,7 +34,8 @@
         '.card', '.stat-card', '.feature', '.classroom-card',
         '.section-title', '.table-wrap', '.auth-card', '.lobby-card', '.status-page',
         '.sec-head', '.step', '.role-card', '.faq-item', '.cta-band', '.cmp-wrap',
-        '.move', '.showcase',
+        '.move', '.showcase', '.flow-step', '.path-card', '.tool',
+        '.flow-index', '.band-dark .sec-head',
     ];
 
     function tagReveals() {
@@ -106,7 +107,7 @@
 
     function animateStats() {
         if (reduced()) return;
-        document.querySelectorAll('.stat-value').forEach((el) => {
+        document.querySelectorAll('.stat-value, .hero-stat dd[data-count]').forEach((el) => {
             if (!('IntersectionObserver' in window)) return countUp(el);
             const io = new IntersectionObserver((entries) => {
                 if (entries.some((e) => e.isIntersecting)) {
@@ -176,6 +177,39 @@
         });
     }
 
+    // ---- 4b. the five stations ---------------------------------------------
+    // The reference site numbers its flow section and marks the station you are
+    // reading. Same idea here: one observer, one class, and the index in the
+    // section head follows it. Nothing moves on its own.
+    function flowStations() {
+        const steps = Array.from(document.querySelectorAll('.flow-step'));
+        const index = document.getElementById('flow-index');
+        if (!steps.length) return;
+
+        const FA = ['۰۱', '۰۲', '۰۳', '۰۴', '۰۵', '۰۶', '۰۷', '۰۸', '۰۹'];
+
+        const activate = (step) => {
+            steps.forEach((el) => el.classList.toggle('is-active', el === step));
+            const n = Number(step.dataset.step || 1);
+            if (index) index.textContent = FA[n - 1] || String(n);
+        };
+
+        if (!('IntersectionObserver' in window)) {
+            activate(steps[0]);
+            return;
+        }
+
+        const io = new IntersectionObserver((entries) => {
+            // the entry closest to the middle of the viewport wins
+            const visible = entries
+                .filter((e) => e.isIntersecting)
+                .sort((a, b) => Math.abs(a.boundingClientRect.top) - Math.abs(b.boundingClientRect.top));
+            if (visible.length) activate(visible[0].target);
+        }, { rootMargin: '-38% 0px -45% 0px', threshold: 0 });
+
+        steps.forEach((el) => io.observe(el));
+    }
+
     // ---- 5. sticky header + scrollable nav affordances -----------------------
     // The header changes height between breakpoints (and shrinks once the page
     // is scrolled), so its measured height is published for scroll offsets —
@@ -210,8 +244,14 @@
         let ticking = false;
         const sync = () => {
             ticking = false;
+            const fraction = scrollFraction();
             header.classList.toggle('is-scrolled', window.scrollY > 8);
-            if (bar) bar.style.setProperty('--progress', scrollFraction().toFixed(4));
+            if (bar) bar.style.setProperty('--progress', fraction.toFixed(4));
+            // The reference site prints the same number as a monospace counter
+            // in the header. Zero-padded and left-to-right: it is a readout,
+            // not a sentence.
+            const readout = document.querySelector('[data-scroll-value]');
+            if (readout) readout.textContent = String(Math.round(fraction * 100)).padStart(3, '0');
         };
         window.addEventListener('scroll', () => {
             if (ticking) return;
@@ -252,6 +292,7 @@
         tagReveals();
         observeReveals();
         animateStats();
+        flowStations();
         heroParallax();
         document.addEventListener('pointerdown', ripple, { passive: true });
     }

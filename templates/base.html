@@ -41,6 +41,14 @@
             </span>
         </a>
 
+        {% comment %}The landing page prints how far down the visitor is, as a
+        monospace counter — the same device the reference site uses. It is
+        decoration (the scrollbar already says this), so it is hidden from AT and
+        only exists on the landing page. motion.js fills it.{% endcomment %}
+        <span class="scroll-readout" aria-hidden="true">
+            <i>SCROLL</i><b data-scroll-value>000</b><s>%</s>
+        </span>
+
         {# Phone/tablet: one button. Desktop: hidden — the nav is inline. #}
         <button type="button" class="nav-toggle" id="nav-toggle" data-nav-toggle
                 aria-expanded="false" aria-controls="main-nav" aria-label="باز کردن منو">

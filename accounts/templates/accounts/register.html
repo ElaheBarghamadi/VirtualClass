@@ -1,13 +1,14 @@
 {% extends "base.html" %}
+{% load static %}
 {% block title %}ثبت‌نام{% endblock %}
 {% block body_class %}auth-body{% endblock %}
+{% block extra_css %}<link rel="stylesheet" href="{% static 'css/landing.css' %}?v={{ ASSET_V }}">{% endblock %}
 {% block content %}
 <section class="auth-page">
-    <div class="auth-box">
-        <header class="auth-head">
-            <h1 class="auth-title">ساخت حساب</h1>
-            <p class="auth-sub">در یک دقیقه کلاس اولتان را بسازید.</p>
-        </header>
+    <div class="auth-wrap">
+        <p class="auth-kicker"><span class="mono">SIGNUP</span> ساخت حساب</p>
+        <h1 class="auth-title">یک دقیقه وقت،<br><em>اولین کلاس تا آخر امشب.</em></h1>
+        <p class="auth-sub">فقط نام کاربری، ایمیل و یک رمز. نه کارت بانکی، نه نصب، نه مرحلهٔ تأیید اجباری.</p>
 
         <form method="post" novalidate class="auth-form">
             {% csrf_token %}
@@ -52,7 +53,7 @@
                         <svg class="icon-eye-off" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.4 12S6 5.6 12 5.6c1.5 0 2.9.4 4.1 1M21.6 12S18 18.4 12 18.4c-1.5 0-2.9-.4-4.1-1"/><path d="M4 4l16 16"/></svg>
                     </button>
                 </div>
-                <div class="auth-meter" data-pw-meter aria-hidden="true"><span></span></div>
+                <div class="auth-meter" data-pw-meter aria-hidden="true"><span></span><span></span><span></span><span></span></div>
                 {% if form.password1.errors %}<p class="field-error">{{ form.password1.errors.0 }}</p>{% endif %}
             </div>
 
@@ -65,13 +66,14 @@
             <button type="submit" class="btn btn-primary btn-lg btn-block">ساخت حساب</button>
         </form>
 
-        <p class="auth-switch">حساب دارید؟ <a href="{% url 'accounts:login' %}">ورود</a></p>
+        <div class="auth-foot">
+            <p class="auth-switch">حساب دارید؟ <a href="{% url 'accounts:login' %}">ورود</a></p>
+            <p class="auth-note">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="10.5" width="16" height="10.5" rx="2.4"/><path d="M8 10.5V7.8a4 4 0 0 1 8 0v2.7"/></svg>
+                رمز شما رمزنگاری‌شده ذخیره می‌شود.
+            </p>
+        </div>
     </div>
-
-    <p class="auth-note">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="10.5" width="16" height="10.5" rx="2.4"/><path d="M8 10.5V7.8a4 4 0 0 1 8 0v2.7"/></svg>
-        رمز شما رمزنگاری‌شده ذخیره می‌شود؛ هیچ‌وقت به کسی نمایش داده نمی‌شود.
-    </p>
 </section>
 {% endblock %}
 
@@ -89,12 +91,11 @@
         });
     });
 
-    // One thin line of feedback. Django's validators still decide; this only
-    // tells the author whether they are getting closer.
+    // One line of feedback. Django's validators still decide; this only tells
+    // the author whether they are getting closer.
     var pw = document.getElementById('id_password1');
     var meter = document.querySelector('[data-pw-meter]');
     if (pw && meter) {
-        var bar = meter.querySelector('span');
         pw.addEventListener('input', function () {
             var v = pw.value || '';
             var score = 0;
@@ -104,7 +105,6 @@
             if (/[0-9]/.test(v) && /[^A-Za-z0-9]/.test(v)) score++;
             if (!v) score = 0;
             meter.dataset.strength = String(score);
-            bar.style.setProperty('--pw', (score * 25) + '%');
         });
     }
 })();
