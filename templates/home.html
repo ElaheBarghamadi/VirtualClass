@@ -26,7 +26,11 @@
 
 <section class="hero">
     <span class="hero-badge"><span class="dot" aria-hidden="true"></span> بدون نصب، در مرورگر — آماده در چند ثانیه</span>
-    <h1>کلاس آنلاینتان را <span class="grad">در یک لینک</span> بسازید</h1>
+    <h1>
+        کلاس آنلاینتان را
+        <span class="hl"><span class="hl-text">در یک لینک</span><svg class="hl-stroke" viewBox="0 0 220 18" aria-hidden="true" preserveAspectRatio="none"><path d="M4 12.6c22-6.4 44-9.4 66-9.2 22 .2 44 3.4 66 9.4"/><path d="M10 16.4c30-4.4 60-6 90-5.4 30 .6 60 3 90 7"/></svg></span>
+        بسازید
+    </h1>
     <p class="hero-sub">
         ویدیو و صدای زنده، اشتراک صفحه، تخته سفید هم‌زمان، سوالات و تکلیف، گفتگو و مدیریت کامل
         شرکت‌کنندگان — همه در یک اتاق ساده با لینک اختصاصی و رمز دلخواه.
@@ -48,6 +52,28 @@
         <li><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#f-check"/></svg> بدون کارت بانکی</li>
         <li><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#f-check"/></svg> روی موبایل و دسکتاپ</li>
     </ul>
+
+    {% comment %}Numbers here are facts about the product, not invented usage
+    statistics: one permanent link per class, nothing to install for a guest, and
+    the quiz limits the server actually enforces.{% endcomment %}
+    <dl class="hero-stats">
+        <div class="hero-stat">
+            <dt>لینک ثابت برای هر کلاس</dt>
+            <dd>۱</dd>
+        </div>
+        <div class="hero-stat">
+            <dt>نصب برای مهمان</dt>
+            <dd>۰</dd>
+        </div>
+        <div class="hero-stat">
+            <dt>گزینه در هر سوال</dt>
+            <dd>۲–۱۰</dd>
+        </div>
+        <div class="hero-stat">
+            <dt>ابزار هم‌زمان در یک اتاق</dt>
+            <dd>۶</dd>
+        </div>
+    </dl>
 
     <div class="hero-preview" aria-hidden="true">
         <div class="hp-glow"></div>
@@ -75,7 +101,7 @@
             </div>
         </div>
         <div class="hp-float hp-float-a">
-            <span class="hp-float-dot"></span> ۲۴ نفر آنلاین
+            <span class="hp-float-dot"></span> ۱۲ نفر آنلاین
         </div>
         <div class="hp-float hp-float-b">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 1.8v11.4" stroke-linecap="round"/><rect x="8.4" y="1.8" width="7.2" height="11.4" rx="3.6"/><path d="M6 11.6v.8a6 6 0 0 0 12 0v-.8M12 18.6v3.6M8.6 22.2h6.8" stroke-linecap="round"/></svg>
@@ -91,7 +117,36 @@
         <li>اتاق انتظار</li>
         <li>اشتراک فایل</li>
     </ul>
+
 </section>
+
+{% comment %}A quiet ribbon of keywords: the same shape as the venue we took the
+layout from, but carrying *our* vocabulary. Two copies, the second hidden from
+screen readers, so the loop has no visible seam.{% endcomment %}
+<div class="ribbon">
+    <div class="ribbon-track">
+        <ul class="ribbon-row">
+            <li>تخته سفید</li><li class="ribbon-sep" aria-hidden="true"></li>
+            <li>اشتراک صفحه</li><li class="ribbon-sep" aria-hidden="true"></li>
+            <li>صدا و تصویر زنده</li><li class="ribbon-sep" aria-hidden="true"></li>
+            <li>اتاق انتظار</li><li class="ribbon-sep" aria-hidden="true"></li>
+            <li>سوال چهارگزینه‌ای</li><li class="ribbon-sep" aria-hidden="true"></li>
+            <li>تکلیف و فایل درس</li><li class="ribbon-sep" aria-hidden="true"></li>
+            <li>گزارش حضور</li><li class="ribbon-sep" aria-hidden="true"></li>
+            <li>واکنش برق‌آسا</li><li class="ribbon-sep" aria-hidden="true"></li>
+        </ul>
+        <ul class="ribbon-row" aria-hidden="true">
+            <li>تخته سفید</li><li class="ribbon-sep"></li>
+            <li>اشتراک صفحه</li><li class="ribbon-sep"></li>
+            <li>صدا و تصویر زنده</li><li class="ribbon-sep"></li>
+            <li>اتاق انتظار</li><li class="ribbon-sep"></li>
+            <li>سوال چهارگزینه‌ای</li><li class="ribbon-sep"></li>
+            <li>تکلیف و فایل درس</li><li class="ribbon-sep"></li>
+            <li>گزارش حضور</li><li class="ribbon-sep"></li>
+            <li>واکنش برق‌آسا</li><li class="ribbon-sep"></li>
+        </ul>
+    </div>
+</div>
 
 <section class="landing-sec" aria-labelledby="how-title">
     <div class="sec-head">
@@ -99,21 +154,40 @@
         <h2 id="how-title">از ساختن کلاس تا شروع درس</h2>
         <p class="sec-lead">بدون تنظیمات پیچیده و بدون نصب نرم‌افزار؛ کل مسیر کمتر از یک دقیقه است.</p>
     </div>
-    <ol class="steps">
-        <li class="step">
-            <span class="step-num" aria-hidden="true">۱</span>
-            <h3>کلاس را بساز</h3>
-            <p>نام، رمز دلخواه و تنظیمات اتاق را انتخاب کن؛ همان لحظه لینک اختصاصی کلاس آماده می‌شود.</p>
+    <ol class="moves">
+        <li class="move">
+            <span class="move-num" aria-hidden="true">۰۱</span>
+            <div class="move-body">
+                <h3>کلاس را بساز</h3>
+                <p>نام، رمز دلخواه و تنظیمات اتاق را انتخاب کن؛ همان لحظه لینک اختصاصی کلاس آماده می‌شود.</p>
+            </div>
+            <div class="move-mock" aria-hidden="true">
+                <div class="mm-row"><span class="mm-dot"></span><span class="mm-line w70"></span></div>
+                <div class="mm-row"><span class="mm-chip">رمز دلخواه</span><span class="mm-chip">اتاق انتظار</span></div>
+                <div class="mm-row"><span class="mm-btn"></span></div>
+            </div>
         </li>
-        <li class="step">
-            <span class="step-num" aria-hidden="true">۲</span>
-            <h3>لینک را بفرست</h3>
-            <p>لینک را کپی کن و در گروه یا پیام بفرست؛ دانش‌آموزان بدون حساب و بدون نصب وارد می‌شوند.</p>
+        <li class="move">
+            <span class="move-num" aria-hidden="true">۰۲</span>
+            <div class="move-body">
+                <h3>لینک را بفرست</h3>
+                <p>لینک را کپی کن و در گروه یا پیام بفرست؛ دانش‌آموزان بدون حساب و بدون نصب وارد می‌شوند.</p>
+            </div>
+            <div class="move-mock" aria-hidden="true">
+                <div class="mm-link"><span>class/ab12cd</span><span class="mm-copy"></span></div>
+                <div class="mm-row"><span class="mm-avatar">س</span><span class="mm-avatar">ر</span><span class="mm-avatar">ع</span><span class="mm-note">بدون ثبت‌نام</span></div>
+            </div>
         </li>
-        <li class="step">
-            <span class="step-num" aria-hidden="true">۳</span>
-            <h3>درس را شروع کن</h3>
-            <p>دوربین و میکروفون، تخته سفید، اشتراک صفحه، گفتگو و سوالات کلاسی — همه در یک صفحه و هم‌زمان.</p>
+        <li class="move">
+            <span class="move-num" aria-hidden="true">۰۳</span>
+            <div class="move-body">
+                <h3>درس را شروع کن</h3>
+                <p>دوربین و میکروفون، تخته سفید، اشتراک صفحه، گفتگو و سوالات کلاسی — همه در یک صفحه و هم‌زمان.</p>
+            </div>
+            <div class="move-mock" aria-hidden="true">
+                <div class="mm-tiles"><span class="mm-tile"></span><span class="mm-tile mm-board"></span></div>
+                <div class="mm-bar"><span class="mm-pill"></span><span class="mm-pill"></span><span class="mm-pill mm-pill-on"></span></div>
+            </div>
         </li>
     </ol>
 </section>
@@ -165,6 +239,79 @@
             <strong>گزارش حضور با خروجی CSV</strong>
             <span>ورود و خروج هر نفر خودکار ثبت می‌شود؛ گزارش هر جلسه را در اکسل باز کنید.</span>
         </div>
+    </div>
+</section>
+
+<section class="landing-sec" aria-labelledby="inside-title">
+    <div class="sec-head">
+        <span class="sec-eyebrow">نگاهی به داخل اتاق</span>
+        <h2 id="inside-title">همه‌چیز در یک صفحه، بدون تبِ اضافه</h2>
+        <p class="sec-lead">اتاق درس طوری چیده شده که هنگام تدریس دنبال چیزی نگردید: تصویر، تخته، گفتگو و سوال، هر کدام سرِ جای خودشان.</p>
+    </div>
+
+    <div class="showcase">
+        <div class="showcase-mock" aria-hidden="true">
+            <div class="sc-head">
+                <span class="sc-live"><i></i> زنده</span>
+                <span class="sc-title">کلاس ریاضی — فصل سوم</span>
+                <span class="sc-net" data-quality="poor">ضعیف</span>
+            </div>
+            <div class="sc-grid">
+                <div class="sc-tile is-speaking">
+                    <span class="sc-avatar">م</span>
+                    <span class="sc-name">مدرس</span>
+                    <span class="sc-badge">در حال صحبت</span>
+                </div>
+                <div class="sc-tile">
+                    <span class="sc-avatar">س</span>
+                    <span class="sc-name">سارا</span>
+                    <span class="sc-badge sc-badge-net" data-quality="good">خوب</span>
+                </div>
+                <div class="sc-tile sc-board">
+                    <span class="sc-board-line l1"></span>
+                    <span class="sc-board-line l2"></span>
+                    <span class="sc-board-line l3"></span>
+                    <span class="sc-board-tag">تختهٔ هم‌زمان</span>
+                </div>
+            </div>
+            <div class="sc-bar">
+                <span class="sc-pill"><svg viewBox="0 0 24 24"><use href="#f-video"/></svg></span>
+                <span class="sc-pill"><svg viewBox="0 0 24 24"><use href="#f-chat"/></svg> گفتگو</span>
+                <span class="sc-pill"><svg viewBox="0 0 24 24"><use href="#f-quiz"/></svg> سوال</span>
+                <span class="sc-pill is-primary"><svg viewBox="0 0 24 24"><use href="#f-users"/></svg> ۱۲</span>
+            </div>
+        </div>
+
+        <ul class="showcase-list">
+            <li>
+                <span class="sl-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#f-bolt"/></svg></span>
+                <div>
+                    <strong>همیشه معلوم است چه کسی حرف می‌زند</strong>
+                    <span>حلقهٔ پاستلی دور کاشی و نشانگر سطح صدا از خودِ صدا خوانده می‌شود، نه از یک انیمیشن تزئینی.</span>
+                </div>
+            </li>
+            <li>
+                <span class="sl-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#f-report"/></svg></span>
+                <div>
+                    <strong>کیفیت شبکه با عدد، نه با حدس</strong>
+                    <span>نرخ دریافت، تأخیر، درصد افت بسته و مسیر (مستقیم یا رله) از بسته‌های واقعی خوانده می‌شود؛ کسی که اینترنتش ضعیف است، ضعیف نشان داده می‌شود.</span>
+                </div>
+            </li>
+            <li>
+                <span class="sl-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#f-lock"/></svg></span>
+                <div>
+                    <strong>دسترسی، تصمیم شماست</strong>
+                    <span>میکروفون، دوربین، گفتگو و تخته برای هر نفر جدا باز می‌شود؛ تا وقتی اجازه ندهید، دانش‌آموز فقط تماشاگر است.</span>
+                </div>
+            </li>
+            <li>
+                <span class="sl-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#f-board"/></svg></span>
+                <div>
+                    <strong>تخته‌ای که برای همه یک اندازه است</strong>
+                    <span>ابعاد تخته را ارائه‌دهنده تعیین می‌کند و همان نسبت روی موبایل و دسکتاپ دیده می‌شود — بدون بُرش و بدون خط‌خوردگی.</span>
+                </div>
+            </li>
+        </ul>
     </div>
 </section>
 
