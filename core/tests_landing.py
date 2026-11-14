@@ -386,11 +386,12 @@ class EditorialSectionsTests(TestCase):
 
 
 class AccountScreenTests(TestCase):
-    """Signing in is part of the site, not a page that leaves it.
+    """Signing in is one card in the middle of the page.
 
-    One column, a hairline above the title, a display headline and underline
-    fields — the same editorial language as the landing page, with nothing that
-    competes with the two inputs.
+    The reference site's account pages are a single centred card — brand mark,
+    headline, one sentence, labelled fields, one wide button, then «یا» and the
+    other ways in.  We reproduce that shape with our own content; the point of
+    these tests is that the shape (and every route inside it) stays real.
     """
 
     PAGES = (
@@ -404,36 +405,72 @@ class AccountScreenTests(TestCase):
         self.css = read(MAIN_CSS) + read(LANDING_CSS)
         self.login = read(REPO_ROOT / "accounts" / "templates" / "accounts" / "login.html")
 
-    def test_every_account_screen_renders_in_the_new_shell(self):
+    def test_every_account_screen_renders_as_one_centred_card(self):
         for url in self.PAGES:
             body = self.client.get(url).content.decode()
+            self.assertIn('class="auth-page"', body, url)
             self.assertIn('class="auth-wrap"', body, url)
-            self.assertIn('class="auth-kicker"', body, url)
+            self.assertIn('class="auth-card"', body, url)
+            self.assertIn('class="auth-logo"', body, url)
             self.assertIn("landing.css", body, url)
+            # the two rejected shapes must not come back
+            self.assertNotIn("auth-kicker", body, url)
             self.assertNotIn("auth-box", body, url)
 
-    def test_the_form_is_an_underline_not_a_box(self):
+    def test_the_card_is_the_only_surface(self):
+        start = self.css.index(".auth-card {")
+        card = self.css[start: self.css.index("}", start)]
+        self.assertIn("background: var(--surface);", card)
+        self.assertIn("border: 1px solid var(--border);", card)
+        self.assertIn("border-radius: var(--radius-lg);", card)
+        self.assertIn("box-shadow: var(--shadow);", card)
+        # the page itself is empty space, not a second panel
+        self.assertIn("place-items: center;", self.css[self.css.index(".auth-page {"):][:200])
+
+    def test_fields_are_boxes_with_one_focus_ring(self):
         start = self.css.index(".auth-form .field input {")
         field = self.css[start: self.css.index("}", start)]
-        self.assertIn("border: 0;", field)
-        self.assertIn("border-bottom: 1px solid var(--border-strong);", field)
-        self.assertIn("background: transparent;", field)
-        self.assertIn(".auth-form .field:focus-within::after {", self.css)
-        # the browser's default ring is replaced by the rule under the field
+        self.assertIn("height: 48px;", field)
+        self.assertIn("border-radius: 12px;", field)
+        self.assertIn("border: 1px solid var(--border);", field)
+        self.assertIn("background: var(--surface-2);", field)
         focus = self.css[self.css.index(".auth-form .field input:focus {"):]
         focus = focus[: focus.index("}")]
         self.assertIn("outline: none;", focus)
+        self.assertIn("border-color: var(--primary);", focus)
+        self.assertIn("box-shadow: 0 0 0 4px color-mix(in srgb, var(--primary) 16%, transparent);", focus)
+
+    def test_the_primary_action_is_one_wide_button(self):
+        start = self.css.index(".auth-form .btn-block {")
+        button = self.css[start: self.css.index("}", start)]
+        self.assertIn("width: 100%;", button)
+        self.assertIn("min-height: 50px;", button)
+        self.assertIn('class="btn btn-primary btn-lg btn-block"', self.login)
 
     def test_the_password_reveal_still_works(self):
         self.assertIn('class="auth-pass"', self.login)
         self.assertIn("data-toggle-password", self.login)
-        self.assertIn(".auth-pass .input-action.is-on .icon-eye-off { display: block; }", self.css)
+        self.assertIn(".is-on .icon-eye-off { display: block; }", self.css)
 
     def test_the_password_meter_has_four_segments(self):
         register = read(REPO_ROOT / "accounts" / "templates" / "accounts" / "register.html")
         self.assertIn('<div class="auth-meter" data-pw-meter aria-hidden="true">', register)
         self.assertEqual(register.count("<span></span>"), 4)
         self.assertIn('.auth-meter[data-strength="4"] span { background: var(--success); }', self.css)
+
+    def test_the_divider_leads_only_to_routes_that_exist(self):
+        self.assertIn('<p class="auth-or">یا</p>', self.login)
+        self.assertIn('class="auth-alts"', self.login)
+        self.assertIn('class="auth-alt"', self.login)
+        body = self.client.get("/accounts/login/").content.decode()
+        hrefs = set(re.findall(r'<a class="auth-alt" href="([^"]+)"', body))
+        self.assertEqual(hrefs, {"/accounts/register/", "/accounts/password-reset/"})
+        # the reference has SMS/Google rows; we do not, so we do not show them
+        lowered = body.lower()
+        for invented in ("google", "پیامک", "بله", "یکبارمصرف"):
+            self.assertNotIn(invented, lowered)
+        for href in hrefs:
+            self.assertEqual(self.client.get(href).status_code, 200, href)
 
     def test_no_emoji_and_no_hard_coded_white(self):
         for url in self.PAGES:

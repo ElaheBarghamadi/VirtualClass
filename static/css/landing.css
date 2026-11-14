@@ -3,8 +3,9 @@
    --------------------------------------------------------------------------
    Loaded by templates/home.html and every accounts/* template (through
    `extra_css`), never by the app itself: the room and the dashboard keep their
-   own, denser layer.  This file is the editorial layer — monospace micro-labels,
-   hairline rules, display type, and the one accent gradient.
+   own, denser layer.  This file is the marketing layer — one centred card for
+   the account screens, and the editorial landing below it: monospace
+   micro-labels, hairline rules, display type, and the one accent gradient.
 
    Order matters in here:
      1. account screens (below),
@@ -27,262 +28,391 @@
 }
 
 /* ==========================================================================
-   Account screens — one column, editorial
+   Account screens — one centred card, like the reference
 
-   The form is not a card floating in a void any more: it is a sheet of paper
-   with a hairline above the title, a display headline, and fields that are
-   underlines rather than boxes.  Nothing is decorative, nothing competes with
-   the two inputs, and the whole page reads like the landing page above it —
-   which is the point: signing in should not feel like leaving the site.
+   The reference login page is a single card in the middle of an empty page:
+   brand mark, one headline, one sentence, labelled fields, one wide button,
+   then «یا» and the other ways in.  That is the whole design — so this block
+   is the whole design too.  No split screen, no decoration, no invented rows:
+   every alternate route below belongs to a route this product really has.
    ========================================================================== */
 .auth-body { background: var(--background); }
 
+/* The page is the room around the card.  Vertical breathing room is capped so
+   a short laptop screen never has to scroll for the button. */
 .auth-page {
-    display: flex;
-    justify-content: center;
-    padding: clamp(1.4rem, 5vw, 3.4rem) 0 clamp(2.4rem, 7vw, 4.5rem);
+    display: grid;
+    place-items: center;
+    min-height: min(78vh, 720px);
+    padding: clamp(1.2rem, 4.5vw, 2.6rem) 0 clamp(2rem, 6vw, 3.4rem);
 }
 
 .auth-wrap {
-    width: min(30rem, 100%);
-    padding-inline: clamp(.2rem, 2vw, 0rem);
+    position: relative;
+    isolation: isolate;
+    width: min(27rem, 100%);
     display: grid;
-    gap: clamp(.9rem, 2.4vw, 1.35rem);
+    gap: clamp(.9rem, 2.4vw, 1.2rem);
 }
 
-/* the hairline that turns the form into a sheet */
+/* A single soft glow behind the card: it separates the card from the page
+   without drawing a single visible shape. */
 .auth-wrap::before {
     content: "";
-    height: 1px;
-    background: linear-gradient(to left,
-        color-mix(in srgb, var(--primary) 55%, transparent),
-        var(--border) 40%,
-        transparent);
-    margin-bottom: .1rem;
+    position: absolute;
+    inset: -1.6rem -2rem auto;
+    height: 16rem;
+    z-index: -1;
+    pointer-events: none;
+    background: radial-gradient(ellipse at 50% 0,
+        color-mix(in srgb, var(--primary) 14%, transparent),
+        transparent 68%);
 }
 
-.auth-kicker {
-    display: flex;
-    align-items: center;
-    gap: .55rem;
-    margin: 0;
-    font-size: .82rem;
-    font-weight: 650;
-    color: var(--text-secondary);
+.auth-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow);
+    padding: clamp(1.35rem, 4.5vw, 1.9rem);
+    display: grid;
+    gap: clamp(.85rem, 2.6vw, 1.1rem);
 }
-.auth-kicker::before {
-    content: "";
-    width: 6px; height: 6px;
-    border-radius: 2px;
-    background: var(--primary);
-    transform: rotate(45deg);
-    flex: none;
+
+/* --- brand mark ----------------------------------------------------------- */
+.auth-logo {
+    width: 54px;
+    height: 54px;
+    display: grid;
+    place-items: center;
+    border-radius: 16px;
+    background: var(--gradient-brand);
+    box-shadow: var(--shadow-glow);
+    justify-self: center;
 }
-.auth-kicker .mono { color: var(--primary); }
+
+.auth-logo svg {
+    width: 26px;
+    height: 26px;
+    fill: none;
+    stroke: #fff;
+    stroke-width: 1.7;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+/* --- headline ------------------------------------------------------------- */
+.auth-head {
+    display: grid;
+    gap: .35rem;
+    text-align: center;
+}
 
 .auth-title {
     margin: 0;
-    font-size: clamp(1.85rem, 5.4vw, 2.7rem);
+    font-size: 1.4rem;
     font-weight: 800;
-    line-height: 1.24;
-    letter-spacing: -.02em;
+    line-height: 1.45;
+    letter-spacing: -.01em;
     color: var(--text);
 }
+
 .auth-title em {
     font-style: normal;
-    background: var(--gradient-brand);
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
+    color: var(--primary);
 }
 
 .auth-sub {
     margin: 0;
-    max-width: 34ch;
+    font-size: .85rem;
+    line-height: 1.85;
     color: var(--muted);
-    font-size: .9rem;
-    line-height: 1.9;
 }
 
-/* ---------- the form: underlines, not boxes ---------- */
-.auth-form { display: grid; gap: .35rem; margin-top: .35rem; }
-
-.auth-form .field { margin: 0 0 .55rem; position: relative; }
-
-.auth-form .field label,
-.auth-form .label-row label {
-    display: block;
-    margin: 0 0 .1rem;
-    font-size: .74rem;
-    font-weight: 700;
-    letter-spacing: .04em;
-    color: var(--muted);
-    transition: color .18s var(--ease);
+/* --- fields --------------------------------------------------------------- */
+.auth-form {
+    display: grid;
+    gap: .95rem;
+    margin-top: .3rem;
 }
 
-.auth-form .label-row {
+.auth-form .field {
+    display: grid;
+    gap: .4rem;
+}
+
+.auth-form .field label {
+    font-size: .82rem;
+    font-weight: 600;
+    color: var(--text);
+    line-height: 1.6;
+}
+
+.label-row {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     justify-content: space-between;
-    gap: .6rem;
-    margin-bottom: .1rem;
+    gap: .5rem;
 }
-.auth-form .label-hint { font-size: .72rem; color: var(--muted); }
-.auth-form .label-link {
-    font-size: .74rem;
-    font-weight: 650;
-    color: var(--primary);
-    text-decoration: none;
-    border-bottom: 1px solid color-mix(in srgb, var(--primary) 40%, transparent);
-}
-.auth-form .label-link:hover { border-bottom-color: var(--primary); }
 
+.label-link,
+.label-hint {
+    font-size: .78rem;
+    line-height: 1.6;
+}
+
+.label-link {
+    color: var(--primary);
+    font-weight: 600;
+    text-decoration: none;
+}
+
+.label-link:hover { color: var(--primary-hover); }
+
+.label-hint { color: var(--muted); }
+
+/* 16px on small screens is applied by the app layer; here the box just needs
+   to read as a field and to light up only while it has focus. */
 .auth-form .field input {
     width: 100%;
-    margin: 0;
-    padding: .62rem .1rem .55rem;
-    border: 0;
-    border-bottom: 1px solid var(--border-strong);
-    border-radius: 0;
-    background: transparent;
+    height: 48px;
+    padding: 0 .9rem;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    background: var(--surface-2);
     color: var(--text);
-    font-size: 1rem;
-    line-height: 1.5;
-    transition: border-color .18s var(--ease), background .18s var(--ease);
+    font: inherit;
+    font-size: .95rem;
+    transition: border-color .16s ease, box-shadow .16s ease, background-color .16s ease;
 }
-.auth-form .field input:hover:not(:focus) { border-bottom-color: var(--text-secondary); }
+
+.auth-form .field input::placeholder { color: var(--muted); opacity: .8; }
+
 .auth-form .field input:focus {
     outline: none;
-    border-bottom-color: var(--primary);
-    background: color-mix(in srgb, var(--primary) 4%, transparent);
+    border-color: var(--primary);
+    background: var(--surface);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--primary) 16%, transparent);
 }
-.auth-form .field:focus-within label { color: var(--primary); }
-/* the focus ring moves from the (invisible) box to the rule under the field */
-.auth-form .field:focus-within::after {
-    content: "";
-    position: absolute;
-    inset-inline: 0;
-    bottom: 0;
-    height: 2px;
-    background: var(--primary);
-    border-radius: 2px;
-    animation: auth-rule .28s var(--ease);
-}
-@keyframes auth-rule { from { transform: scaleX(.2); opacity: .3; } to { transform: none; opacity: 1; } }
 
-.auth-form .field input::placeholder { color: color-mix(in srgb, var(--muted) 70%, transparent); }
+/* password: the reveal button lives inside the field */
+.auth-pass { position: relative; }
 
-/* the eye button sits under the rule, not inside a box */
-.auth-pass { position: relative; display: flex; align-items: center; }
-.auth-pass input { padding-inline-end: 2.4rem; }
+.auth-pass input { padding-inline-end: 2.9rem; }
+
 .auth-pass .input-action {
     position: absolute;
-    inset-inline-end: 0;
-    bottom: .3rem;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 2rem; height: 2rem;
+    inset-inline-end: .42rem;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 34px;
+    height: 34px;
+    display: grid;
+    place-items: center;
     border: 0;
-    border-radius: 8px;
+    border-radius: 9px;
     background: transparent;
     color: var(--muted);
     cursor: pointer;
+    transition: color .16s ease, background-color .16s ease;
 }
-.auth-pass .input-action:hover { color: var(--primary); background: var(--primary-soft); }
+
+.auth-pass .input-action:hover { color: var(--text); background: var(--surface-3); }
+.auth-pass .input-action:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 28%, transparent);
+}
+
 .auth-pass .input-action svg {
-    width: 17px; height: 17px;
-    fill: none; stroke: currentColor; stroke-width: 1.8;
-    stroke-linecap: round; stroke-linejoin: round;
+    width: 18px;
+    height: 18px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.7;
+    stroke-linecap: round;
+    stroke-linejoin: round;
 }
-.auth-pass .icon-eye-off { display: none; }
-.auth-pass .input-action.is-on .icon-eye { display: none; }
-.auth-pass .input-action.is-on .icon-eye-off { display: block; }
 
-/* the one action: full width, flat, and clearly the end of the form */
-.auth-form .btn-block {
-    width: 100%;
-    margin-top: .5rem;
-    min-height: 50px;
-    border-radius: 12px;
-    font-size: .95rem;
-    font-weight: 750;
-    letter-spacing: .01em;
+.icon-eye-off,
+.is-on .icon-eye { display: none; }
+.is-on .icon-eye-off { display: block; }
+
+.auth-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: .7rem;
 }
-.auth-form .btn-primary {
-    background: var(--primary);
-    color: var(--on-primary);
-    box-shadow: none;
+
+/* a four-step readout under the new password; it never judges, Django does */
+.auth-meter {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: .3rem;
+    margin-top: .1rem;
 }
-.auth-form .btn-primary:hover:not(:disabled) { background: var(--primary-hover); filter: none; }
 
-.auth-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0 .85rem; }
-
-.auth-meter { display: flex; gap: 4px; margin: .5rem 0 0; }
 .auth-meter span {
-    height: 3px; flex: 1; border-radius: 2px;
-    background: var(--border-strong);
-    transition: background .2s var(--ease);
+    height: 4px;
+    border-radius: var(--radius-pill);
+    background: var(--border);
+    transition: background-color .2s ease;
 }
-.auth-meter[data-strength="1"] span:nth-child(-n+1) { background: var(--danger); }
+
+.auth-meter:not([data-strength="1"]):not([data-strength="2"]):not([data-strength="3"]):not([data-strength="4"]) span {
+    opacity: .55;
+}
+
+.auth-meter[data-strength="1"] span:nth-child(1) { background: var(--danger); }
+.auth-meter[data-strength="1"] span:nth-child(2),
+.auth-meter[data-strength="1"] span:nth-child(3),
+.auth-meter[data-strength="1"] span:nth-child(4) { opacity: .55; }
+
 .auth-meter[data-strength="2"] span:nth-child(-n+2) { background: var(--warning); }
-.auth-meter[data-strength="3"] span:nth-child(-n+3) { background: var(--primary); }
+
+.auth-meter[data-strength="3"] span:nth-child(-n+3) { background: var(--info); }
+
 .auth-meter[data-strength="4"] span { background: var(--success); }
 
 .auth-error {
-    margin: 0 0 .35rem;
-    padding: .6rem .8rem;
+    margin: 0;
+    padding: .55rem .75rem;
     border-radius: 10px;
-    border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
-    background: color-mix(in srgb, var(--danger) 7%, var(--surface));
-    color: color-mix(in srgb, var(--danger) 72%, var(--text));
-    font-size: .84rem;
-    line-height: 1.7;
+    border: 1px solid color-mix(in srgb, var(--danger) 32%, transparent);
+    background: var(--danger-soft);
+    color: var(--danger);
+    font-size: .82rem;
+    line-height: 1.8;
 }
 
-/* ---------- the small print under the form ---------- */
-.auth-foot {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: .5rem 1rem;
-    margin-top: .3rem;
-    padding-top: .9rem;
-    border-top: 1px solid var(--border);
-}
-.auth-switch { margin: 0; font-size: .86rem; color: var(--muted); }
-.auth-switch a {
-    color: var(--text);
+/* --- the one action ------------------------------------------------------- */
+.auth-form .btn-block {
+    width: 100%;
+    min-height: 50px;
+    margin-top: .15rem;
+    font-size: .95rem;
     font-weight: 700;
-    text-decoration: none;
-    border-bottom: 1px solid var(--primary);
-    padding-bottom: 1px;
+    gap: .4rem;
 }
-.auth-switch a:hover { color: var(--primary); }
+
+.btn-block .ic {
+    width: 18px;
+    height: 18px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.9;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+/* --- «یا» and the other ways in ------------------------------------------- */
+.auth-or {
+    display: flex;
+    align-items: center;
+    gap: .7rem;
+    margin: 0;
+    color: var(--muted);
+    font-size: .78rem;
+    line-height: 1;
+}
+
+.auth-or::before,
+.auth-or::after {
+    content: "";
+    flex: 1 1 auto;
+    height: 1px;
+    background: var(--border);
+}
+
+.auth-alts { display: grid; gap: .5rem; }
+
+.auth-alt {
+    display: flex;
+    align-items: center;
+    gap: .6rem;
+    min-height: 46px;
+    padding: 0 .85rem;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--text);
+    font-size: .87rem;
+    font-weight: 600;
+    text-decoration: none;
+    transition: border-color .16s ease, background-color .16s ease, color .16s ease;
+}
+
+.auth-alt:hover {
+    border-color: color-mix(in srgb, var(--primary) 42%, var(--border));
+    background: var(--surface);
+    color: var(--primary-hover);
+}
+
+.auth-alt:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 26%, transparent);
+}
+
+.auth-alt .ic {
+    width: 18px;
+    height: 18px;
+    flex: 0 0 auto;
+    fill: none;
+    stroke: var(--primary);
+    stroke-width: 1.7;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+/* --- the line under the card ---------------------------------------------- */
+.auth-foot {
+    display: grid;
+    justify-items: center;
+    gap: .45rem;
+    text-align: center;
+}
+
 .auth-note {
     margin: 0;
-    display: inline-flex;
+    display: flex;
     align-items: center;
+    justify-content: center;
     gap: .35rem;
-    font-size: .72rem;
+    color: var(--muted);
+    font-size: .76rem;
+    line-height: 1.9;
+}
+
+.auth-note svg {
+    width: 14px;
+    height: 14px;
+    flex: 0 0 auto;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.7;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.auth-switch {
+    margin: 0;
+    text-align: center;
+    font-size: .85rem;
     color: var(--muted);
 }
-.auth-note svg {
-    width: 13px; height: 13px; flex: none;
-    fill: none; stroke: currentColor; stroke-width: 1.8;
-    stroke-linecap: round; stroke-linejoin: round;
-}
-/* reset pages: a centred sentence and one link, no form */
-.auth-plain { display: grid; gap: 1rem; }
-.auth-plain p { margin: 0; color: var(--muted); line-height: 1.9; }
-.auth-plain .btn { justify-self: start; }
+
+.auth-switch a { color: var(--primary); font-weight: 600; text-decoration: none; }
+.auth-switch a:hover { color: var(--primary-hover); text-decoration: underline; }
+
+/* reset pages: a sentence and one way onward, no form */
+.auth-plain { display: grid; gap: .9rem; justify-items: stretch; }
+.auth-plain p { margin: 0; color: var(--muted); font-size: .88rem; line-height: 1.95; text-align: center; }
+.auth-plain .btn { width: 100%; min-height: 48px; }
 
 @media (max-width: 520px) {
-    .auth-page { padding-top: 1rem; }
-    .auth-wrap { gap: 1rem; }
-    .auth-row { grid-template-columns: minmax(0, 1fr); gap: 0; }
-    .auth-foot { flex-direction: column; align-items: flex-start; }
+    .auth-page { min-height: 0; padding-top: 1rem; }
+    .auth-card { padding: 1.25rem; border-radius: var(--radius); }
+    .auth-title { font-size: 1.25rem; }
+    .auth-row { grid-template-columns: minmax(0, 1fr); gap: .95rem; }
 }
 
 /* ==========================================================================
