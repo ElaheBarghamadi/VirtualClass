@@ -191,3 +191,120 @@ class LandingStyleRulesTests(TestCase):
         self.assertIn("html.js-anim body.is-home .ribbon-track {", block)
         self.assertIn("html.js-anim body.is-home .sc-live i {", block)
         self.assertIn("html.js-anim body.is-home .hero h1 .hl-stroke path {", block)
+
+
+class ComparisonTableTests(TestCase):
+    """The table is a claim; the numbers above it must be the proof."""
+
+    def setUp(self):
+        self.home = read(HOME)
+        self.css = read(MAIN_CSS)
+        table = self.home[self.home.index('class="cmp-table"'):]
+        self.table = table[: table.index("</table>")]
+        self.head = self.table[self.table.index("<thead>"): self.table.index("</thead>")]
+        self.body = self.table[self.table.index("<tbody>"): self.table.index("</tbody>")]
+
+    @staticmethod
+    def _fa(text: str) -> int:
+        return int(text.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")))
+
+    def test_each_column_scores_what_its_rows_actually_say(self):
+        rows = re.findall(r'<th scope="row">.*?</th>(.*?)</tr>', self.body, re.S)
+        self.assertEqual(len(rows), 10)
+        columns = list(zip(*[re.findall(r'class="cmp-(yes|no|part)"', row) for row in rows]))
+        self.assertEqual(len(columns), 4)
+        shown = [self._fa(n) for n in re.findall(r"<b>([۰-۹]+)</b>", self.head)]
+        self.assertEqual(len(shown), 4)
+        self.assertEqual(shown, [col.count("yes") for col in columns])
+
+    def test_the_count_is_labelled_so_it_cannot_be_read_as_a_grade(self):
+        self.assertEqual(self.head.count('class="cmp-score"'), 4)
+        self.assertEqual(self.head.count("از ۱۰ مورد") > 0, True)
+        self.assertIn('class="cmp-us"', self.head)
+
+    def test_a_legend_names_every_state_used_in_the_body(self):
+        legend = self.home[self.home.index('class="cmp-legend"'):]
+        legend = legend[: legend.index("</p>")]
+        for state in ("cmp-yes", "cmp-part", "cmp-no"):
+            self.assertIn(state, legend)
+            self.assertIn(state, self.body)
+        self.assertIn(".cmp-legend .cmp-legend-note", self.css)
+
+    def test_the_row_label_stays_put_when_a_phone_scrolls_sideways(self):
+        # several 720px blocks exist; find the one that pins the comparison table
+        starts = [m.start() for m in re.finditer(r"@media \(max-width: 720px\)", self.css)]
+        self.assertTrue(starts)
+        phone = next(
+            block for block in (
+                self.css[at: self.css.index("@media", at + 10)]
+                for at in starts
+            )
+            if ".cmp-table tbody th," in block
+        )
+        self.assertIn("position: sticky;", phone)
+        self.assertIn("inset-inline-start: 0;", phone)
+        self.assertIn("z-index: 3;", phone)
+        # the rule must not leak into the desktop layout
+        self.assertNotIn("tbody th {\n    position: sticky", self.css[: starts[0]])
+
+
+class FaqAccordionTests(TestCase):
+    def setUp(self):
+        self.home = read(HOME)
+        self.css = read(MAIN_CSS)
+
+    def test_answers_are_exclusive_through_the_name_attribute(self):
+        items = re.findall(r'<details class="faq-item"([^>]*)>', self.home)
+        self.assertEqual(len(items), 5)
+        for attrs in items:
+            self.assertIn('name="faq"', attrs)
+
+    def test_exactly_one_answer_starts_open(self):
+        self.assertEqual(self.home.count('<details class="faq-item" name="faq" open>'), 1)
+
+    def test_the_open_state_is_visible_without_javascript(self):
+        self.assertIn(".faq-item[open] {", self.css)
+        self.assertIn("color-mix(in srgb, var(--primary) 26%, var(--border))", self.css)
+        # the entrance animation is decoration, so it is opt-in
+        self.assertIn("html.js-anim body.is-home .faq-item[open] p {", self.css)
+
+
+class ScrollProgressTests(TestCase):
+    def setUp(self):
+        self.base = read(REPO_ROOT / "templates" / "base.html")
+        self.css = read(MAIN_CSS)
+        self.js = read(REPO_ROOT / "static" / "js" / "motion.js")
+
+    def test_the_hairline_lives_on_the_header_and_is_hidden_from_screen_readers(self):
+        self.assertIn('<span class="scroll-progress" aria-hidden="true"></span>', self.base)
+        self.assertIn("</header>", self.base)
+
+    def test_it_only_appears_on_the_landing_page(self):
+        self.assertIn("body.is-home .scroll-progress {", self.css)
+        # no unguarded rule of its own anywhere in the sheet
+        self.assertEqual(
+            re.findall(r"(?m)^\.scroll-progress\s*\{", self.css), []
+        )
+        self.assertIn("bottom: -1px;", self.css)
+
+    def test_it_grows_from_the_right_in_rtl(self):
+        self.assertIn("transform: scaleX(var(--progress, 0));", self.css)
+        self.assertIn("transform-origin: 100% 50%;", self.css)
+        self.assertIn('[dir="ltr"] body.is-home .scroll-progress { transform-origin: 0% 50%; }', self.css)
+
+    def test_the_script_clamps_the_fraction_and_resyncs_when_the_page_resizes(self):
+        self.assertIn("function scrollFraction()", self.js)
+        self.assertIn("Math.min(1, Math.max(0, window.scrollY / scrollable))", self.js)
+        self.assertIn("if (scrollable <= 8) return 0;", self.js)
+        self.assertIn("setProperty('--progress'", self.js)
+        self.assertIn("window.addEventListener('resize', sync, { passive: true });", self.js)
+        self.assertIn("window.addEventListener('load', sync);", self.js)
+
+    def test_one_raf_drives_both_header_states(self):
+        self.assertEqual(self.js.count("requestAnimationFrame(sync)"), 1)
+        self.assertIn("classList.toggle('is-scrolled'", self.js)
+
+    def test_reduced_motion_keeps_the_bar_but_drops_the_easing(self):
+        block = self.css[self.css.index("body.is-home .scroll-progress"):]
+        block = block[: block.index("@media (hover: none)") if "@media (hover: none)" in block else len(block)]
+        self.assertIn("@media (prefers-reduced-motion: no-preference)", block)

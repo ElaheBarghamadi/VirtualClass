@@ -321,16 +321,25 @@ screen readers, so the loop has no visible seam.{% endcomment %}
         <h2 id="cmp-title">چرا کلاس آنلاین، جای بقیه را می‌گیرد</h2>
         <p class="sec-lead">امکاناتی که در ابزارهای بزرگ، پشتِ پلن پولی یا نصب نرم‌افزار قفل شده‌اند — اینجا از روز اول باز است.</p>
     </div>
+    {% comment %}The count in each column is derived from the ten rows below: it
+    counts full ticks only, never partials. A test recomputes it from the table
+    so the number and the ticks can never disagree.{% endcomment %}
+    <p class="cmp-legend">
+        <span class="cmp-yes"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#c-yes"/></svg> دارد</span>
+        <span class="cmp-part"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#c-part"/></svg> بخشی</span>
+        <span class="cmp-no"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#c-no"/></svg> ندارد</span>
+        <span class="cmp-legend-note">ستون ما بدون پلن پولی، کامل است.</span>
+    </p>
     <div class="cmp-wrap">
         <table class="cmp-table">
             <caption class="sr-only">مقایسهٔ امکانات کلاس آنلاین با زوم، گوگل میت و بیگ‌بلوباتن</caption>
             <thead>
                 <tr>
                     <th scope="col">امکانات</th>
-                    <th scope="col" class="cmp-us">کلاس آنلاین</th>
-                    <th scope="col">Zoom</th>
-                    <th scope="col">Google Meet</th>
-                    <th scope="col">BigBlueButton</th>
+                    <th scope="col" class="cmp-us">کلاس آنلاین<span class="cmp-score"><b>۱۰</b><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#c-yes"/></svg><span class="visually-hidden">از ۱۰ مورد، همه را کامل دارد</span></span></th>
+                    <th scope="col">Zoom<span class="cmp-score"><b>۳</b><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#c-yes"/></svg><span class="visually-hidden">از ۱۰ مورد، ۳ مورد را کامل دارد</span></span></th>
+                    <th scope="col">Google Meet<span class="cmp-score"><b>۲</b><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#c-yes"/></svg><span class="visually-hidden">از ۱۰ مورد، ۲ مورد را کامل دارد</span></span></th>
+                    <th scope="col">BigBlueButton<span class="cmp-score"><b>۵</b><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#c-yes"/></svg><span class="visually-hidden">از ۱۰ مورد، ۵ مورد را کامل دارد</span></span></th>
                 </tr>
             </thead>
             <tbody>
@@ -453,23 +462,23 @@ screen readers, so the loop has no visible seam.{% endcomment %}
         <h2 id="faq-title">قبل از شروع بدانید</h2>
     </div>
     <div class="faq">
-        <details class="faq-item">
+        <details class="faq-item" name="faq" open>
             <summary>برای استفاده باید چیزی نصب کنم؟</summary>
             <p>نه. کلاس کاملاً در مرورگر اجرا می‌شود؛ کافی است لینک اتاق را باز کنید. برای بهترین تجربه از کروم، اج یا فایرفاکس به‌روز استفاده کنید.</p>
         </details>
-        <details class="faq-item">
+        <details class="faq-item" name="faq">
             <summary>چند نفر می‌توانند هم‌زمان در کلاس باشند؟</summary>
             <p>اگر سرور رسانه (LiveKit) پیکربندی شده باشد، تعداد شرکت‌کنندگان به منابع سرور شما بستگی دارد. در حالت همتا‌به‌همتا (mesh) کار تا حدود ۱۲ نفر روان است.</p>
         </details>
-        <details class="faq-item">
+        <details class="faq-item" name="faq">
             <summary>بدون سرور رسانه هم صدا و تصویر کار می‌کند؟</summary>
             <p>بله، در حالت همتا‌به‌همتا تصویر و صدا مستقیم بین مرورگرها رد و بدل می‌شود. برای کلاس‌های بزرگ‌تر، اتصال LiveKit پایدارتر و سبک‌تر است.</p>
         </details>
-        <details class="faq-item">
+        <details class="faq-item" name="faq">
             <summary>کلاس خصوصی است؟</summary>
             <p>هر کلاس لینک یکتا دارد و می‌توانید رمز بگذارید، اتاق انتظار را فعال کنید و در میانهٔ درس اتاق را قفل کنید تا کسی تازه وارد نشود.</p>
         </details>
-        <details class="faq-item">
+        <details class="faq-item" name="faq">
             <summary>روی موبایل و اینترنت ضعیف چطور؟</summary>
             <p>رابط برای صفحه‌های کوچک طراحی شده و نوار ابزار اتاق روی موبایل جداگانه چیده می‌شود. در شبکهٔ ضعیف می‌توانید دوربین را خاموش کنید و فقط با صدا و تخته سفید ادامه دهید.</p>
         </details>

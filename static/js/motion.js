@@ -34,6 +34,7 @@
         '.card', '.stat-card', '.feature', '.classroom-card',
         '.section-title', '.table-wrap', '.auth-card', '.lobby-card', '.status-page',
         '.sec-head', '.step', '.role-card', '.faq-item', '.cta-band', '.cmp-wrap',
+        '.move', '.showcase',
     ];
 
     function tagReveals() {
@@ -192,19 +193,34 @@
         window.addEventListener('load', apply);
     }
 
+    // How far down the page we are, as 0…1, written to the header hairline.
+    // Measured from the *document* height so a page that grows (images, fonts,
+    // an opened FAQ answer) reports honestly instead of overshooting.
+    function scrollFraction() {
+        const doc = document.documentElement;
+        const scrollable = doc.scrollHeight - window.innerHeight;
+        if (scrollable <= 8) return 0;
+        return Math.min(1, Math.max(0, window.scrollY / scrollable));
+    }
+
     function headerState() {
         const header = document.querySelector('.site-header');
         if (!header) return;
+        const bar = document.querySelector('.scroll-progress');
         let ticking = false;
         const sync = () => {
             ticking = false;
             header.classList.toggle('is-scrolled', window.scrollY > 8);
+            if (bar) bar.style.setProperty('--progress', scrollFraction().toFixed(4));
         };
         window.addEventListener('scroll', () => {
             if (ticking) return;
             ticking = true;
             requestAnimationFrame(sync);
         }, { passive: true });
+        // a resize or a late font/resource changes the total height
+        window.addEventListener('resize', sync, { passive: true });
+        window.addEventListener('load', sync);
         sync();
     }
 

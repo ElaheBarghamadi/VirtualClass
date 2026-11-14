@@ -124,6 +124,25 @@ code {
     box-shadow: 0 18px 40px -30px color-mix(in srgb, var(--text) 55%, transparent);
     background: var(--glass-strong);
 }
+/* Landing only: a hairline that fills as the page scrolls.  It sits on the
+   header's bottom border (bottom: -1px) so it reads as the page's own edge, and
+   it is driven by --progress (0…1) which motion.js writes under one rAF.  In RTL
+   the bar grows from the right, which is where the reading eye starts. */
+body.is-home .scroll-progress {
+    position: absolute;
+    inset-inline: 0;
+    bottom: -1px;
+    height: 2px;
+    border-radius: 2px;
+    background: var(--gradient-brand);
+    transform: scaleX(var(--progress, 0));
+    transform-origin: 100% 50%;
+    pointer-events: none;
+}
+[dir="ltr"] body.is-home .scroll-progress { transform-origin: 0% 50%; }
+@media (prefers-reduced-motion: no-preference) {
+    body.is-home .scroll-progress { transition: transform .12s linear; }
+}
 .header-inner {
     display: flex; align-items: center; justify-content: space-between;
     /* one row, always: the parts that do not fit are hidden by the breakpoint
@@ -1096,6 +1115,19 @@ code {
     margin: 0; padding: 0 1.15rem 1.15rem;
     color: var(--muted); font-size: .875rem; line-height: 1.95;
 }
+/* The items share `name="faq"`, so opening one closes the rest natively — the
+   page never turns into a wall of five open answers.  Browsers without
+   exclusive-accordion support simply keep several open; nothing breaks. */
+.faq-item[open] {
+    border-color: color-mix(in srgb, var(--primary) 26%, var(--border));
+}
+.faq-item[open] summary { font-weight: 750; }
+html.js-anim body.is-home .faq-item[open] p {
+    animation: faq-open .3s var(--ease) both;
+}
+@keyframes faq-open {
+    from { opacity: 0; transform: translateY(-1px); }
+}
 
 /* --- closing call to action ---------------------------------------------- */
 .cta-band {
@@ -1646,12 +1678,92 @@ code {
     color: var(--muted);
     max-width: 62ch;
 }
+
+/* A count of full ticks per column, derived from the rows themselves — it says
+   "how many of the ten this tool has outright", never how good it is overall. */
+.cmp-table thead th .cmp-score {
+    display: inline-flex;
+    align-items: center;
+    gap: .18rem;
+    margin-inline-start: .38rem;
+    padding: .04rem .38rem;
+    border-radius: var(--radius-pill, 999px);
+    font-size: .68rem;
+    font-weight: 800;
+    letter-spacing: 0;
+    color: var(--text-secondary);
+    background: color-mix(in oklab, var(--text) 7%, transparent);
+}
+.cmp-table thead th .cmp-score b { font-weight: 800; }
+.cmp-table thead th .cmp-score svg {
+    width: 10px;
+    height: 10px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 3.2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+.cmp-table thead th.cmp-us .cmp-score {
+    color: var(--primary);
+    background: var(--primary-soft);
+}
+
+.cmp-legend {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .4rem .45rem;
+    margin: 0 0 .75rem;
+    font-size: .76rem;
+    color: var(--muted);
+}
+.cmp-legend > span {
+    display: inline-flex;
+    align-items: center;
+    gap: .3rem;
+    padding: .12rem .55rem;
+    border-radius: 999px;
+    font-size: .74rem;
+    font-weight: 700;
+}
+.cmp-legend svg {
+    width: 12px;
+    height: 12px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2.9;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+.cmp-legend .cmp-legend-note {
+    background: none;
+    padding: 0;
+    color: var(--muted);
+    font-weight: 500;
+    margin-inline-start: auto;
+}
 @media (hover: none) {
     .cmp-table tbody tr:hover { background: transparent; }
     .cmp-table tbody tr:nth-child(even) { background: color-mix(in oklab, var(--text) 2.5%, transparent); }
 }
 @media (max-width: 720px) {
     .cmp-hint { display: flex; }
+    /* On a phone the table scrolls sideways; pin the feature name so a tick
+       never loses the row it belongs to.  (The UI is RTL, so the pinned column
+       sits on the right and the shadow falls on its left edge.) */
+    .cmp-table tbody th,
+    .cmp-table thead th:first-child {
+        position: sticky;
+        inset-inline-start: 0;
+        z-index: 3;
+        background: var(--surface);
+        box-shadow: 1px 0 0 var(--border) inset;
+    }
+    .cmp-table thead th:first-child { z-index: 4; }
+    .cmp-table tbody tr:nth-child(even) th {
+        background: color-mix(in oklab, var(--text) 2.5%, var(--surface));
+    }
     .cmp-table { font-size: 0.82rem; }
     .cmp-table tbody th { min-width: 170px; font-size: 0.8rem; }
     .cmp-table th,

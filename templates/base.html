@@ -104,6 +104,10 @@
             </div>
         </nav>
     </div>
+    {% comment %}How far down the page we are, drawn as a hairline on the
+    header's bottom edge. Decorative — the scrollbar already says this — so it is
+    hidden from assistive tech and only appears on the landing page.{% endcomment %}
+    <span class="scroll-progress" aria-hidden="true"></span>
 </header>
 <div class="nav-scrim" data-nav-scrim></div>
 {% endwith %}
