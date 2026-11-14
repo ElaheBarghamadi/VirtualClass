@@ -529,6 +529,65 @@ class RtcSignalRelayTests(TransactionTestCase):
 
         async_to_sync(scenario)()
 
+    def test_a_batched_ice_envelope_is_relayed_whole(self):
+        """Coalesced candidates travel as one envelope, untouched.
+
+        The client batches ICE candidates (one WebSocket message per short
+        window instead of one per candidate) to stay under the per-connection
+        rate budget.  The server relays the ``data`` dict opaquely, so a batch
+        must arrive exactly as it was sent — a single candidate or an array.
+        """
+        async def scenario():
+            owner_ws = await self._connected(self.owner)
+            stu_ws = await self._connected(self.student)
+
+            batch = {
+                "ice": [
+                    {"candidate": "candidate:1 1 udp 2122260223 10.0.0.2 5000 typ host", "sdpMid": "0"},
+                    {"candidate": "candidate:2 1 udp 1686052607 203.0.113.5 6000 typ srflx", "sdpMid": "0"},
+                ],
+                "screen": False,
+            }
+            await owner_ws.send_json_to({
+                "action": "rtc_signal", "to_member_id": self.stu_member.id, "data": batch,
+            })
+            msg = await self._receive_typed(stu_ws, "rtc_signal")
+            assert msg["data"] == batch, msg
+            await self._close(owner_ws)
+            await self._close(stu_ws)
+
+        async_to_sync(scenario)()
+
+    def test_repeating_the_same_media_state_is_not_rebroadcast(self):
+        """An unchanged announcement costs nothing and reaches nobody.
+
+        Both media engines announce their state on every intermediate step, and
+        again after a socket reconnect.  Broadcasting each repeat meant a DB
+        read plus a message to every participant for information the room
+        already had.
+        """
+        async def scenario():
+            owner_ws = await self._connected(self.owner)
+            stu_ws = await self._connected(self.student)
+
+            mic_on = {"action": "media_state", "mic_on": True,
+                      "camera_on": False, "screen_sharing": False}
+            await stu_ws.send_json_to(mic_on)
+            first = await self._receive_typed(owner_ws, "media_state")
+            assert first["participant"]["mic_on"] is True, first
+
+            # Same state again, then a real change.  Broadcasts are ordered, so
+            # the *next* media_state the owner sees must be the change: if the
+            # repeat had been rebroadcast, the stale «mic on» would arrive first.
+            await stu_ws.send_json_to(mic_on)
+            await stu_ws.send_json_to({**mic_on, "mic_on": False})
+            changed = await self._receive_typed(owner_ws, "media_state")
+            assert changed["participant"]["mic_on"] is False, changed
+            await self._close(owner_ws)
+            await self._close(stu_ws)
+
+        async_to_sync(scenario)()
+
     def test_rtc_signal_cannot_reach_a_stranger(self):
         async def scenario():
             owner_ws = await self._connected(self.owner)

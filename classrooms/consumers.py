@@ -305,7 +305,14 @@ class ClassroomConsumer(SafeJsonWebsocketConsumer):
             if any(type(value) is not bool for value in state.values()):
                 await self.send_json({"type": "error", "message": "وضعیت رسانه باید بولی باشد."})
                 return
-            _media_states[(self.room_code, self.member.id)] = state
+            # Repeated announcements are the norm, not the exception: both
+            # media engines emit on every intermediate step and again when the
+            # socket reconnects.  An unchanged state has nothing new to say, so
+            # skip both the payload query and the broadcast to every peer.
+            key = (self.room_code, self.member.id)
+            if _media_states.get(key) == state:
+                return
+            _media_states[key] = state
             payload = await self._self_payload()
             payload.update(state)
             await self.channel_layer.group_send(
@@ -606,17 +613,15 @@ class ClassroomConsumer(SafeJsonWebsocketConsumer):
         """Deliver a signalling envelope to one active classmate."""
         from .services import notify_member
 
-        sender = ClassroomMember.objects.filter(
-            id=self.member.id, classroom=self.classroom,
-            is_active=True, in_waiting_room=False, classroom__is_active=True,
-        ).select_related("user").first()
-        if sender is None:
-            return
+        # The sender was validated by ``_member_active_now()`` a moment ago (one
+        # query per message); re-reading the same row here doubled the database
+        # cost of every SDP and ICE envelope this relay carries.
+        sender = self.member
         target = ClassroomMember.objects.filter(
             classroom=self.classroom, id=to_member_id, is_active=True,
             in_waiting_room=False, classroom__is_active=True,
         ).first()
-        if target is None or target.id == sender.id:
+        if target is None or target.id == self.member.id:
             return
         notify_member(self.room_code, target, {
             "type": "rtc_signal",

@@ -39,6 +39,23 @@ let ICE_SERVERS = DEFAULT_ICE_SERVERS;
 const CONNECT_TIMEOUT_MS = 10000;
 const DISCONNECT_GRACE_MS = 3000;
 
+/**
+ * Signalling volume is a *server* concern, not a bandwidth one.
+ *
+ * Every envelope here becomes one Django WebSocket message, and the server
+ * keeps a hard per-connection budget (`RECEIVE_RATE_LIMIT`, 20 messages a
+ * second).  A single negotiation used to send one message per ICE candidate —
+ * easily a dozen per peer, so three peers joining at once blew through the
+ * budget and the overflow was dropped.  A dropped candidate looks exactly like
+ * «the camera works sometimes»: the SDP arrived, the path never completed.
+ *
+ * Candidates are therefore coalesced into one envelope per short window (and
+ * the receiver accepts either a single candidate or an array).  Same media
+ * quality, a fraction of the traffic, and no silent drops.
+ */
+const ICE_BATCH_WINDOW_MS = 120;
+const ICE_BATCH_MAX = 16;   // × ~600 B worst-case TURN candidate stays well under the 16 KB cap
+
 /** Does the deployment provide a TURN relay?  Without one, strict NATs
  *  (corporate / mobile networks) can never be traversed and the failure
  *  message has to say so instead of hinting at a mystery. */
@@ -60,8 +77,15 @@ class PeerLink {
         this.remoteScreenStream = null;
         this.failed = false;                   // gave up — shown in the UI
         this.retried = false;                  // one automatic ICE restart
+        this.closed = false;                   // no signals after this
         this._watchdog = null;
         this._recovery = null;
+        // One queue per connection: the media PC and the screen PC are
+        // different endpoints, so their candidates can never share a batch.
+        this._iceQueues = {
+            media: { list: [], timer: null },
+            screen: { list: [], timer: null },
+        };
         this.pc = this._makePc(false);
         // One sampler per link: two cumulative getStats() snapshots become the
         // kbit/s, loss, jitter and RTT the network panel shows.
@@ -92,9 +116,15 @@ class PeerLink {
             }
         }
         pc.onicecandidate = (e) => {
-            if (e.candidate) {
-                this.mesh._signal(this.peer.member_id, { ice: e.candidate, screen: isScreen });
+            if (this.closed) return;
+            const key = isScreen ? 'screen' : 'media';
+            // A null/empty candidate is the end-of-gathering marker: flush
+            // whatever is queued instead of sending an empty envelope.
+            if (!e.candidate || !e.candidate.candidate) {
+                this._flushIce(key);
+                return;
             }
+            this._queueIce(key, e.candidate);
         };
         pc.ontrack = (e) => {
             const stream = e.streams[0] || new MediaStream([e.track]);
@@ -107,13 +137,19 @@ class PeerLink {
             }
         };
         pc.onnegotiationneeded = async () => {
+            if (this.closed) return;
             try {
                 this.makingOffer = true;
-                await pc.setLocalDescription(await pc.createOffer());
+                const offer = await pc.createOffer();
+                // The link may have been closed while the offer was being
+                // built (peer left); offering into a dead PC only produces
+                // console noise and pointless server traffic.
+                if (this.closed || pc.signalingState === 'closed') return;
+                await pc.setLocalDescription(offer);
                 this.mesh._signal(this.peer.member_id, { sdp: pc.localDescription, screen: isScreen });
                 if (!isScreen) this.armWatchdog();
             } catch (err) {
-                console.warn('[mesh] negotiation failed:', err);
+                if (!this.closed) console.warn('[mesh] negotiation failed:', err);
             } finally {
                 this.makingOffer = false;
             }
@@ -135,6 +171,33 @@ class PeerLink {
         return pc;
     }
 
+    /** Coalesce one ICE candidate into the pending batch for this endpoint. */
+    _queueIce(key, candidate) {
+        const q = this._iceQueues && this._iceQueues[key];
+        if (!q || this.closed) return;
+        q.list.push(candidate);
+        if (q.list.length >= ICE_BATCH_MAX) { this._flushIce(key); return; }
+        if (q.timer) return;
+        q.timer = setTimeout(() => {
+            q.timer = null;
+            this._flushIce(key);
+        }, ICE_BATCH_WINDOW_MS);
+    }
+
+    /** Send whatever is queued as a single envelope (or nothing). */
+    _flushIce(key) {
+        const q = this._iceQueues && this._iceQueues[key];
+        if (!q) return;
+        if (q.timer) { clearTimeout(q.timer); q.timer = null; }
+        if (!q.list.length) return;
+        const batch = q.list.splice(0, q.list.length);
+        if (this.closed) return;
+        this.mesh._signal(this.peer.member_id, {
+            ice: batch.length === 1 ? batch[0] : batch,
+            screen: key === 'screen',
+        });
+    }
+
     _isUp(pc) {
         return pc.connectionState === 'connected'
             || pc.iceConnectionState === 'connected'
@@ -147,7 +210,7 @@ class PeerLink {
      * a failure, it is just idle.
      */
     armWatchdog() {
-        if (this._watchdog || this._isUp(this.pc)) return;
+        if (this.closed || this._watchdog || this._isUp(this.pc)) return;
         this._watchdog = setTimeout(() => {
             this._watchdog = null;
             if (!this._isUp(this.pc)) this._recover();
@@ -214,6 +277,7 @@ class PeerLink {
      * then give up and let the UI explain what is wrong.
      */
     _recover() {
+        if (this.closed) return;
         if (!this.retried) {
             this.retried = true;
             try { this.pc.restartIce(); } catch (e) { /* not supported */ }
@@ -242,6 +306,7 @@ class PeerLink {
     }
 
     async handleSignal(data) {
+        if (this.closed) return;
         const isScreen = Boolean(data.screen);
         const pc = isScreen ? this._ensureScreenPc() : this.pc;
         if (data.sdp) {
@@ -269,10 +334,15 @@ class PeerLink {
                 this.mesh._signal(this.peer.member_id, { sdp: pc.localDescription, screen: isScreen });
             }
         } else if (data.ice) {
-            try {
-                await pc.addIceCandidate(data.ice);
-            } catch (err) {
-                if (!this.ignoreOffer) console.warn('[mesh] bad ICE candidate:', err);
+            // A single candidate (older peer, or a lone one) or a batch.
+            const batch = Array.isArray(data.ice) ? data.ice : [data.ice];
+            for (const candidate of batch) {
+                if (!candidate || this.closed) continue;
+                try {
+                    await pc.addIceCandidate(candidate);
+                } catch (err) {
+                    if (!this.ignoreOffer) console.warn('[mesh] bad ICE candidate:', err);
+                }
             }
         }
     }
@@ -324,8 +394,14 @@ class PeerLink {
     }
 
     close() {
+        this.closed = true;
         clearTimeout(this._watchdog); this._watchdog = null;
         clearTimeout(this._recovery); this._recovery = null;
+        for (const q of Object.values(this._iceQueues || {})) {
+            if (q.timer) clearTimeout(q.timer);
+            q.timer = null;
+            q.list.length = 0;
+        }
         try { this.pc.close(); } catch (e) { /* already closed */ }
         if (this.screenPc) { try { this.screenPc.close(); } catch (e) { /* noop */ } }
     }
@@ -368,7 +444,14 @@ class MeshMedia {
         this.currentView = 'media';
         this._micDeviceId = null;         // remembered across acquisitions
         this._camDeviceId = null;
-        this._toggling = { mic: false, camera: false };   // double-tap guard
+        // Last *intent* per device, drained serially (see toggleMicrophone).
+        this._want = { mic: null, camera: null };
+        // Any state change bumps the epoch; an acquisition that resolves after
+        // that is stale and gets stopped instead of published.
+        this._epoch = { mic: 0, camera: 0 };
+        this._busy = { mic: false, camera: false };
+        this._disposed = false;
+        this._fadeTimers = new Set();     // peer tiles fading out
         this._lastError = null;           // set by _acquire so callers can skip a 2nd toast
         this._deviceChangeBound = null;
     }
@@ -395,16 +478,22 @@ class MeshMedia {
         // periodic real-stats quality + active-speaker evaluation
         // A throwing iteration must not take the timer (and with it every
         // level meter and the speaker focus) down for the rest of the lesson.
+        // A hidden tab has nothing to paint, and getStats() on every link is
+        // real CPU.  Browsers throttle timers in the background anyway; doing
+        // it explicitly keeps a minimised lesson from burning a laptop battery.
         this._statsTimer = setInterval(() => {
+            if (this._disposed || document.hidden) return;
             try { this._evaluateQuality(); } catch (e) { console.warn('[mesh] stats tick failed', e); }
         }, 4000);
         this._speakerTimer = setInterval(() => {
+            if (this._disposed || document.hidden) return;
             try { this._evaluateSpeaker(); } catch (e) { console.warn('[mesh] level tick failed', e); }
         }, 700);
         // Measured network numbers: every 2 s, per peer. Cheap (getStats is
         // local) and often enough that the panel feels live.
         this._sampleNet();
         this._netTimer = setInterval(() => {
+            if (this._disposed || document.hidden) return;
             try { this._sampleNet(); } catch (e) { console.warn('[mesh] net tick failed', e); }
         }, 2000);
         this._watchDevices();
@@ -413,6 +502,7 @@ class MeshMedia {
     // ------------------------------------------------------------ roster
     /** Called by room.js whenever the roster changes. */
     syncPeers(peers) {
+        if (this._disposed) return;
         const seen = new Set();
         for (const p of peers) {
             if (p.identity === this.self.identity) continue;
@@ -449,7 +539,14 @@ class MeshMedia {
             // frames reads as a glitch («صفحه پرش کرد»), a 300 ms fade reads as
             // «این نفر رفت» — and the roster row dims at the same time.
             tile.classList.add('is-left');
-            setTimeout(() => tile.remove(), 320);
+            if (this._disposed) { tile.remove(); }
+            else {
+            const fade = setTimeout(() => {
+                this._fadeTimers.delete(fade);
+                tile.remove();
+            }, 320);
+            this._fadeTimers.add(fade);
+            }
         }
         this.tiles.delete(identity);
         const audio = this._audioEls.get(identity);
@@ -574,6 +671,15 @@ class MeshMedia {
      * device is released) — not merely `enabled = false`.  Turning a
      * device back on re-acquires it with a fresh getUserMedia call.
      */
+    /** A device needs both the server grant and a clear moderator state. */
+    _canUseMic() {
+        return this.permissions.can_use_microphone !== false && this._mutedByHost !== true;
+    }
+
+    _canUseCam() {
+        return this.permissions.can_use_camera !== false && this._cameraOffByHost !== true;
+    }
+
     _deviceError(err) {
         const name = err && err.name;
         const embedded = window.self !== window.top;
@@ -764,79 +870,177 @@ class MeshMedia {
         }
     }
 
-    async toggleMicrophone() {
-        if (this._toggling.mic) return false;          // ignore rapid double taps
-        if (this.permissions.can_use_microphone === false) {
+    /**
+     * Turn the microphone on or off.
+     *
+     * Opening a device is asynchronous (permission prompt, driver, a Bluetooth
+     * headset taking a second) and the button can easily be tapped again while
+     * it is.  Dropping that second tap — what the old double-tap guard did —
+     * left the button in a state the user never asked for.  Instead the *last*
+     * intent is kept and drained in order, so on/off/on ends where the finger
+     * stopped.
+     *
+     * Every state change bumps an epoch.  A getUserMedia that resolves after
+     * the user turned the device off again — or after a moderator muted them —
+     * is stale, so its tracks are stopped on arrival instead of publishing a
+     * ghost camera/microphone into a room that already decided otherwise.
+     */
+    toggleMicrophone() {
+        if (this._disposed) return Promise.resolve(false);
+        if (!this._canUseMic()) {
             toast(this._mutedByHost
                 ? 'میکروفون شما توسط مدیر بی‌صدا شده است.'
                 : 'شما اجازهٔ استفاده از میکروفون را ندارید.', 'warning');
-            return false;
+            return Promise.resolve(false);
         }
-        this._toggling.mic = true;
-        try {
-            if (this.micOn) {
-                this._stopLocalLevel();
-                this._dropLocalTrack('audio');
-                this.micOn = false;
-                this._republishLocal();
-                this._afterLocalChange();
-                return true;
-            }
-            const stream = await this._acquire({ audio: this._audioConstraints(this._micDeviceId) });
-            const track = stream && stream.getAudioTracks()[0];
-            if (!track) {
-                if (stream) stream.getTracks().forEach((t) => t.stop());
-                // _acquire already explained *why*; don't stack a second toast.
-                if (!this._lastError) toast('میکروفونی یافت نشد.', 'warning');
-                return false;
-            }
-            this._watchLocalTrack(track, 'audio');
-            this._mergeLocalTrack(track);
-            this.micOn = true;
-            this._republishLocal();
-            this._startLocalLevel();
-            this._afterLocalChange();
-            return true;
-        } finally {
-            this._toggling.mic = false;
-        }
+        // Flip what the user is *aiming at*: while an acquisition is still in
+        // flight `micOn` is not the truth yet, so `!micOn` would make the
+        // second tap ask for «on» again and swallow the «off».
+        const target = this._want.mic !== null ? this._want.mic : this.micOn;
+        this._want.mic = !target;
+        return this._runMic();
     }
 
-    async toggleCamera() {
-        if (this._toggling.camera) return false;       // ignore rapid double taps
-        if (this.permissions.can_use_camera === false) {
+    async _runMic() {
+        if (this._busy.mic) return true;      // the running loop will see the new intent
+        this._busy.mic = true;
+        try {
+            // The intent is deliberately *not* cleared before awaiting the
+            // acquisition: that is what lets a tap during the permission prompt
+            // flip it (see toggleMicrophone).  The guard bounds the loop if a
+            // device keeps refusing.
+            let guard = 0;
+            while (!this._disposed && this._want.mic !== null
+                   && this._want.mic !== this.micOn && guard++ < 4) {
+                const desired = this._want.mic;
+                if (desired) await this._micOn(); else this._micOff();
+                const landed = desired === this.micOn;
+                if (this._want.mic === desired) this._want.mic = null;
+                if (!landed) break;            // refused (no device, no grant)
+            }
+        } finally {
+            this._busy.mic = false;
+        }
+        this._applyPendingDevice('audio');
+        return true;
+    }
+
+    async _micOn() {
+        const epoch = this._epoch.mic;
+        const stream = await this._acquire({ audio: this._audioConstraints(this._micDeviceId) });
+        const track = stream && stream.getAudioTracks()[0];
+        if (!track) {
+            if (stream) stream.getTracks().forEach((t) => t.stop());
+            // _acquire already explained *why*; don't stack a second toast.
+            if (!this._lastError) toast('میکروفونی یافت نشد.', 'warning');
+            return;
+        }
+        if (this._disposed || epoch !== this._epoch.mic) {
+            stream.getTracks().forEach((t) => t.stop());
+            return;                            // stale acquisition — release it
+        }
+        this._watchLocalTrack(track, 'audio');
+        this._mergeLocalTrack(track);
+        this.micOn = true;
+        this._republishLocal();
+        this._startLocalLevel();
+        this._afterLocalChange();
+    }
+
+    _micOff() {
+        this._epoch.mic += 1;                  // invalidate a pending acquisition
+        this._want.mic = null;
+        // An already-silent microphone (a repeated moderation push, a peer's
+        // roster update) must not churn replaceTrack on every peer.
+        if (!this.micOn && !(this.localStream && this.localStream.getAudioTracks().length)) {
+            this.micOn = false;
+            return;
+        }
+        this._stopLocalLevel();
+        this._dropLocalTrack('audio');
+        this.micOn = false;
+        this._republishLocal();
+        this._afterLocalChange();
+    }
+
+    toggleCamera() {
+        if (this._disposed) return Promise.resolve(false);
+        if (!this._canUseCam()) {
             toast(this._cameraOffByHost
                 ? 'دوربین شما توسط مدیر غیرفعال شده است.'
                 : 'شما اجازهٔ استفاده از دوربین را ندارید.', 'warning');
-            return false;
+            return Promise.resolve(false);
         }
-        this._toggling.camera = true;
+        const target = this._want.camera !== null ? this._want.camera : this.cameraOn;
+        this._want.camera = !target;
+        return this._runCamera();
+    }
+
+    async _runCamera() {
+        if (this._busy.camera) return true;
+        this._busy.camera = true;
         try {
-            if (this.cameraOn) {
-                this._dropLocalTrack('video');
-                this.cameraOn = false;
-                this._republishLocal();
-                this._afterLocalChange();
-                return true;
+            let guard = 0;
+            while (!this._disposed && this._want.camera !== null
+                   && this._want.camera !== this.cameraOn && guard++ < 4) {
+                const desired = this._want.camera;
+                if (desired) await this._camOn(); else this._camOff();
+                const landed = desired === this.cameraOn;
+                if (this._want.camera === desired) this._want.camera = null;
+                if (!landed) break;
             }
-            const stream = await this._acquire({ video: this._videoConstraints(this._camDeviceId) });
-            const track = stream && stream.getVideoTracks()[0];
-            if (!track) {
-                if (stream) stream.getTracks().forEach((t) => t.stop());
-                if (!this._lastError) toast('دوربینی یافت نشد.', 'warning');
-                return false;
-            }
-            this._watchLocalTrack(track, 'video');
-            this._mergeLocalTrack(track);
-            this._captureTier = null;      // re-apply the current tier below
-            this.cameraOn = true;
-            this._republishLocal();
-            this._retuneAll();
-            this._afterLocalChange();
-            return true;
         } finally {
-            this._toggling.camera = false;
+            this._busy.camera = false;
         }
+        this._applyPendingDevice('video');
+        return true;
+    }
+
+    async _camOn() {
+        const epoch = this._epoch.camera;
+        const stream = await this._acquire({ video: this._videoConstraints(this._camDeviceId) });
+        const track = stream && stream.getVideoTracks()[0];
+        if (!track) {
+            if (stream) stream.getTracks().forEach((t) => t.stop());
+            if (!this._lastError) toast('دوربینی یافت نشد.', 'warning');
+            return;
+        }
+        if (this._disposed || epoch !== this._epoch.camera) {
+            stream.getTracks().forEach((t) => t.stop());
+            return;
+        }
+        this._watchLocalTrack(track, 'video');
+        this._mergeLocalTrack(track);
+        this._captureTier = null;          // re-apply the current tier below
+        this.cameraOn = true;
+        this._republishLocal();
+        this._retuneAll();
+        this._afterLocalChange();
+    }
+
+    _camOff() {
+        this._epoch.camera += 1;
+        this._want.camera = null;
+        if (!this.cameraOn && !(this.localStream && this.localStream.getVideoTracks().length)) {
+            this.cameraOn = false;
+            return;
+        }
+        this._dropLocalTrack('video');
+        this.cameraOn = false;
+        this._republishLocal();
+        this._afterLocalChange();
+    }
+
+    /** A device picked while a toggle was in flight still has to land. */
+    _applyPendingDevice(kind) {
+        if (this._disposed) return;
+        const track = this.localStream && this.localStream.getTracks().find((t) => t.kind === kind);
+        if (!track || typeof track.getSettings !== 'function') return;
+        const wanted = kind === 'audio' ? this._micDeviceId : this._camDeviceId;
+        const current = (track.getSettings() || {}).deviceId;
+        if (!wanted || !current || wanted === current) return;
+        const apply = kind === 'audio' ? this.setMicDevice(wanted) : this.setCameraDevice(wanted);
+        Promise.resolve(apply).catch(() => {});
     }
 
     /**
@@ -848,16 +1052,7 @@ class MeshMedia {
         track.addEventListener('ended', () => {
             const stillOurs = Boolean(this.localStream && this.localStream.getTracks().includes(track));
             if (!stillOurs) return;            // we stopped it on purpose
-            if (kind === 'audio') {
-                this._stopLocalLevel();
-                this._dropLocalTrack('audio');
-                this.micOn = false;
-            } else {
-                this._dropLocalTrack('video');
-                this.cameraOn = false;
-            }
-            this._republishLocal();
-            this._afterLocalChange();
+            if (kind === 'audio') this._micOff(); else this._camOff();
             toast(kind === 'audio'
                 ? 'میکروفون قطع شد. دستگاه را وصل کنید و دوباره روی دکمهٔ میکروفون بزنید.'
                 : 'دوربین قطع شد. دستگاه را وصل کنید و دوباره روی دکمهٔ دوربین بزنید.', 'warning', 5000);
@@ -942,6 +1137,7 @@ class MeshMedia {
 
     /** Re-render tile/UI/pip after any local device change. */
     _afterLocalChange() {
+        if (this._disposed) return;
         if (this.localStream) this._renderLocalTile();
         else this._renderLocalTileEmpty();
         this._syncLocalUI();
@@ -1017,6 +1213,7 @@ class MeshMedia {
             toast('شما اجازهٔ اشتراک صفحه را ندارید.', 'warning');
             return false;
         }
+        if (this._screenBusy) return true;      // the picker is modal
         if (this.screenStream) {
             this.stopScreenShare();
             return true;
@@ -1025,11 +1222,14 @@ class MeshMedia {
             toast('اشتراک صفحه در این مرورگر پشتیبانی نمی‌شود.', 'warning');
             return false;
         }
+        this._screenBusy = true;
         try {
             this.screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
         } catch (err) {
             if (err && err.name !== 'NotAllowedError') toast(`اشتراک صفحه ناموفق بود: ${err.name}`, 'error');
             return false;
+        } finally {
+            this._screenBusy = false;
         }
         this.screenStream.getVideoTracks()[0].addEventListener('ended', () => this.stopScreenShare());
         this._showLocalScreen();
@@ -1064,30 +1264,26 @@ class MeshMedia {
     }
 
     async forceMute() {
-        // host revoked the mic — release the device completely
-        this._stopLocalLevel();
-        this._dropLocalTrack('audio');
-        this.micOn = false;
-        this._republishLocal();
-        this._afterLocalChange();
+        // host revoked the mic — release the device completely, and cancel any
+        // acquisition that is still on its way (it would publish a ghost).
+        this._micOff();
     }
 
     async forceCameraOff() {
-        this._dropLocalTrack('video');
-        this.cameraOn = false;
-        this._republishLocal();
-        this._afterLocalChange();
+        this._camOff();
     }
 
     /** Host moderation reached us: cut the device AND revoke the local right
      *  to switch it back on, otherwise the button silently lies. */
     applyModerationState({ muted, camera_disabled } = {}) {
+        // Keep the moderator's decision separate from the server's grant:
+        // writing `permissions.can_use_*` here made a re-grant invisible (the
+        // flag stayed false until a reload), because the same object is also
+        // the room's PERMISSIONS map.  `_canUseMic()` combines the two.
         this._mutedByHost = Boolean(muted);
         this._cameraOffByHost = Boolean(camera_disabled);
         if (muted) this.forceMute();
         if (camera_disabled) this.forceCameraOff();
-        this.permissions.can_use_microphone = !muted && this.permissions.can_use_microphone !== false;
-        this.permissions.can_use_camera = !camera_disabled && this.permissions.can_use_camera !== false;
         this._syncLocalUI();
     }
 
@@ -1096,6 +1292,9 @@ class MeshMedia {
         if (!deviceId) return false;
         this._micDeviceId = deviceId; // remembered for the next acquisition
         if (!this.micOn || !this.localStream) return true;   // used next time
+        // A toggle is mid-flight: it applies the remembered device when it
+        // settles (_applyPendingDevice), so switching here would race it.
+        if (this._busy.mic) return true;
         const fresh = await this._acquire({ audio: this._audioConstraints(deviceId) });
         const newTrack = fresh && fresh.getAudioTracks()[0];
         if (!newTrack) return false;
@@ -1114,6 +1313,7 @@ class MeshMedia {
         if (!deviceId) return false;
         this._camDeviceId = deviceId;
         if (!this.cameraOn || !this.localStream) return true;   // used next time
+        if (this._busy.camera) return true;                     // see setMicDevice
         const fresh = await this._acquire({ video: this._videoConstraints(deviceId) });
         const newTrack = fresh && fresh.getVideoTracks()[0];
         if (!newTrack) return false;
@@ -1357,7 +1557,11 @@ class MeshMedia {
         tile.append(video, placeholder, overlay, speaking, level);
         overlay.querySelector('.tile-name').textContent = peer.name || peer.identity;
         this.tiles.set(peer.identity, tile);
-        this.tilesEl.appendChild(tile);
+        // Our own tile goes first (top-right in RTL) so turning our camera on
+        // never shuffles everybody else's position: the grid grows, it does
+        // not jump.
+        if (peer.identity === this.self.identity) this.tilesEl.prepend(tile);
+        else this.tilesEl.appendChild(tile);
         this._layout();
         return tile;
     }
@@ -1693,16 +1897,18 @@ class MeshMedia {
     }
 
     _syncLocalUI() {
+        if (this._disposed) return;
         const micBtn = document.getElementById('btn-mic');
         const camBtn = document.getElementById('btn-camera');
         const screenBtn = document.getElementById('btn-screen');
         if (micBtn) {
             micBtn.classList.toggle('active', this.micOn);
-            micBtn.classList.toggle('off', this.permissions.can_use_microphone === false);
+            micBtn.classList.toggle('off', !this._canUseMic());
             micBtn.setAttribute('aria-pressed', String(this.micOn));
         }
         if (camBtn) {
             camBtn.classList.toggle('active', this.cameraOn);
+            camBtn.classList.toggle('off', !this._canUseCam());
             camBtn.setAttribute('aria-pressed', String(this.cameraOn));
         }
         if (screenBtn) {
@@ -1727,6 +1933,16 @@ class MeshMedia {
 
     /** Release everything: devices, timers, listeners, peer connections. */
     dispose() {
+        this._disposed = true;
+        // Anything in flight is now stale: bumping the epochs makes a late
+        // getUserMedia stop itself instead of holding a camera after the room
+        // is gone.
+        this._epoch.mic += 1;
+        this._epoch.camera += 1;
+        this._want = { mic: null, camera: null };
+        this._fadeTimers.forEach((t) => clearTimeout(t));
+        this._fadeTimers.clear();
+        this._pendingSignals = [];
         if (this._statsTimer) clearInterval(this._statsTimer);
         if (this._speakerTimer) clearInterval(this._speakerTimer);
         if (this._netTimer) clearInterval(this._netTimer);
@@ -1743,6 +1959,10 @@ class MeshMedia {
         }
         if (this.screenStream) this.stopScreenShare();
         for (const identity of Array.from(this.links.keys())) this._removePeer(identity);
+        this.tiles.clear();
+        this._audioEls.forEach((el) => { el.srcObject = null; el.remove(); });
+        this._audioEls.clear();
+        this._disarmAudioUnlock();
     }
 }
 

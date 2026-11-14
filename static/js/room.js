@@ -1991,7 +1991,17 @@ function initRecording() {
         e.preventDefault();
         e.returnValue = '';
     });
-    window.addEventListener('pagehide', () => Recorder.dispose());
+    window.addEventListener('pagehide', (event) => {
+        Recorder.dispose();
+        // A page that is really going away releases the camera, the
+        // microphones and every peer connection now — the browser's own
+        // cleanup is not immediate, and the recording light lingers.  When the
+        // page is only entering the back/forward cache (persisted), keep the
+        // media alive: returning to it must not require a reconnect.
+        if (!event.persisted) {
+            try { Media.dispose(); } catch (err) { /* teardown must not throw */ }
+        }
+    });
 }
 
 function switchView(view) {

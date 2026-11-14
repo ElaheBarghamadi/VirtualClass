@@ -22,6 +22,17 @@ const CAMERA_CAPTURE = { resolution: { width: 1280, height: 720, frameRate: 30 }
 
 const LivekitClient = window.LivekitClient;
 
+/**
+ * How long mic/camera announcements are coalesced before going to the server.
+ *
+ * One toggle made the engine emit its state two or three times (publish event,
+ * UI sync, roster echo).  Each announcement is a server-side DB read plus a
+ * broadcast to *every* participant, so a class of twelve tapping their buttons
+ * multiplied into a small flood.  Keeping the last state for a blink and
+ * sending it once is invisible on screen and much lighter on the socket.
+ */
+const MEDIA_STATE_COALESCE_MS = 90;
+
 /** Fullscreen a tile's video (falls back to the tile itself). */
 function toggleTileFullscreen(tile) {
     const video = tile.querySelector('video');
@@ -59,7 +70,16 @@ class LivekitMedia {
         this._screenShareOwner = null;
         this._retryDelay = 1000;
         this._retryTimer = null;
+        this._retryAttempts = 0;
         this._closing = false;
+        // Same intent-queue idea as the mesh engine: a second tap must land,
+        // not be thrown away (see toggleMicrophone).
+        this._wantMic = null;
+        this._wantCamera = null;
+        this._micBusy = false;
+        this._cameraBusy = false;
+        this._levelTrack = null;      // the track the analyser currently reads
+        this._screenBusy = false;     // getDisplayMedia is in flight
     }
 
     async init(opts) {
@@ -95,6 +115,7 @@ class LivekitMedia {
             this._wireEvents();
             await this.room.connect(url, token);
             this._retryDelay = 1000;
+            this._retryAttempts = 0;
             this.localParticipant = this.room.localParticipant;
             document.getElementById('stage-empty-text').textContent =
                 'برای فعال کردن دوربین/میکروفون از دکمه‌های پایین استفاده کنید.';
@@ -114,7 +135,7 @@ class LivekitMedia {
             .on(R.ParticipantDisconnected, (p) => this._removeTile(p.identity))
             .on(R.TrackSubscribed, (track, pub, p) => this._attachTrack(p, track))
             .on(R.TrackUnsubscribed, (track, pub, p) => this._detachTrack(p, track))
-            .on(R.TrackMuted, (track, pub) => this._refreshTrackState(pub?.source && this._ownerOf(track)))
+            .on(R.TrackMuted, (track) => this._refreshTrackState(this._ownerOf(track)))
             .on(R.TrackUnmuted, (track, pub) => this._refreshTrackState(this._ownerOf(track)))
             .on(R.ActiveSpeakersChanged, (speakers) => this._setActiveSpeakers(speakers))
             .on(R.LocalTrackPublished, () => this._syncLocalUI())
@@ -134,6 +155,21 @@ class LivekitMedia {
             .on(R.SignalConnected, () => this.onQualityChange(this.quality, null))
             .on(R.Disconnected, () => this._scheduleReconnect())
             .on(R.MediaDevicesError, (e) => toast(`خطای دستگاه رسانه: ${e.message || ''}`, 'error'));
+    }
+
+    /** A device needs both the server grant and a clear moderator state. */
+    _canUseMic() {
+        return this.permissions.can_use_microphone !== false && this._mutedByHost !== true;
+    }
+
+    _canUseCam() {
+        return this.permissions.can_use_camera !== false && this._cameraOffByHost !== true;
+    }
+
+    /** Recompute micOn/cameraOn from the publications (the source of truth). */
+    _refreshLocalState() {
+        if (!this.room || !this.localParticipant) return;
+        this._refreshTrackState(this.localParticipant);
     }
 
     /** Persist + apply a stage layout. */
@@ -256,7 +292,8 @@ class LivekitMedia {
         });
 
         this.tiles.set(identity, tile);
-        this.tilesEl.appendChild(tile);
+        if (isLocal) this.tilesEl.prepend(tile);
+        else this.tilesEl.appendChild(tile);
         this._updateTileInfo(participant, tile);
         this._layout();
         return tile;
@@ -437,17 +474,22 @@ class LivekitMedia {
      * identically; this method only owns the analyser and the frame loop.
      */
     _startLocalLevel() {
-        this._stopLocalLevel();
         const pub = this.localParticipant
             && this.localParticipant.getTrackPublication(LivekitClient.Track.Source.Microphone);
         const track = pub && pub.track && pub.track.mediaStreamTrack;
         if (!track) return;
+        // Already metering this exact track: tearing the analyser down and
+        // building a new one on every roster event made the meter jump back to
+        // zero for a frame — a visible flicker for no reason.
+        if (this._levelTrack === track && this._stopLevelLoop) return;
+        this._stopLocalLevel();
         this._localAnalyser = createAnalyser(new MediaStream([track]));
         if (!this._localAnalyser) return;
         const tracker = createLevelTracker(this._localAnalyser);
         const gate = createSpeakingGate();
         this._localTracker = tracker;
         this._localGate = gate;
+        this._levelTrack = track;
         this._stopLevelLoop = startLevelLoop((now) => {
             if (!this.micOn) return;
             const level = tracker.read();
@@ -465,6 +507,7 @@ class LivekitMedia {
         this._localAnalyser = null;
         this._localTracker = null;
         this._localGate = null;
+        this._levelTrack = null;
         resetMic();
         const identity = this.localParticipant && this.localParticipant.identity;
         if (identity) paintTile(this.tiles.get(identity), 0, false);
@@ -572,18 +615,47 @@ class LivekitMedia {
     }
 
     // ------------------------------------------------------- local controls
+    /**
+     * Turning a device on is asynchronous; a second tap while the first is
+     * still in flight used to be swallowed, leaving the button in a state the
+     * user did not ask for.  Keep the *last* intent and drain it in order.
+     */
     async toggleMicrophone() {
         if (!this.enabled || !this.room) {
             toast('سرور رسانه پیکربندی نشده است — صدا/تصویر در دسترس نیست.', 'warning');
             return false;
         }
-        if (!this.permissions.can_use_microphone) {
+        if (!this._canUseMic()) {
             toast(this._mutedByHost
                 ? 'میکروفون شما توسط مدیر بی‌صدا شده است.'
                 : 'شما اجازهٔ استفاده از میکروفون را ندارید.', 'warning');
             return false;
         }
-        await this.room.localParticipant.setMicrophoneEnabled(!this.micOn);
+        // Aim at the pending intent, not at `micOn` (which is still the old
+        // value while the previous toggle is in flight, so a second tap would
+        // otherwise repeat «on» instead of asking for «off»).
+        const target = this._wantMic !== null ? this._wantMic : this.micOn;
+        this._wantMic = !target;
+        return this._drainMic();
+    }
+
+    async _drainMic() {
+        if (this._micBusy) return true;    // the running loop picks the intent up
+        this._micBusy = true;
+        try {
+            while (this._wantMic !== null && this._wantMic !== this.micOn) {
+                const desired = this._wantMic;
+                this._wantMic = null;
+                if (!this.room?.localParticipant) break;
+                await this.room.localParticipant.setMicrophoneEnabled(desired);
+                this._refreshLocalState();
+            }
+        } catch (err) {
+            console.warn('[media] microphone toggle failed:', err);
+            toast('تغییر وضعیت میکروفون اعمال نشد.', 'error');
+        } finally {
+            this._micBusy = false;
+        }
         this._syncLocalUI();
         return true;
     }
@@ -593,20 +665,40 @@ class LivekitMedia {
             toast('سرور رسانه پیکربندی نشده است — صدا/تصویر در دسترس نیست.', 'warning');
             return false;
         }
-        if (!this.permissions.can_use_camera) {
+        if (!this._canUseCam()) {
             toast(this._cameraOffByHost
                 ? 'دوربین شما توسط مدیر غیرفعال شده است.'
                 : 'شما اجازهٔ استفاده از دوربین را ندارید.', 'warning');
             return false;
         }
-        const turningOn = !this.cameraOn;
-        // Ask for a 16:9 capture on every device.  Without this, a phone and a
-        // laptop hand back frames with different aspect ratios and the same
-        // room looks like two different shots.
-        await this.room.localParticipant.setCameraEnabled(
-            turningOn,
-            turningOn ? CAMERA_CAPTURE : undefined,
-        );
+        const target = this._wantCamera !== null ? this._wantCamera : this.cameraOn;
+        this._wantCamera = !target;
+        return this._drainCamera();
+    }
+
+    async _drainCamera() {
+        if (this._cameraBusy) return true;
+        this._cameraBusy = true;
+        try {
+            while (this._wantCamera !== null && this._wantCamera !== this.cameraOn) {
+                const desired = this._wantCamera;
+                this._wantCamera = null;
+                if (!this.room?.localParticipant) break;
+                // Ask for a 16:9 capture on every device.  Without this, a
+                // phone and a laptop hand back frames with different aspect
+                // ratios and the same room looks like two different shots.
+                await this.room.localParticipant.setCameraEnabled(
+                    desired,
+                    desired ? CAMERA_CAPTURE : undefined,
+                );
+                this._refreshLocalState();
+            }
+        } catch (err) {
+            console.warn('[media] camera toggle failed:', err);
+            toast('تغییر وضعیت دوربین اعمال نشد.', 'error');
+        } finally {
+            this._cameraBusy = false;
+        }
         if (this.cameraOn) this._addTile(this.room.localParticipant);
         this._syncLocalUI();
         return true;
@@ -629,11 +721,19 @@ class LivekitMedia {
             toast('شما اجازهٔ اشتراک صفحه را ندارید.', 'warning');
             return false;
         }
-        const pub = this.room.localParticipant.getTrackPublication(LivekitClient.Track.Source.ScreenShare);
-        if (pub?.track) {
-            await this.room.localParticipant.setScreenShareEnabled(false);
-        } else {
-            await this.room.localParticipant.setScreenShareEnabled(true);
+        // The picker is modal: a second tap while it is open cannot mean
+        // anything, so it is ignored instead of queuing a second dialog.
+        if (this._screenBusy) return true;
+        this._screenBusy = true;
+        try {
+            const pub = this.room.localParticipant.getTrackPublication(LivekitClient.Track.Source.ScreenShare);
+            if (pub?.track) await this.room.localParticipant.setScreenShareEnabled(false);
+            else await this.room.localParticipant.setScreenShareEnabled(true);
+        } catch (err) {
+            console.warn('[media] screen share toggle failed:', err);
+        } finally {
+            this._screenBusy = false;
+            this._syncLocalUI();
         }
         return true;
     }
@@ -669,15 +769,19 @@ class LivekitMedia {
     /** Enforced when the host mutes us: the SFU token no longer allows it
      *  on rejoin, and we cut the track immediately for responsiveness. */
     async forceMute() {
+        this._wantMic = null;                 // a pending «on» must not win
         if (this.enabled && this.room && this.micOn) {
-            await this.room.localParticipant.setMicrophoneEnabled(false);
+            try { await this.room.localParticipant.setMicrophoneEnabled(false); } catch (e) { /* gone */ }
+            this._refreshLocalState();
         }
         this._syncLocalUI();
     }
 
     async forceCameraOff() {
+        this._wantCamera = null;
         if (this.enabled && this.room && this.cameraOn) {
-            await this.room.localParticipant.setCameraEnabled(false);
+            try { await this.room.localParticipant.setCameraEnabled(false); } catch (e) { /* gone */ }
+            this._refreshLocalState();
         }
         this._syncLocalUI();
     }
@@ -687,26 +791,34 @@ class LivekitMedia {
         const camBtn = document.getElementById('btn-camera');
         if (micBtn) {
             micBtn.classList.toggle('active', this.micOn);
-            micBtn.classList.toggle('off', this.permissions.can_use_microphone === false);
+            micBtn.classList.toggle('off', !this._canUseMic());
             micBtn.setAttribute('aria-pressed', String(this.micOn));
         }
         if (camBtn) {
             camBtn.classList.toggle('active', this.cameraOn);
+            camBtn.classList.toggle('off', !this._canUseCam());
             camBtn.setAttribute('aria-pressed', String(this.cameraOn));
         }
-        // keep the live mic meter in sync with the real publish state
-        if (this.micOn && !this._localLevelRaf) this._startLocalLevel();
-        if (!this.micOn) this._stopLocalLevel();
+        // Keep the live mic meter on the *current* track.  The old guard tested
+        // a flag nothing ever assigned, so every UI sync rebuilt the analyser
+        // and the meter visibly dropped to zero.
+        const micPub = this.localParticipant
+            && this.localParticipant.getTrackPublication(LivekitClient.Track.Source.Microphone);
+        const micTrack = micPub && micPub.track && micPub.track.mediaStreamTrack;
+        if (this.micOn && micTrack) this._startLocalLevel();
+        else if (this._levelTrack) this._stopLocalLevel();
     }
 
     /** Called by room.js when the roster reports our forced states. */
     applyModerationState({ muted, camera_disabled } = {}) {
+        // The moderator's decision is kept apart from the server's grant: the
+        // old code wrote `permissions.can_use_*` here, which made a later
+        // re-grant invisible until a reload (the same object is the room's
+        // PERMISSIONS map).  `_canUseMic()` combines both.
         this._mutedByHost = Boolean(muted);
         this._cameraOffByHost = Boolean(camera_disabled);
         if (muted) this.forceMute();
         if (camera_disabled) this.forceCameraOff();
-        this.permissions.can_use_microphone = !muted && this.permissions.can_use_microphone !== false;
-        this.permissions.can_use_camera = !camera_disabled && this.permissions.can_use_camera !== false;
         this._syncLocalUI();
     }
 
@@ -724,7 +836,12 @@ class LivekitMedia {
     _scheduleReconnect() {
         if (this._closing || !this.enabled) return;
         clearTimeout(this._retryTimer);
-        toast('اتصال رسانه قطع شد؛ در حال تلاش مجدد…', 'warning');
+        // Say it once.  A lesson that is offline for ten minutes used to show
+        // ten identical toasts, one per backoff step.
+        if (!this._retryAttempts) {
+            toast('اتصال رسانه قطع شد؛ در حال تلاش مجدد…', 'warning');
+        }
+        this._retryAttempts += 1;
         this._retryTimer = setTimeout(async () => {
             if (this._closing || !this.enabled) return;
             const wasMic = this.micOn;
@@ -746,8 +863,16 @@ class LivekitMedia {
 
     disconnect() {
         this._closing = true;
+        this.enabled = false;
         clearTimeout(this._retryTimer);
-        if (this.room) this.room.disconnect();
+        this._retryTimer = null;
+        this._stopLocalLevel();
+        this._pipTrack = null;
+        const pip = document.getElementById('cam-pip-video');
+        if (pip) pip.srcObject = null;
+        try { this.room?.disconnect(); } catch (e) { /* already gone */ }
+        this.room = null;
+        this.localParticipant = null;
     }
 }
 
@@ -760,6 +885,11 @@ class MediaFacade {
     constructor() {
         this.impl = null;
         this.engine = 'none';
+        this._onState = () => {};
+        this._lastStateKey = null;     // last state the server has been told
+        this._pendingState = null;
+        this._stateTimer = null;
+        this._flushBound = false;
     }
 
     get quality() { return this.impl ? this.impl.quality : 'unknown'; }
@@ -769,7 +899,46 @@ class MediaFacade {
     /** Our own aggregated row (worst of all links). */
     get ownStats() { return (this.impl && this.impl.ownStats) || null; }
 
+    /**
+     * Every engine announces its state through here, so dedupe and coalescing
+     * are one rule instead of two copies (mesh and LiveKit both use it).
+     */
+    _emitState(state) {
+        const next = {
+            mic_on: Boolean(state && state.mic_on),
+            camera_on: Boolean(state && state.camera_on),
+            screen_sharing: Boolean(state && state.screen_sharing),
+        };
+        const key = `${next.mic_on}|${next.camera_on}|${next.screen_sharing}`;
+        if (key === this._lastStateKey) return;   // nothing actually changed
+        this._lastStateKey = key;
+        this._pendingState = next;
+        if (this._stateTimer) return;             // already scheduled
+        this._stateTimer = setTimeout(() => this._flushState(), MEDIA_STATE_COALESCE_MS);
+    }
+
+    _flushState() {
+        if (this._stateTimer) { clearTimeout(this._stateTimer); this._stateTimer = null; }
+        const state = this._pendingState;
+        this._pendingState = null;
+        if (!state) return;
+        try { this._onState(state); } catch (err) { console.warn('[media] state emit failed', err); }
+    }
+
     async init(opts) {
+        this._onState = opts.onStateChange || (() => {});
+        this._lastStateKey = null;
+        if (!this._flushBound && typeof document !== 'undefined') {
+            // A background tab must not sit on the last state: flush before the
+            // phone locks or the tab is frozen, otherwise peers keep showing a
+            // microphone that is already off.
+            this._flushBound = true;
+            document.addEventListener('visibilitychange', () => {
+                if (document.hidden) this._flushState();
+            });
+            window.addEventListener('pagehide', () => this._flushState());
+        }
+        const engineOpts = { ...opts, onStateChange: (state) => this._emitState(state) };
         if (opts.mediaEnabled && opts.mediaUrl && LivekitClient) {
             this.engine = 'livekit';
             this.impl = livekitMedia;
@@ -783,7 +952,7 @@ class MediaFacade {
             return;
         }
         try {
-            await this.impl.init(opts);
+            await this.impl.init(engineOpts);
         } catch (err) {
             console.warn(`[media:${this.engine}] init failed:`, err);
         }
@@ -798,12 +967,15 @@ class MediaFacade {
      */
     pushMediaState() {
         if (!this.impl) return false;
-        const state = {
+        // Forced: after a socket reconnect the server has no memory of us, so
+        // an identical state still has to be announced (once).
+        this._lastStateKey = null;
+        this._pendingState = {
             mic_on: Boolean(this.impl.micOn),
             camera_on: Boolean(this.impl.cameraOn),
             screen_sharing: Boolean(this.impl.screenStream),
         };
-        if (typeof this.impl.onStateChange === 'function') this.impl.onStateChange(state);
+        this._flushState();
         return true;
     }
 
@@ -825,7 +997,11 @@ class MediaFacade {
     /** Roster media_state hook (mesh: hide a stopped remote screen view). */
     notifyPeerState(p) { if (this.impl && this.impl.onPeerMediaState) this.impl.onPeerMediaState(p); }
     applyModerationState(state) { if (this.impl && this.impl.applyModerationState) this.impl.applyModerationState(state); }
-    dispose() { if (this.impl && this.impl.dispose) this.impl.dispose(); }
+    dispose() {
+        this._flushState();
+        this._lastStateKey = null;
+        if (this.impl && this.impl.dispose) this.impl.dispose();
+    }
     onDeviceChange(fn) { if (this.impl) this.impl.onDeviceChange = fn; }
     retryPeer(identity) { if (this.impl && this.impl.retryPeer) this.impl.retryPeer(identity); }
     /** Network came back: let the media engine restart dead peer links. */

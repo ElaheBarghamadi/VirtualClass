@@ -63,6 +63,17 @@ def rule(source: str, selector: str, needle: str | None = None) -> str:
     raise AssertionError(f"no rule for {selector} (needle={needle!r})")
 
 
+def fn_body(source: str, name: str) -> str:
+    """The body of a method, given its bare name.
+
+    Signatures here can contain brace characters (``applyModerationState({…} =
+    {})``), so the block is located from the ``) {`` that closes the parameter
+    list rather than from the first ``{``.
+    """
+    at = source.index(f"{name}(")
+    return block_after(source, source.index(") {", at))
+
+
 def media(source: str, query: str) -> list[str]:
     """Every ``@media <query> { … }`` body — the same query is used many times."""
     return [
@@ -441,7 +452,7 @@ class CameraFrameTests(SimpleTestCase):
             self.media,
         )
         self.assertIn("setCameraEnabled(", self.media)
-        self.assertIn("turningOn ? CAMERA_CAPTURE : undefined", self.media)
+        self.assertIn("desired ? CAMERA_CAPTURE : undefined", self.media)
         # mesh: the same requirement, and no browser-side re-framing
         video = rule(self.mesh, "    _videoConstraints(deviceId)")
         self.assertIn("aspectRatio: { ideal: 16 / 9 },", video)
@@ -688,7 +699,11 @@ class StageSteadinessTests(SimpleTestCase):
     def test_a_departing_tile_fades_instead_of_vanishing(self):
         remove = rule(self.mesh, "    _removePeer(identity)")
         self.assertIn("tile.classList.add('is-left');", remove)
-        self.assertIn("setTimeout(() => tile.remove(), 320);", remove)
+        # the fade is a tracked timer, so teardown can cancel it (no zombie
+        # callback firing into a DOM that is already gone)
+        self.assertIn("const fade = setTimeout(() => {", remove)
+        self.assertIn("this._fadeTimers.add(fade);", remove)
+        self.assertIn("if (this._disposed) { tile.remove(); }", remove)
         self.assertIn("opacity: 0", rule(self.css, ".tile.is-left"))
 
 
@@ -896,3 +911,171 @@ class MediaTuningTests(SimpleTestCase):
     def test_remote_media_is_autoplaying_and_inline(self):
         self.assertIn("video.autoplay = true;", self.src)
         self.assertIn("video.playsInline = true;", self.src)
+
+
+class MediaHardeningTests(SimpleTestCase):
+    """Mic/camera toggles under pressure: no ghosts, no chatter, no leaks.
+
+    Three things used to go wrong the moment a finger moved faster than the
+    browser:
+
+    * a second tap during ``getUserMedia`` was *dropped* (a boolean guard), so
+      on/off/on ended wherever the first tap left it;
+    * a moderator's mute could be undone by a ``getUserMedia`` that resolved
+      afterwards — a ghost microphone in a room that had already silenced it;
+    * every intermediate step announced the media state again, and every ICE
+      candidate was its own WebSocket message, so a toggle could exceed the
+      server's per-connection budget and the overflow was silently dropped.
+    """
+
+    def setUp(self):
+        self.mesh = read(JS / "mesh.js")
+        self.media = read(JS / "media.js")
+        self.consumer = read(REPO_ROOT / "classrooms" / "consumers.py")
+
+    # -- intent queue ------------------------------------------------------
+    def test_a_second_tap_flips_the_pending_intent_instead_of_being_dropped(self):
+        cases = (
+            (self.mesh, "this._want.mic", "micOn", "toggleMicrophone", "_runMic"),
+            (self.mesh, "this._want.camera", "cameraOn", "toggleCamera", "_runCamera"),
+            (self.media, "this._wantMic", "micOn", "toggleMicrophone", "_drainMic"),
+            (self.media, "this._wantCamera", "cameraOn", "toggleCamera", "_drainCamera"),
+        )
+        for src, want, state, toggle_name, runner in cases:
+            body = fn_body(src, toggle_name)
+            self.assertIn(
+                f"const target = {want} !== null ? {want} : this.{state};", body,
+            )
+            self.assertIn(f"{want} = !target;", body)
+            self.assertIn(f"return this.{runner}();", body)
+
+    def test_the_drain_loop_keeps_the_intent_visible_while_it_awaits(self):
+        run = rule(self.mesh, "    async _runMic()")
+        self.assertIn("let guard = 0;", run)
+        self.assertIn("const desired = this._want.mic;", run)
+        self.assertIn("if (desired) await this._micOn(); else this._micOff();", run)
+        # the intent is cleared only after the operation settled
+        self.assertIn("if (this._want.mic === desired) this._want.mic = null;", run)
+        self.assertIn("if (!landed) break;", run)
+
+    def test_the_old_drop_the_tap_guard_is_gone(self):
+        self.assertNotIn("_toggling", self.mesh)
+        self.assertNotIn("ignore rapid double taps", self.mesh)
+        self.assertNotIn("ignore rapid double taps", self.media)
+
+    # -- epoch guard -------------------------------------------------------
+    def test_a_late_acquisition_is_stopped_instead_of_published(self):
+        mic = rule(self.mesh, "    async _micOn()")
+        self.assertIn("const epoch = this._epoch.mic;", mic)
+        self.assertIn("if (this._disposed || epoch !== this._epoch.mic) {", mic)
+        self.assertIn("stream.getTracks().forEach((t) => t.stop());", mic)
+        cam = rule(self.mesh, "    async _camOn()")
+        self.assertIn("epoch !== this._epoch.camera", cam)
+
+    def test_every_off_path_invalidates_the_epoch(self):
+        for selector, field in (("    _micOff()", "mic"), ("    _camOff()", "camera")):
+            body = rule(self.mesh, selector)
+            self.assertIn(f"this._epoch.{field} += 1;", body)
+
+    def test_moderation_never_overwrites_the_server_grant(self):
+        """A re-grant after a mute must work without a reload."""
+        for src in (self.mesh, self.media):
+            apply = fn_body(src, "applyModerationState")
+            self.assertNotIn("this.permissions.can_use_microphone = !muted", apply)
+            self.assertNotIn("this.permissions.can_use_camera = !camera_disabled", apply)
+            self.assertIn("this._mutedByHost = Boolean(muted);", apply)
+        self.assertIn(
+            "return this.permissions.can_use_microphone !== false && this._mutedByHost !== true;",
+            self.mesh,
+        )
+        self.assertIn(
+            "return this.permissions.can_use_microphone !== false && this._mutedByHost !== true;",
+            self.media,
+        )
+
+    # -- signalling volume -------------------------------------------------
+    def test_ice_candidates_are_coalesced_before_they_hit_the_socket(self):
+        self.assertIn("const ICE_BATCH_WINDOW_MS = 120;", self.mesh)
+        self.assertIn("const ICE_BATCH_MAX = 16;", self.mesh)
+        queue = rule(self.mesh, "    _queueIce(key, candidate)")
+        self.assertIn("q.list.push(candidate);", queue)
+        self.assertIn("if (q.list.length >= ICE_BATCH_MAX)", queue)
+        self.assertIn("q.timer = setTimeout(() => {", queue)
+        flush = rule(self.mesh, "    _flushIce(key)")
+        self.assertIn("ice: batch.length === 1 ? batch[0] : batch,", flush)
+        # and the receiver accepts either shape
+        handler = rule(self.mesh, "    async handleSignal(data)")
+        self.assertIn("const batch = Array.isArray(data.ice) ? data.ice : [data.ice];", handler)
+
+    def test_a_closed_link_stops_talking_and_stops_offering(self):
+        close = rule(self.mesh, "    close()")
+        self.assertIn("this.closed = true;", close)
+        self.assertIn("for (const q of Object.values(this._iceQueues || {})) {", close)
+        negotiate = rule(self.mesh, "        pc.onnegotiationneeded = async () =>")
+        self.assertIn("if (this.closed) return;", negotiate)
+        self.assertIn("if (this.closed || pc.signalingState === 'closed') return;", negotiate)
+
+    def test_one_media_state_announcement_per_real_change(self):
+        self.assertIn("const MEDIA_STATE_COALESCE_MS = 90;", self.media)
+        emit = rule(self.media, "    _emitState(state)")
+        self.assertIn("if (key === this._lastStateKey) return;", emit)
+        self.assertIn("if (this._stateTimer) return;", emit)
+        self.assertIn("this._stateTimer = setTimeout(() => this._flushState(), MEDIA_STATE_COALESCE_MS);", emit)
+        # a reconnect replay must still get through
+        push = rule(self.media, "    pushMediaState()")
+        self.assertIn("this._lastStateKey = null;", push)
+        self.assertIn("this._flushState();", push)
+        # and a backgrounded tab does not sit on the last state
+        self.assertIn("if (document.hidden) this._flushState();", self.media)
+        self.assertIn("window.addEventListener('pagehide', () => this._flushState());", self.media)
+
+    def test_the_server_drops_an_unchanged_media_state(self):
+        body = self.consumer[self.consumer.index('if action == "media_state":'):]
+        body = body[: body.index("if action == \"rtc_signal\":")]
+        self.assertIn("if _media_states.get(key) == state:", body)
+        self.assertIn("return", body)
+        # the broadcast only happens after the dedupe
+        self.assertLess(body.index("if _media_states.get(key) == state:"),
+                        body.index("await self.channel_layer.group_send("))
+
+    def test_the_relay_does_not_re_read_the_sender_it_just_validated(self):
+        relay = self.consumer[self.consumer.index("def _relay_rtc_signal("):]
+        relay = relay[: relay.index("def _set_whiteboard_size(")]
+        self.assertIn("sender = self.member", relay)
+        self.assertNotIn("id=self.member.id, classroom=self.classroom", relay)
+
+    # -- teardown ----------------------------------------------------------
+    def test_dispose_releases_every_timer_listener_and_device(self):
+        dispose = rule(self.mesh, "    dispose()")
+        for needle in (
+            "this._disposed = true;",
+            "this._epoch.mic += 1;",
+            "this._epoch.camera += 1;",
+            "this._fadeTimers.forEach((t) => clearTimeout(t));",
+            "this._pendingSignals = [];",
+            "clearInterval(this._statsTimer)",
+            "this._disarmAudioUnlock();",
+            "navigator.mediaDevices.removeEventListener('devicechange', this._deviceChangeBound);",
+            "this.localStream.getTracks().forEach((t) => t.stop());",
+            "this._audioEls.forEach((el) => { el.srcObject = null; el.remove(); });",
+        ):
+            self.assertIn(needle, dispose)
+
+    def test_nothing_heavy_runs_in_a_hidden_tab(self):
+        for timer in ("_statsTimer", "_speakerTimer", "_netTimer"):
+            body = self.mesh[self.mesh.index(f"this.{timer} = setInterval("):]
+            body = body[: body.index("}, ")]
+            self.assertIn("if (this._disposed || document.hidden) return;", body)
+
+    def test_our_own_tile_is_created_first_so_the_grid_never_shuffles(self):
+        tile = rule(self.mesh, "    _ensureTile(peer)")
+        self.assertIn("if (peer.identity === this.self.identity) this.tilesEl.prepend(tile);", tile)
+        self.assertIn("else this.tilesEl.appendChild(tile);", tile)
+
+    def test_the_livekit_analyser_is_not_rebuilt_on_every_ui_sync(self):
+        start = rule(self.media, "    _startLocalLevel()")
+        self.assertIn("if (this._levelTrack === track && this._stopLevelLoop) return;", start)
+        self.assertIn("this._levelTrack = track;", start)
+        sync = rule(self.media, "    _syncLocalUI()")
+        self.assertIn("if (this.micOn && micTrack) this._startLocalLevel();", sync)
+        self.assertIn("else if (this._levelTrack) this._stopLocalLevel();", sync)
